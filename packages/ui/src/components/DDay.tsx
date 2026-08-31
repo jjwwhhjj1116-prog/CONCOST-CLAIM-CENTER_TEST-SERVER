@@ -18,7 +18,7 @@ export const DDay: React.FC<DDayProps> = ({ targetDate, daysRemaining }) => {
       }}
     >
       <span>📅 D-{daysRemaining}</span>
-      <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 'normal' }}>({targetDate})</span>
+      <span style={{ fontSize: '.75rem', color: '#94a3b8', fontWeight: 'normal' }}>({targetDate})</span>
     </span>
   );
 };

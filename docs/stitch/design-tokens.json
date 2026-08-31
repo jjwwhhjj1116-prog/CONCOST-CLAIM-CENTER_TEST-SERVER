@@ -41,12 +41,12 @@
       "mono": "Fira Code, JetBrains Mono, monospace"
     },
     "fontSize": {
-      "xs": "12px",
-      "sm": "14px",
-      "md": "15px",
-      "lg": "18px",
-      "xl": "24px",
-      "xxl": "32px"
+      "xs": ".75rem",
+      "sm": ".875rem",
+      "md": ".9375rem",
+      "lg": "1.125rem",
+      "xl": "1.5rem",
+      "xxl": "2rem"
     }
   },
   "spacing": {

@@ -15,7 +15,7 @@ export interface TableProps<T> {
 export function Table<T>({ columns, data, keyField }: TableProps<T>) {
   return (
     <div className="ui-table-wrap" style={{ width: '100%', overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', color: 'var(--text-primary, #f8fafc)', fontSize: '14px' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', color: 'var(--text-primary, #f8fafc)', fontSize: '.875rem' }}>
         <thead>
           <tr style={{ background: 'var(--surface-raised, #0f172a)', borderBottom: '1px solid var(--border-soft, rgba(255,255,255,0.1))' }}>
             {columns.map((col) => (

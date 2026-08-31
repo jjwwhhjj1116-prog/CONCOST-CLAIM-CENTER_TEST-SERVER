@@ -654,6 +654,12 @@ const KickoffEditor: React.FC<{
   const displayedSummary = record?.summaryText || importedDraft?.summary || (savedSourcePreview ? `저장된 회의 원문 미리보기\n\n${savedSourcePreview}` : '');
   const displayedTimeline = record?.summaryText ? record.timeline : importedDraft?.timeline ?? (savedSourcePreview ? [{ order:1,title:'저장된 원문',detail:'자동작성·정리를 실행하면 결정사항과 후속업무가 항목별로 표시됩니다.' }] : []);
   const outputState = record?.status === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : savedSourcePreview ? '원문 저장 완료 · 자동작성 대기' : 'EMPTY';
+  const [meetingDate = '미입력', meetingTime = '미입력'] = form.meetingAt
+    ? [form.meetingAt.slice(0, 10).replaceAll('-', '. '), form.meetingAt.slice(11, 16) || '미입력']
+    : [];
+  const meetingTitle = form.agenda.trim().split(/\r?\n/u)[0] || '미입력';
+  const participantText = form.participantUnits.trim() || '미입력';
+  const attachmentName = archivedFile?.originalName?.trim() || '미입력';
   return (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
@@ -675,7 +681,33 @@ const KickoffEditor: React.FC<{
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문이 먼저 미리보기로 표시됩니다. 자동작성·정리 후에는 결정사항과 후속업무를 검수하고 최종 확정합니다.</p>
       {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : 'D1 임시보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
-      {displayedSummary ? <><pre className="workflow-summary-text">{displayedSummary}</pre><ol className="workflow-timeline">{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol>{record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}</> : <div className="workflow-empty"><strong>아직 정리된 회의록이 없습니다.</strong><p>회사 양식을 가져오거나 회의 메모를 저장한 뒤 Gemini 정리를 실행하세요.</p></div>}
+      {displayedSummary ? <>
+        <div className="company-minutes-scroll" tabIndex={0} role="region" aria-label="회사 회의록 최종본 표">
+          <table className="company-minutes-table">
+            <caption>회 의 록</caption>
+            <colgroup>{Array.from({ length: 8 }, (_, index) => <col key={index} />)}</colgroup>
+            <tbody>
+              <tr><th scope="row">작성자</th><th scope="col">소속</th><td colSpan={2}>클레임센터</td><th scope="col">직급</th><td>미입력</td><th scope="col">성명</th><td>{record?.updatedByName || '미입력'}</td></tr>
+              <tr><th scope="row">회의일시</th><td colSpan={3}>{meetingDate}</td><th scope="row">시간</th><td>{meetingTime}</td><td className="company-minutes-time-separator">~</td><td>미입력</td></tr>
+              <tr><th scope="row">회의장소</th><td colSpan={7}>{form.location.trim() || '미입력'}</td></tr>
+              <tr><th scope="row">거래처명</th><td colSpan={7}>미입력</td></tr>
+              <tr><th scope="row">보고부서</th><td colSpan={7}>클레임센터</td></tr>
+              <tr><th scope="row">참조부서</th><td colSpan={7}>미입력</td></tr>
+              <tr><th scope="row">참석자<br />(컨코스트)</th><td colSpan={7}>{participantText}</td></tr>
+              <tr><th scope="row">참석자<br />(거래처)</th><td colSpan={7}>미입력</td></tr>
+              <tr><th scope="row">회의명</th><td colSpan={7}>{meetingTitle}</td></tr>
+              <tr><th scope="row">첨부파일</th><td colSpan={7}>{attachmentName}</td></tr>
+              <tr className="company-minutes-section-heading"><th colSpan={8} scope="colgroup">회의내용 및 지시사항</th></tr>
+              <tr><td className="company-minutes-content" colSpan={8}>
+                <p>{displayedSummary}</p>
+                {displayedTimeline.length > 0 && <section aria-label="결정사항과 후속업무"><h4>결정사항 · 후속업무</h4><ol>{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><strong>{item.order}. {item.title}</strong><span>{item.detail}</span></li>)}</ol></section>}
+              </td></tr>
+              <tr className="company-minutes-note"><td colSpan={8}>※ 거래처 명함은 PDF 파일로 업로드</td></tr>
+            </tbody>
+          </table>
+        </div>
+        {record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
+      </> : <div className="workflow-empty"><strong>아직 정리된 회의록이 없습니다.</strong><p>회사 양식을 가져오거나 회의 메모를 저장한 뒤 Gemini 정리를 실행하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
       <header><div><span>KICKOFF EVIDENCE</span><h3>착수회의 제공자료·회의록·녹음</h3></div><em>회사 Drive 자동 분류</em></header>

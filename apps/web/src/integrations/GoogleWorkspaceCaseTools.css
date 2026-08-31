@@ -8,7 +8,7 @@
 .google-card-heading h3 { margin: 0 0 6px; color: #111827; }
 .google-heading p,
 .google-card-heading p { margin: 0; color: #596579; }
-.google-eyebrow { margin: 0 0 5px !important; color: #225aa6 !important; font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+.google-eyebrow { margin: 0 0 5px !important; color: #225aa6 !important; font-size: .75rem; font-weight: 800; letter-spacing: .08em; }
 .google-fake-banner,
 .google-protection { display: flex; gap: 10px 18px; flex-wrap: wrap; margin: 18px 0; padding: 14px 16px; border: 1px solid #f0bd52; border-radius: 10px; background: #fff8df; color: #674500; }
 .google-protection { border-color: #9dc2ef; background: #eef6ff; color: #174b88; }
@@ -24,7 +24,7 @@
 .google-message--error { border-color: #f0a5a5; background: #fff1f1; color: #8a1f1f; }
 .google-message--success { border-color: #89c9a4; background: #effbf3; color: #16603a; }
 .google-message button { border: 0; background: transparent; color: inherit; font-weight: 800; text-decoration: underline; cursor: pointer; }
-.google-status { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border-radius: 999px; background: #eef1f5; color: #435066; font-size: 12px; font-weight: 800; }
+.google-status { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border-radius: 999px; background: #eef1f5; color: #435066; font-size: .75rem; font-weight: 800; }
 .google-status--connected { background: #dcf7e6; color: #136235; }
 .google-status--expiring-soon { background: #fff0cb; color: #785100; }
 .google-status--expired,
@@ -32,7 +32,7 @@
 .google-status--disconnected { background: #edf0f4; color: #4a5568; }
 .google-metadata { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
 .google-metadata div { padding: 12px; border-radius: 8px; background: #f6f8fb; }
-.google-metadata dt { color: #667085; font-size: 12px; }
+.google-metadata dt { color: #667085; font-size: .75rem; }
 .google-metadata dd { margin: 4px 0 0; font-weight: 700; overflow-wrap: anywhere; }
 .google-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 .google-button { min-height: 42px; padding: 9px 15px; border: 1px solid transparent; border-radius: 8px; font: inherit; font-weight: 750; cursor: pointer; }
@@ -66,7 +66,7 @@
 .google-reconciliation-list input { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #aeb9c8; border-radius: 7px; box-sizing: border-box; }
 .google-reconciliation-meta { display: grid; gap: 3px; min-width: 0; }
 .google-reconciliation-meta code { overflow-wrap: anywhere; }
-.google-reconciliation-meta time { color: #667085; font-size: 12px; }
+.google-reconciliation-meta time { color: #667085; font-size: .75rem; }
 .google-case-picker,
 .google-resource-search { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(240px, 1.2fr); gap: 12px; align-items: end; margin-top: 16px; }
 .google-resource-search { grid-template-columns: minmax(180px, 1fr) auto; }
@@ -92,7 +92,7 @@
 .google-provenance { overflow-wrap: anywhere; color: #36557e !important; }
 .google-candidate-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 14px 0; padding: 14px; border: 1px solid #cdd8e7; border-radius: 8px; background: #f7faff; }
 .google-candidate-preview div { min-width: 0; }
-.google-candidate-preview dt { color: #5f6f85; font-size: 12px; font-weight: 700; }
+.google-candidate-preview dt { color: #5f6f85; font-size: .75rem; font-weight: 700; }
 .google-candidate-preview dd { margin: 3px 0 0; overflow-wrap: anywhere; font-weight: 650; }
 .google-resource-list { max-height: 430px; overflow: auto; }
 

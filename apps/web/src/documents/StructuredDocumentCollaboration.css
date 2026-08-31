@@ -28,7 +28,7 @@
   border: 2px solid #fff;
   border-radius: 50%;
   color: #fff;
-  font-size: 10px;
+  font-size: .625rem;
   font-style: normal;
   font-weight: 950;
   box-shadow: 0 1px 4px #33415555;
@@ -39,7 +39,7 @@
 .structured-editor--collaboration-loading { display: grid; place-items: center; min-height: 220px; color: #1d4ed8; }
 
 .collaboration-carets__caret { position: relative; margin-left: -1px; border-left: 2px solid currentColor; border-right: 1px solid currentColor; pointer-events: none; }
-.collaboration-carets__label { position: absolute; top: -1.4em; left: -1px; border-radius: 4px 4px 4px 0; padding: 2px 5px; color: #fff; font-size: 10px; font-weight: 850; white-space: nowrap; }
+.collaboration-carets__label { position: absolute; top: -1.4em; left: -1px; border-radius: 4px 4px 4px 0; padding: 2px 5px; color: #fff; font-size: .625rem; font-weight: 850; white-space: nowrap; }
 
 @media (max-width: 760px) {
   .structured-editor__collaboration { order: 3; width: 100%; box-sizing: border-box; justify-content: space-between; }

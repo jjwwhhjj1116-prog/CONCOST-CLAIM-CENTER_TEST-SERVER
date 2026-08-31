@@ -20,7 +20,7 @@ export const Card: React.FC<CardProps> = ({ title, children, style, className = 
         ...style
       }}
     >
-      {title && <h4 className="ui-card__title" style={{ margin: '0 0 12px 0', fontSize: '16px', color: 'var(--section-accent, #38bdf8)' }}>{title}</h4>}
+      {title && <h4 className="ui-card__title" style={{ margin: '0 0 12px 0', fontSize: '1rem', color: 'var(--section-accent, #38bdf8)' }}>{title}</h4>}
       {children}
     </div>
   );

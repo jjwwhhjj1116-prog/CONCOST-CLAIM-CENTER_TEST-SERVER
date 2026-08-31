@@ -27,7 +27,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
       style={{
         padding: '2px 8px',
         borderRadius: '12px',
-        fontSize: '12px',
+        fontSize: '.75rem',
         fontWeight: 600,
         color: current.color,
         background: current.bg,
