@@ -627,9 +627,13 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .proposal-flow-head,
 :root[data-theme='light'] .proposal-flow-welcome,
 :root[data-theme='light'] .proposal-flow-kpis article,
-:root[data-theme='light'] .schedule-toolbar,
+:root[data-theme='light'] .schedule-control-panel,
 :root[data-theme='light'] .workforce-panel,
 :root[data-theme='light'] .report-author-panel { background: #fff; color: #172033; border-color: #d8e2ee; box-shadow: var(--panel-shadow); }
+:root[data-theme='light'] .schedule-control-panel .schedule-toolbar { background: transparent; box-shadow: none; }
+:root[data-theme='light'] .schedule-control-panel .schedule-holiday-guide { border-top-color: #d8e2ee; background: #f8fafc; color: #475569; }
+:root[data-theme='light'] .schedule-control-panel .schedule-holiday-guide > strong { color: #173f67; }
+:root[data-theme='light'] .schedule-control-panel .schedule-holiday-guide > span { color: #64748b; }
 :root[data-theme='light'] .workflow-editor-card.is-output,
 :root[data-theme='light'] .workflow-evidence-card { background: linear-gradient(150deg, #ffffff, #f3f7fb); }
 :root[data-theme='light'] .workflow-stepper button { background: #ffffff; color: #4b5b70; border-color: #dfe7ef; box-shadow: none; }

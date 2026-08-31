@@ -263,25 +263,27 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
 
       {showOverview ? (
         <>
-          <div className="schedule-toolbar" aria-label="일정표 보기 설정">
-            <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
-            <div className="schedule-toolbar-actions">
-              <Button className="schedule-print-launch" size="sm" onClick={openSchedulePrint}>🖨 일정표 출력</Button>
-              <Button size="sm" variant={viewMode === '30days' ? 'primary' : 'secondary'} onClick={() => setViewMode('30days')}>30일</Button>
-              <Button size="sm" variant={viewMode === 'month' ? 'primary' : 'secondary'} onClick={() => setViewMode('month')}>월별 보기</Button>
-              <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹ 이전</Button>
-              <Button size="sm" variant="secondary" onClick={() => setMonthCursor(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>오늘</Button>
-              <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>다음 ›</Button>
+          <section className="schedule-control-panel" aria-label="일정표 보기 및 휴일 설정">
+            <div className="schedule-toolbar">
+              <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
+              <div className="schedule-toolbar-actions">
+                <Button className="schedule-print-launch" size="sm" onClick={openSchedulePrint}>🖨 일정표 출력</Button>
+                <Button size="sm" variant={viewMode === '30days' ? 'primary' : 'secondary'} onClick={() => setViewMode('30days')}>30일</Button>
+                <Button size="sm" variant={viewMode === 'month' ? 'primary' : 'secondary'} onClick={() => setViewMode('month')}>월별 보기</Button>
+                <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹ 이전</Button>
+                <Button size="sm" variant="secondary" onClick={() => setMonthCursor(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>오늘</Button>
+                <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>다음 ›</Button>
+              </div>
             </div>
-          </div>
 
-          <div className="schedule-holiday-guide" aria-label="한국과 베트남 휴일 표시 안내">
-            <strong>한국 본사 · VIETQS 휴일 캘린더</strong>
-            <span>날짜 칸의 무늬와 마우스 설명으로 어느 지사의 휴일인지 확인하세요.</span>
-            <div><i className="legend-korean-holiday" />한국 공휴일</div>
-            <div><i className="legend-vietnam-holiday" />베트남 휴일</div>
-            <div><i className="legend-shared-holiday" />양국 공통 휴일</div>
-          </div>
+            <div className="schedule-holiday-guide" aria-label="한국과 베트남 휴일 표시 안내">
+              <strong>한국 본사 · VIETQS 휴일 캘린더</strong>
+              <span>날짜 칸의 무늬와 마우스 설명으로 어느 지사의 휴일인지 확인하세요.</span>
+              <div><i className="legend-korean-holiday" />한국 공휴일</div>
+              <div><i className="legend-vietnam-holiday" />베트남 휴일</div>
+              <div><i className="legend-shared-holiday" />양국 공통 휴일</div>
+            </div>
+          </section>
 
           <div className="schedule-board" role="table" aria-label="프로젝트 월간 일정표">
             <div className="schedule-board-header" role="row">
