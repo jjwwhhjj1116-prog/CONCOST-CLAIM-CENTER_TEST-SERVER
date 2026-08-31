@@ -154,3 +154,16 @@ test('CF52 presents each report step as one focused work card and hides saved wo
   assert.doesNotMatch(studio, /Card title="FINAL OUTPUT/u);
   assert.match(css, /\.report-stage-card::after \{ display: none; \}/u);
 });
+
+test('CF80 groups schedule controls and doubles the PM schedule editor type scale', () => {
+  const schedule = read('apps/web/src/workflow/ProjectWorkflowSchedule.tsx');
+  const css = read('apps/web/src/workflow/ProjectWorkflowSchedule.css');
+
+  assert.match(schedule, /className="schedule-control-panel" aria-label="일정표 보기 및 휴일 설정"/u);
+  assert.ok(schedule.indexOf('className="schedule-toolbar"') < schedule.indexOf('className="schedule-holiday-guide"'), '보기 설정과 휴일 안내가 하나의 패널 안에서 순서대로 표시되어야 합니다.');
+  assert.match(css, /\.project-schedule-manager > header h3 \{[^}]*font-size:2\.2rem/su);
+  assert.match(css, /\.project-pm-control label,[^{]+\{[^}]*font-size:1\.35rem/su);
+  assert.match(css, /\.project-stage-editor-list > article > header strong \{[^}]*font-size:1\.6rem/su);
+  assert.match(css, /\.stage-schedule-save-button \{[^}]*font-size:1\.52rem!important/su);
+  assert.match(css, /@media \(max-width: 1200px\) \{\s*\.project-stage-editor-list \{ grid-template-columns:1fr; \}/su);
+});
