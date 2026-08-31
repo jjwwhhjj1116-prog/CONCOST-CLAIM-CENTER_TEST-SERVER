@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Drawer, SkipLink } from '@claim-studio/ui';
+import { Button, Dialog, Drawer, SkipLink } from '@claim-studio/ui';
+import { apiRequest } from '../api';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 import { WorkspaceHelpCenter } from './WorkspaceHelpCenter';
@@ -64,6 +65,9 @@ export interface AppShellProps {
 }
 
 type ThemeMode = 'light' | 'dark';
+interface MemberAwardAlert { eventKey:string;caseId:string;caseNumber:string;projectTitle:string;message:string;awardedAt:string;projectStartOn:string|null;projectEndOn:string|null }
+interface MemberTodoAlert { eventKey:string;caseId:string;caseNumber:string;title:string;stageCode:string;stageLabel:string;startDate:string;endDate:string;status:string;noteText:string;message:string }
+interface MemberAlertsPayload { awards:MemberAwardAlert[];todos:MemberTodoAlert[];today:string;available:boolean }
 
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -104,6 +108,9 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => ({ [activeGroup?.icon ?? 'home']: true }));
   const [expandedSubgroups, setExpandedSubgroups] = useState<Record<string, boolean>>(() => activeSubgroup ? { [activeSubgroup.label]: true } : {});
+  const [memberAlerts,setMemberAlerts]=useState<MemberAlertsPayload>({awards:[],todos:[],today:'',available:true});
+  const [alertsOpen,setAlertsOpen]=useState(false);
+  const [alertsBusy,setAlertsBusy]=useState(false);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
   const locationParams = new URLSearchParams(currentSearch);
   const contextProjectId = locationParams.get('projectId');
@@ -139,6 +146,10 @@ export const AppShell: React.FC<AppShellProps> = ({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(()=>{void apiRequest<MemberAlertsPayload>('/api/member-alerts').then((payload)=>{setMemberAlerts(payload);if(payload.awards.length||payload.todos.length)setAlertsOpen(true);}).catch(()=>undefined);},[]);
+
+  const acknowledgeAlerts=async()=>{const eventKeys=[...memberAlerts.awards,...memberAlerts.todos].map((alert)=>alert.eventKey);if(!eventKeys.length){setAlertsOpen(false);return;}setAlertsBusy(true);try{await apiRequest('/api/member-alerts',{method:'PUT',body:JSON.stringify({eventKeys})});setMemberAlerts((current)=>({...current,awards:[],todos:[]}));setAlertsOpen(false);}finally{setAlertsBusy(false);}};
 
   const go = (path: string) => {
     onNavigate(path);
@@ -275,6 +286,9 @@ export const AppShell: React.FC<AppShellProps> = ({
             <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
           </button>
           <WorkspaceHelpCenter category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} onNavigate={go} />
+          <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${memberAlerts.awards.length+memberAlerts.todos.length}건`} onClick={()=>setAlertsOpen(true)}>
+            <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><strong>알림</strong>{memberAlerts.awards.length+memberAlerts.todos.length>0&&<em>{memberAlerts.awards.length+memberAlerts.todos.length}</em>}
+          </button>
           <button type="button" className="theme-toggle" aria-label="개인 및 관리자 설정 열기" onClick={() => go('/settings')}>
             <span aria-hidden="true">⚙</span><strong>설정</strong>
           </button>
@@ -283,6 +297,15 @@ export const AppShell: React.FC<AppShellProps> = ({
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
         </div>
       </header>
+
+      <Dialog isOpen={alertsOpen} title="신규 수주·오늘의 프로젝트 투입 알림" onClose={()=>!alertsBusy&&setAlertsOpen(false)}>
+        <div className="member-alert-dialog">
+          {memberAlerts.awards.length>0&&<section><header><h3>신규 프로젝트 수주</h3><span>{memberAlerts.awards.length}건</span></header><ul>{memberAlerts.awards.map((alert)=><li key={alert.eventKey}><button type="button" onClick={()=>{go(`/projects/schedule?caseId=${encodeURIComponent(alert.caseId)}`);setAlertsOpen(false);}}><strong>{alert.caseNumber} · {alert.projectTitle}</strong><span>{alert.message}</span><small>{new Date(alert.awardedAt).toLocaleString('ko-KR')} · {alert.projectStartOn??'시작일 미정'} ~ {alert.projectEndOn??'종료일 미정'}</small></button></li>)}</ul></section>}
+          <section><header><h3>{memberAlerts.today||'금일'} 투입 To-do</h3><span>{memberAlerts.todos.length}건</span></header>{memberAlerts.todos.length?<ul>{memberAlerts.todos.map((todo)=><li key={todo.eventKey}><button type="button" onClick={()=>{go(`/projects/schedule?caseId=${encodeURIComponent(todo.caseId)}`);setAlertsOpen(false);}}><strong>{todo.caseNumber} · {todo.stageLabel}</strong><span>{todo.title}</span><small>{todo.startDate} ~ {todo.endDate}{todo.noteText?` · ${todo.noteText}`:''}</small></button></li>)}</ul>:<p className="empty-box">오늘 배정된 프로젝트 단계 일정이 없습니다.</p>}</section>
+          {!memberAlerts.available&&<p className="error-box">알림용 D1 마이그레이션이 아직 적용되지 않았습니다.</p>}
+          <footer><Button variant="secondary" onClick={()=>setAlertsOpen(false)} disabled={alertsBusy}>나중에 다시 보기</Button><Button onClick={()=>void acknowledgeAlerts()} disabled={alertsBusy||(!memberAlerts.awards.length&&!memberAlerts.todos.length)}>{alertsBusy?'확인 저장 중…':'오늘 알림 확인 완료'}</Button></footer>
+        </div>
+      </Dialog>
 
       <SoftLaunchNotice />
 

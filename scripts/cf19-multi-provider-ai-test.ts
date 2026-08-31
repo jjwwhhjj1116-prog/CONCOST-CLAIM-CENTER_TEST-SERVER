@@ -34,7 +34,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; requests: A
   for (const name of ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql']) sql.exec(migration(name));
   const now = new Date().toISOString();
   const insertUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
-  insertUser(ADMIN_ID, 'admin', '["admin"]'); sql.exec(migration('0010_cf10_product_experience.sql')); insertUser(STAFF_ID, 'staff', '["staff"]');
+  insertUser(ADMIN_ID, 'admin', '["admin"]'); sql.exec(migration('0010_cf10_product_experience.sql')); insertUser(STAFF_ID, 'staff', '["pm"]');
   for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql','0049_cf75_ai_model_catalog.sql']) sql.exec(migration(name));
   sql.run('INSERT INTO preview_case_assignments VALUES (?, ?, ?, ?)', [CASE_ID, STAFF_ID, ADMIN_ID, now]);
   for (const [token, id] of [[ADMIN_TOKEN, ADMIN_ID],[STAFF_TOKEN, STAFF_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token), id, now, new Date(Date.now() + 3_600_000).toISOString()]);

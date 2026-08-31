@@ -78,7 +78,7 @@ test('CF12 writers receive chapter metadata only and generate from server-held l
   assert.equal(config.available, true); assert.equal(config.aiConnected, true); assert.equal(config.modelLabel, 'gpt-5.6');
   assert.equal((await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, OUTSIDER_TOKEN), env)).status, 404);
 
-  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
+  const generated = await worker.fetch(request('/api/report-authoring/generate', ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
   assert.equal(generated.status, 200);
   const generatedText = await generated.text(); assert.match(generatedText, /장별 초안/u); assert.doesNotMatch(generatedText, /SYNTHETIC_SERVER_ONLY_KEY/u);
   assert.equal(providerRequests.length, 1); assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_ai_generations')[0].values[0][0], 1);
@@ -86,7 +86,7 @@ test('CF12 writers receive chapter metadata only and generate from server-held l
   assert.match(studio, /선택 챕터 AI 자동 작성/u); assert.match(studio, /프롬프트 원문은 관리자만/u);
 
   const noKeyEnv = { ...env, OPENAI_API_KEY: undefined };
-  const disconnected = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), noKeyEnv);
+  const disconnected = await worker.fetch(request('/api/report-authoring/generate', ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), noKeyEnv);
   assert.equal(disconnected.status, 503); assert.equal(providerRequests.length, 1);
   sql.close();
 });
