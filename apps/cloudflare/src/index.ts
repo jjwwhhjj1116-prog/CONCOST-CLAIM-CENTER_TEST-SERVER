@@ -5430,10 +5430,17 @@ function safeNonGeminiProviderError(provider: 'OPENAI' | 'ANTHROPIC', payload: u
   const nested = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : null;
   const rawReason = [nested?.code, nested?.type, record?.type].find((value): value is string => typeof value === 'string') ?? `HTTP_${httpStatus}`;
   const providerReason = rawReason.replace(/[^A-Za-z0-9_-]/gu, '_').toUpperCase().slice(0, 64) || `HTTP_${httpStatus}`;
+  const safeMessage = typeof nested?.message === 'string' ? nested.message.toLowerCase() : '';
   const label = provider === 'OPENAI' ? 'OpenAI' : 'Claude';
   if (httpStatus === 401) return { code: `${provider}_INVALID_API_KEY`, error: `${label} API 키가 유효하지 않습니다. 설정에서 키를 교체한 뒤 연결 확인을 실행해 주세요.`, providerReason };
   if (httpStatus === 403) return { code: `${provider}_PERMISSION_DENIED`, error: `${label} API 또는 선택 모델 사용 권한이 없습니다. 공급자 프로젝트 권한을 확인해 주세요.`, providerReason };
   if (httpStatus === 429) return { code: `${provider}_QUOTA_OR_RATE_LIMIT`, error: `${label} 사용 한도 또는 호출 속도 제한에 도달했습니다. 공급자 사용량과 결제 상태를 확인해 주세요.`, providerReason };
+  if (provider === 'ANTHROPIC' && httpStatus === 400) {
+    if (/credit balance|usage credit|billing/u.test(safeMessage)) return { code: 'ANTHROPIC_BILLING_REQUIRED', error: 'Claude API 사용 크레딧이 없거나 결제 설정이 완료되지 않았습니다. Anthropic Console의 Billing에서 사용 크레딧을 확인해 주세요.', providerReason };
+    if (/max_tokens|token limit/u.test(safeMessage)) return { code: 'ANTHROPIC_OUTPUT_LIMIT_REJECTED', error: 'Claude가 출력 토큰 설정을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.', providerReason };
+    if (/thinking|effort/u.test(safeMessage)) return { code: 'ANTHROPIC_REASONING_CONFIG_REJECTED', error: 'Claude가 사고 수준 설정을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.', providerReason };
+    if (/model/u.test(safeMessage)) return { code: 'ANTHROPIC_MODEL_UNAVAILABLE', error: '저장된 Anthropic API 키로 선택한 Claude 모델을 사용할 수 없습니다. Console의 모델 접근 권한을 확인해 주세요.', providerReason };
+  }
   if (httpStatus === 400 || httpStatus === 404) return { code: `${provider}_MODEL_OR_REQUEST_REJECTED`, error: `${label}가 선택 모델 또는 요청 형식을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.`, providerReason };
   return { code: `${provider}_REQUEST_FAILED`, error: `${label}가 요청을 처리하지 못했습니다. 잠시 후 다시 시도하고 계속 실패하면 설정에서 연결 상태를 확인해 주세요.`, providerReason };
 }
