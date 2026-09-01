@@ -16,6 +16,7 @@ interface CredentialState {
   version: number;
   updatedAt: string | null;
   fingerprint: string | null;
+  workspaceConfigured?: boolean | null;
   health?: {
     status: 'UNCHECKED' | 'HEALTHY' | 'FAILED';
     modelCode: string;
@@ -103,8 +104,8 @@ const PROVIDER_COPY: Record<ProviderKind, {
   },
   ANTHROPIC: {
     short: 'Claude', use: '장문 보고서 본문 작성', placeholder: 'Anthropic API Key',
-    issueUrl: 'https://console.anthropic.com/settings/keys', guideUrl: 'https://docs.anthropic.com/en/docs/get-started',
-    issueSteps: ['Anthropic Console에 로그인합니다.', 'Settings · API Keys에서 새 키를 만듭니다.', '복사한 키를 아래 입력란에 붙여 넣고 암호화 저장합니다.']
+    issueUrl: 'https://console.anthropic.com/settings/keys', guideUrl: 'https://platform.claude.com/docs/en/manage-claude/authentication',
+    issueSteps: ['Anthropic Console에 로그인합니다.', 'Settings · API Keys에서 새 키를 만들고 복사합니다.', '여러 Workspace에 연결된 키라면 Settings · Workspaces의 wrkspc_ ID도 함께 입력합니다.']
   },
   GEMINI: {
     short: 'Gemini', use: '글쓰기 도우미·문장 개선·사실 확인', placeholder: 'Google AI Studio API Key',
@@ -130,6 +131,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [hermesHmacKey, setHermesHmacKey] = useState('');
   const [aiGovernanceAck, setAiGovernanceAck] = useState('');
   const [keys, setKeys] = useState<Record<string, string>>({});
+  const [workspaceIds, setWorkspaceIds] = useState<Record<string, string>>({});
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -203,16 +205,19 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     const state = stateFor(provider, scope);
     const field = inputKey(provider.providerKind, scope);
     const key = keys[field]?.trim() ?? '';
-    if (!key) return;
+    const workspaceId = workspaceIds[field]?.trim() ?? '';
+    const workspaceOnly = provider.providerKind === 'ANTHROPIC' && scope === 'ORGANIZATION' && state.configured && Boolean(workspaceId);
+    if (!key && !workspaceOnly) return;
     setBusy(field); setError(''); setNotice('');
     try {
       const next = await apiRequest<SettingsPayload>(`/api/settings/ai-credentials/${provider.providerKind}`, {
-        method: 'PUT', body: JSON.stringify({ scope, apiKey: key, expectedVersion: state.version })
+        method: 'PUT', body: JSON.stringify({ scope, ...(key ? { apiKey: key } : {}), ...(workspaceId ? { workspaceId } : {}), expectedVersion: state.version })
       });
       setPayload(next);
       if (scope === 'ORGANIZATION') await saveProviderModel(provider.providerKind);
       setKeys((current) => ({ ...current, [field]: '' }));
-      setNotice(`${scope === 'USER' ? '개인' : '조직 공용'} ${PROVIDER_COPY[provider.providerKind].short} 키${scope === 'ORGANIZATION' ? '와 선택 모델' : ''}을 저장했습니다.`);
+      setWorkspaceIds((current) => ({ ...current, [field]: '' }));
+      setNotice(workspaceOnly && !key ? 'Claude Workspace ID를 저장했습니다. 연결 확인을 실행해 주세요.' : `${scope === 'USER' ? '개인' : '조직 공용'} ${PROVIDER_COPY[provider.providerKind].short} 키${scope === 'ORGANIZATION' ? '와 선택 모델' : ''}을 저장했습니다.`);
     } catch (reason) {
       setError(reason instanceof ApiError && reason.status === 409
         ? '다른 화면에서 설정이 변경되었습니다. 새로고침 후 다시 저장해 주세요.'
@@ -373,6 +378,9 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         const copy = PROVIDER_COPY[provider.providerKind];
         const options = modelOptions(provider.providerKind);
         const selectedModel = selectedModels[provider.providerKind] ?? options[0]?.code ?? '';
+        const workspaceId = workspaceIds[field]?.trim() ?? '';
+        const workspaceEditable = provider.providerKind === 'ANTHROPIC' && scope === 'ORGANIZATION';
+        const hasCredentialChange = Boolean(keys[field]?.trim()) || (workspaceEditable && Boolean(workspaceId));
         const modelRoute = aiConfig?.routes.find((route) => route.taskKind === PRIMARY_TASK[provider.providerKind].task);
         const modelDirty = scope === 'ORGANIZATION' && Boolean(modelRoute) && (modelRoute?.providerKind !== provider.providerKind || modelRoute?.modelCode !== selectedModel);
         const isBusy = busy === field || busy === `test:${field}` || busy === `model:${field}`;
@@ -395,9 +403,14 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
           <label htmlFor={`${field}-key`}>{state.configured ? '새 키로 교체' : 'API Key 입력'}</label>
           <input id={`${field}-key`} type="password" value={keys[field] ?? ''} autoComplete="new-password" spellCheck={false} placeholder={copy.placeholder} onChange={(event) => setKeys((current) => ({ ...current, [field]: event.target.value }))} />
           {!keys[field]?.trim() && <small className="credential-input-help">키 원문은 저장 후 다시 표시되지 않습니다.</small>}
+          {workspaceEditable && <>
+            <label htmlFor={`${field}-workspace`}>Anthropic Workspace ID <small>선택 입력</small></label>
+            <input id={`${field}-workspace`} type="text" value={workspaceIds[field] ?? ''} autoComplete="off" spellCheck={false} placeholder="wrkspc_..." onChange={(event) => setWorkspaceIds((current) => ({ ...current, [field]: event.target.value }))} />
+            <small className="credential-input-help">여러 Workspace에 연결된 개인·서비스 계정 키만 필요합니다. {state.workspaceConfigured ? 'Workspace ID 저장됨' : '400 오류가 나면 Console · Settings · Workspaces의 ID를 입력하세요.'}</small>
+          </>}
           <div className="credential-key-actions">
             <div className="action-row">
-              <Button onClick={() => void saveKey(provider, scope)} disabled={isBusy || !keys[field]?.trim() || !selectedModel}>{isBusy ? '처리 중…' : state.configured ? scope === 'ORGANIZATION' ? '키·모델 교체' : '키 교체' : scope === 'ORGANIZATION' ? '키·모델 저장' : '암호화 저장'}</Button>
+              <Button onClick={() => void saveKey(provider, scope)} disabled={isBusy || !hasCredentialChange || !selectedModel}>{isBusy ? '처리 중…' : workspaceEditable && !keys[field]?.trim() ? 'Workspace ID 저장' : state.configured ? scope === 'ORGANIZATION' ? '키·모델 교체' : '키 교체' : scope === 'ORGANIZATION' ? '키·모델 저장' : '암호화 저장'}</Button>
               {scope === 'ORGANIZATION' && state.configured && modelDirty && <Button variant="secondary" onClick={() => { setBusy(`model:${field}`); setError(''); setNotice(''); void saveProviderModel(provider.providerKind).then(() => setNotice(`${copy.short}의 ${PRIMARY_TASK[provider.providerKind].label} 모델을 저장했습니다.`)).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setBusy('')); }} disabled={isBusy || busy === `model:${field}`}>모델만 적용</Button>}
               <a href={copy.issueUrl} target="_blank" rel="noreferrer">API KEY 발급 ↗</a>
               {state.configured && <Button variant="secondary" onClick={() => void testKey(provider, scope)} disabled={isBusy}>연결 확인</Button>}

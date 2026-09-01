@@ -67,6 +67,7 @@ export interface CloudflareEnv {
   GEMINI_API_KEY?: string;
   GEMINI_TEST_FETCH?: typeof fetch;
   ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_WORKSPACE_ID?: string;
   ANTHROPIC_TEST_FETCH?: typeof fetch;
   PM_NOTIFICATION_WEBHOOK_URL?: string;
   PM_NOTIFICATION_WEBHOOK_SECRET?: string;
@@ -4639,11 +4640,13 @@ interface PreviewAiCredentialRow {
   status: 'ACTIVE' | 'DISABLED';
   version: number;
   updatedAt: string;
+  workspaceId?: string | null;
 }
 interface ResolvedPreviewAiCredential {
   apiKey: string;
   source: PreviewAiCredentialSource;
   fingerprint: string | null;
+  workspaceId?: string | null;
 }
 
 interface PreviewAiProviderHealthRow {
@@ -4679,6 +4682,10 @@ function validPreviewApiKey(provider: PreviewAiProvider, value: string): boolean
   return /^(?:AIza|AQ\.|[A-Za-z0-9_.-]{20})/u.test(value);
 }
 
+function validAnthropicWorkspaceId(value: string): boolean {
+  return /^wrkspc_[A-Za-z0-9]{10,100}$/u.test(value);
+}
+
 async function previewStoredAiCredential(
   env: CloudflareEnv,
   provider: PreviewAiProvider,
@@ -4695,7 +4702,13 @@ async function previewStoredAiCredential(
     if (!row || row.status !== 'ACTIVE') return null;
     const apiKey = await decryptSecret(row.ciphertextHex, row.ivHex, masterKey, previewAiCredentialAad(scope, ownerId, provider));
     if (!apiKey || !validPreviewApiKey(provider, apiKey)) return null;
-    return { apiKey, source: scope === 'USER' ? 'PERSONAL' : 'ORGANIZATION', fingerprint: row.keyFingerprint };
+    let workspaceId: string | null = null;
+    if (provider === 'ANTHROPIC') {
+      workspaceId = await env.DB.prepare(
+        'SELECT provider_workspace_id AS workspaceId FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=?'
+      ).bind(PREVIEW_ORGANIZATION_ID, scope, ownerId, provider).first<{ workspaceId: string | null }>().then((value)=>value?.workspaceId??null).catch(()=>null);
+    }
+    return { apiKey, source: scope === 'USER' ? 'PERSONAL' : 'ORGANIZATION', fingerprint: row.keyFingerprint, workspaceId };
   } catch {
     return null;
   }
@@ -4707,14 +4720,14 @@ async function resolvePreviewAiCredential(env: CloudflareEnv, actorId: string, p
   const organization = await previewStoredAiCredential(env, provider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID);
   if (organization) return organization;
   const apiKey = previewEnvironmentApiKey(env, provider);
-  return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) } : null;
+  return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey), workspaceId: provider === 'ANTHROPIC' ? env.ANTHROPIC_WORKSPACE_ID?.trim() || null : null } : null;
 }
 
 async function resolveOrganizationAiCredential(env: CloudflareEnv, provider: PreviewAiProvider): Promise<ResolvedPreviewAiCredential | null> {
   const organization = await previewStoredAiCredential(env, provider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID);
   if (organization) return organization;
   const apiKey = previewEnvironmentApiKey(env, provider);
-  return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) } : null;
+  return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey), workspaceId: provider === 'ANTHROPIC' ? env.ANTHROPIC_WORKSPACE_ID?.trim() || null : null } : null;
 }
 
 async function writePreviewAiProviderHealth(
@@ -4744,6 +4757,13 @@ async function previewAiCredentialMetadata(env: CloudflareEnv, user: SessionUser
         'FROM preview_ai_credentials WHERE organization_id=? AND ((owner_scope=\'USER\' AND owner_id=?) OR (owner_scope=\'ORGANIZATION\' AND owner_id=?))'
       ).bind(PREVIEW_ORGANIZATION_ID, user.id, PREVIEW_ORGANIZATION_ID).all<PreviewAiCredentialRow>();
       rows.push(...result.results);
+      const anthropicContexts = await env.DB.prepare(
+        'SELECT owner_scope AS ownerScope,owner_id AS ownerId,provider_workspace_id AS workspaceId FROM preview_ai_credentials WHERE organization_id=? AND provider_kind=\'ANTHROPIC\' AND ((owner_scope=\'USER\' AND owner_id=?) OR (owner_scope=\'ORGANIZATION\' AND owner_id=?))'
+      ).bind(PREVIEW_ORGANIZATION_ID,user.id,PREVIEW_ORGANIZATION_ID).all<{ownerScope:PreviewAiCredentialScope;ownerId:string;workspaceId:string|null}>().catch(()=>({results:[]}));
+      for (const context of anthropicContexts.results) {
+        const row = rows.find((item)=>item.providerKind==='ANTHROPIC'&&item.ownerScope===context.ownerScope&&item.ownerId===context.ownerId);
+        if (row) row.workspaceId=context.workspaceId;
+      }
     } catch {
       // The additive credential migration may not exist in older isolated fixtures.
     }
@@ -4768,6 +4788,7 @@ async function previewAiCredentialMetadata(env: CloudflareEnv, user: SessionUser
       version: Number(row?.version ?? 0),
       updatedAt: row?.updatedAt ?? null,
       fingerprint: row?.status === 'ACTIVE' ? row.keyFingerprint.slice(0, 12) : null,
+      workspaceConfigured: provider === 'ANTHROPIC' ? Boolean(row?.workspaceId || (environment && env.ANTHROPIC_WORKSPACE_ID?.trim())) : null,
       health: health ?? { status: 'UNCHECKED', modelCode: '', latencyMs: null, failureCode: null, providerStatus: null, checkedAt: null }
     };
   };
@@ -5450,6 +5471,8 @@ function safeNonGeminiProviderError(provider: 'OPENAI' | 'ANTHROPIC', payload: u
   if (httpStatus === 403) return { code: `${provider}_PERMISSION_DENIED`, error: explain(`${label} API 또는 선택 모델 사용 권한이 없습니다. 공급자 프로젝트 권한을 확인해 주세요.`), providerReason };
   if (httpStatus === 429) return { code: `${provider}_QUOTA_OR_RATE_LIMIT`, error: explain(`${label} 사용 한도 또는 호출 속도 제한에 도달했습니다. 공급자 사용량과 결제 상태를 확인해 주세요.`), providerReason };
   if (provider === 'ANTHROPIC' && httpStatus === 400) {
+    if (/anthropic-workspace-id.*required/u.test(safeMessage)) return { code: 'ANTHROPIC_WORKSPACE_ID_REQUIRED', error: '이 Anthropic 키는 Workspace ID가 필요합니다. 관리자 설정에서 wrkspc_로 시작하는 ID를 함께 저장해 주세요.', providerReason };
+    if (/anthropic-workspace-id.*valid workspace id/u.test(safeMessage)) return { code: 'ANTHROPIC_WORKSPACE_ID_INVALID', error: '저장된 Anthropic Workspace ID가 올바르지 않습니다. Console의 Settings · Workspaces에서 다시 확인해 주세요.', providerReason };
     if (/credit balance|usage credit|billing/u.test(safeMessage)) return { code: 'ANTHROPIC_BILLING_REQUIRED', error: 'Claude API 사용 크레딧이 없거나 결제 설정이 완료되지 않았습니다. Anthropic Console의 Billing에서 사용 크레딧을 확인해 주세요.', providerReason };
     if (/max_tokens|token limit/u.test(safeMessage)) return { code: 'ANTHROPIC_OUTPUT_LIMIT_REJECTED', error: 'Claude가 출력 토큰 설정을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.', providerReason };
     if (/thinking|effort/u.test(safeMessage)) return { code: 'ANTHROPIC_REASONING_CONFIG_REJECTED', error: 'Claude가 사고 수준 설정을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.', providerReason };
@@ -5556,6 +5579,7 @@ async function generatePreviewAiText(
   } else {
     endpoint = 'https://api.anthropic.com/v1/messages';
     headers = { ...headers, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+    if (credential.workspaceId) headers['anthropic-workspace-id'] = credential.workspaceId;
     providerFetch = env.ANTHROPIC_TEST_FETCH ?? fetch;
     body = { model: route.modelCode, max_tokens: maxOutputTokens, system, messages: [{ role: 'user', content: input }] };
     if (/^claude-(?:fable|opus|sonnet)-5$/u.test(route.modelCode)) {
@@ -5630,7 +5654,7 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
     let credential = await previewStoredAiCredential(env, provider, ownerScope, ownerId);
     if (!credential && ownerScope === 'ORGANIZATION') {
       const apiKey = previewEnvironmentApiKey(env, provider);
-      if (apiKey) credential = { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) };
+      if (apiKey) credential = { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey), workspaceId: provider === 'ANTHROPIC' ? env.ANTHROPIC_WORKSPACE_ID?.trim() || null : null };
     }
     if (!credential) return json({ error: '저장된 API 키가 없습니다.', code: `${provider}_NOT_CONFIGURED` }, 409);
     const modelCode = hasModelCode ? String(body.modelCode) : PREVIEW_AI_MODELS[provider][0]?.code ?? '';
@@ -5658,17 +5682,32 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
   }
 
   if (!['PUT', 'DELETE'].includes(request.method)) return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
-  const expectedKeys = request.method === 'PUT' ? ['scope', 'apiKey', 'expectedVersion'] : ['scope', 'expectedVersion'];
-  if (!exactObjectKeys(body, expectedKeys) || !Number.isInteger(body.expectedVersion)) return json({ error: 'Credential payload is invalid', code: 'INVALID_CREDENTIAL_PAYLOAD' }, 400);
+  const validPutPayload = request.method === 'PUT' && (
+    exactObjectKeys(body, ['scope', 'apiKey', 'expectedVersion'])
+    || (provider === 'ANTHROPIC' && exactObjectKeys(body, ['scope', 'apiKey', 'workspaceId', 'expectedVersion']))
+    || (provider === 'ANTHROPIC' && exactObjectKeys(body, ['scope', 'workspaceId', 'expectedVersion']))
+  );
+  const validDeletePayload = request.method === 'DELETE' && exactObjectKeys(body, ['scope', 'expectedVersion']);
+  if ((!validPutPayload && !validDeletePayload) || !Number.isInteger(body.expectedVersion)) return json({ error: 'Credential payload is invalid', code: 'INVALID_CREDENTIAL_PAYLOAD' }, 400);
   const masterKey = previewAiMasterKey(env);
   if (!masterKey) return json({ error: '암호화용 Cloudflare Secret이 준비되지 않았습니다.', code: 'AI_MASTER_KEY_NOT_CONFIGURED' }, 503);
   const current = await env.DB.prepare(
     'SELECT owner_scope AS ownerScope, owner_id AS ownerId, provider_kind AS providerKind, ciphertext_hex AS ciphertextHex, iv_hex AS ivHex, key_fingerprint AS keyFingerprint, status, version, updated_at AS updatedAt FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=?'
   ).bind(PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider).first<PreviewAiCredentialRow>();
+  const currentWorkspaceId = provider === 'ANTHROPIC' && current ? await env.DB.prepare(
+    'SELECT provider_workspace_id AS workspaceId FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=?'
+  ).bind(PREVIEW_ORGANIZATION_ID,ownerScope,ownerId,provider).first<{workspaceId:string|null}>().then((row)=>row?.workspaceId??null).catch(()=>null) : null;
   const expectedVersion = Number(body.expectedVersion);
   if (Number(current?.version ?? 0) !== expectedVersion) return json({ error: 'AI 키 설정이 다른 화면에서 변경되었습니다.', code: 'VERSION_CONFLICT', currentVersion: Number(current?.version ?? 0) }, 409);
-  const rawKey = request.method === 'PUT' && typeof body.apiKey === 'string' ? body.apiKey.trim() : `disabled:${crypto.randomUUID()}`;
+  const retainedKey = request.method === 'PUT' && typeof body.apiKey !== 'string' && current?.status === 'ACTIVE'
+    ? await decryptSecret(current.ciphertextHex,current.ivHex,masterKey,previewAiCredentialAad(ownerScope,ownerId,provider))
+    : null;
+  const rawKey = request.method === 'PUT' ? (typeof body.apiKey === 'string' ? body.apiKey.trim() : retainedKey ?? '') : `disabled:${crypto.randomUUID()}`;
   if (request.method === 'PUT' && !validPreviewApiKey(provider, rawKey)) return json({ error: 'API 키 형식 또는 길이가 올바르지 않습니다.', code: 'INVALID_API_KEY_FORMAT' }, 400);
+  const workspaceId = provider === 'ANTHROPIC' && request.method === 'PUT'
+    ? (typeof body.workspaceId === 'string' ? body.workspaceId.trim() : currentWorkspaceId)
+    : null;
+  if (provider === 'ANTHROPIC' && typeof body.workspaceId === 'string' && !validAnthropicWorkspaceId(workspaceId ?? '')) return json({ error: 'Anthropic Workspace ID는 wrkspc_로 시작하는 값을 입력해 주세요.', code: 'INVALID_ANTHROPIC_WORKSPACE_ID' }, 400);
   const fingerprint = await sha256Hex(rawKey);
   const encrypted = await encryptSecret(rawKey, masterKey, previewAiCredentialAad(ownerScope, ownerId, provider));
   const now = new Date(Math.max(Date.now(), Date.parse(current?.updatedAt ?? '1970-01-01') + 1)).toISOString();
@@ -5676,15 +5715,25 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
   const nextStatus = request.method === 'PUT' ? 'ACTIVE' : 'DISABLED';
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
   const write = current
-    ? env.DB.prepare('UPDATE preview_ai_credentials SET ciphertext_hex=?, iv_hex=?, key_fingerprint=?, status=?, version=version+1, updated_by=?, updated_at=? WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=?')
-      .bind(encrypted.ciphertextHex, encrypted.ivHex, fingerprint, nextStatus, user.id, now, PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, expectedVersion)
-    : env.DB.prepare('INSERT INTO preview_ai_credentials (organization_id,owner_scope,owner_id,provider_kind,ciphertext_hex,iv_hex,key_fingerprint,status,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE ?=0')
-      .bind(PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, encrypted.ciphertextHex, encrypted.ivHex, fingerprint, nextStatus, 1, user.id, now, now, expectedVersion);
+    ? provider === 'ANTHROPIC'
+      ? env.DB.prepare('UPDATE preview_ai_credentials SET ciphertext_hex=?,iv_hex=?,key_fingerprint=?,provider_workspace_id=?,status=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=?')
+        .bind(encrypted.ciphertextHex,encrypted.ivHex,fingerprint,workspaceId,nextStatus,user.id,now,PREVIEW_ORGANIZATION_ID,ownerScope,ownerId,provider,expectedVersion)
+      : env.DB.prepare('UPDATE preview_ai_credentials SET ciphertext_hex=?, iv_hex=?, key_fingerprint=?, status=?, version=version+1, updated_by=?, updated_at=? WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=?')
+        .bind(encrypted.ciphertextHex, encrypted.ivHex, fingerprint, nextStatus, user.id, now, PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, expectedVersion)
+    : provider === 'ANTHROPIC'
+      ? env.DB.prepare('INSERT INTO preview_ai_credentials (organization_id,owner_scope,owner_id,provider_kind,ciphertext_hex,iv_hex,key_fingerprint,provider_workspace_id,status,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ?=0')
+        .bind(PREVIEW_ORGANIZATION_ID,ownerScope,ownerId,provider,encrypted.ciphertextHex,encrypted.ivHex,fingerprint,workspaceId,nextStatus,1,user.id,now,now,expectedVersion)
+      : env.DB.prepare('INSERT INTO preview_ai_credentials (organization_id,owner_scope,owner_id,provider_kind,ciphertext_hex,iv_hex,key_fingerprint,status,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE ?=0')
+        .bind(PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, encrypted.ciphertextHex, encrypted.ivHex, fingerprint, nextStatus, 1, user.id, now, now, expectedVersion);
   try {
+    const history = provider === 'ANTHROPIC'
+      ? env.DB.prepare('INSERT INTO preview_ai_credential_history (id,organization_id,owner_scope,owner_id,provider_kind,key_fingerprint,provider_workspace_id,status,version,changed_by,changed_at) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=? AND key_fingerprint=?)')
+        .bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,ownerScope,ownerId,provider,fingerprint,workspaceId,nextStatus,nextVersion,user.id,now,PREVIEW_ORGANIZATION_ID,ownerScope,ownerId,provider,nextVersion,fingerprint)
+      : env.DB.prepare('INSERT INTO preview_ai_credential_history (id,organization_id,owner_scope,owner_id,provider_kind,key_fingerprint,status,version,changed_by,changed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=? AND key_fingerprint=?)')
+        .bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, fingerprint, nextStatus, nextVersion, user.id, now, PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, nextVersion, fingerprint);
     const results = await env.DB.batch([
       write,
-      env.DB.prepare('INSERT INTO preview_ai_credential_history (id,organization_id,owner_scope,owner_id,provider_kind,key_fingerprint,status,version,changed_by,changed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=? AND key_fingerprint=?)')
-        .bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, fingerprint, nextStatus, nextVersion, user.id, now, PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, nextVersion, fingerprint)
+      history
     ]) as Array<{ meta?: { changes?: number } }>;
     if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'AI 키 설정이 다른 화면에서 변경되었습니다.', code: 'VERSION_CONFLICT' }, 409);
   } catch {

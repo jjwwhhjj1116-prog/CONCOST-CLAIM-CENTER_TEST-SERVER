@@ -17,6 +17,8 @@ test('CF86 uses one bounded Gemini runtime and provider-specific reasoning contr
   assert.match(source, /value === 'max' \|\| value === 'xhigh' \|\| value === 'high' \|\| value === 'low'/u);
   assert.match(source, /ANTHROPIC_BILLING_REQUIRED/u);
   assert.match(source, /ANTHROPIC_REASONING_CONFIG_REJECTED/u);
+  assert.match(source, /ANTHROPIC_WORKSPACE_ID_REQUIRED/u);
+  assert.match(source, /headers\['anthropic-workspace-id'\] = credential\.workspaceId/u);
   assert.match(source, /normalizedAnthropicReasoningEffort\(route\.reasoningEffort\) === 'high'/u);
   assert.match(source, /delete defaultHighBody\.thinking/u);
   assert.match(source, /delete defaultHighBody\.output_config/u);
@@ -37,6 +39,10 @@ test('CF86 persists verified connection health instead of equating a stored key 
   assert.match(settings, /연결 정상/u);
   assert.match(settings, /연결 오류/u);
   assert.match(settings, /확인 필요/u);
+  assert.match(settings, /Anthropic Workspace ID/u);
+  assert.match(settings, /Workspace ID 저장/u);
+  const workspaceMigration = read('apps/cloudflare/migrations/0057_cf87_anthropic_workspace.sql');
+  assert.match(workspaceMigration, /provider_workspace_id/u);
 });
 
 test('CF86 progress UI reports observed state and aligned client timeouts', () => {
