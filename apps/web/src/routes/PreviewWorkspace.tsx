@@ -73,14 +73,14 @@ export const PreviewFeature: React.FC<PreviewFeatureProps> = ({ route, onNavigat
       <div>
         <span className="workspace-eyebrow">{route.id} · PRODUCT PREVIEW</span>
         <h2 id="preview-feature-title">{route.name}</h2>
-        <p>이 화면의 인터페이스와 업무 흐름을 확인하는 Cloudflare 운영 미리보기입니다. 사건·일정·관계자 데이터는 D1에 영구 저장됩니다.</p>
+        <p>클레임센터의 업무 흐름을 확인하고 사건·일정·관계자 정보를 안전하게 관리하는 화면입니다.</p>
       </div>
       <Button variant="secondary" onClick={() => onNavigate('/dashboard')}>BACK TO DASHBOARD</Button>
     </div>
     <div className="preview-feature-grid">
       <Card title="WORKFLOW"><p>클레임센터의 역할·승인·감사 계약에 맞춘 단계형 업무 화면입니다.</p></Card>
       <Card title="INTERFACE"><p>반응형 레이아웃, 명확한 상태 표시, 키보드 접근성을 적용했습니다.</p></Card>
-      <Card title="DATA CONNECTION"><p>D1 로그인·사건·일정·관계자·초안 저장은 연결되었습니다. 파일 원본의 Google Drive 연결만 사용자 지시에 따라 보류 중입니다.</p></Card>
+      <Card title="자동 저장"><p>로그인·사건·일정·관계자·초안 저장 기능이 연결되어 있습니다. 파일 원본은 회사 Google Drive 연결 상태에 따라 보관됩니다.</p></Card>
     </div>
   </section>
 );

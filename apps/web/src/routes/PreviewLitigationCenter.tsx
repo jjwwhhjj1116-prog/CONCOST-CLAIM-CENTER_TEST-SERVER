@@ -249,7 +249,7 @@ export function PreviewLitigationCenter({ roles, onNavigate }: { roles: UserRole
     finally { setBusy(''); }
   };
 
-  if (loading && records.length === 0) return <StatusFeedbackState type="loading" message="D1에서 법원 사건과 공판 일정을 불러오고 있습니다." />;
+  if (loading && records.length === 0) return <StatusFeedbackState type="loading" message="법원 사건과 공판 일정을 불러오고 있습니다." />;
 
   return (
     <section className="route-view litigation-center" aria-labelledby="litigation-title">
@@ -264,7 +264,7 @@ export function PreviewLitigationCenter({ roles, onNavigate }: { roles: UserRole
 
       <div className="litigation-trust-note">
         <strong>공식 외부 자동조회는 아직 연결 전입니다.</strong>
-        <span>대한민국 법원 공식 원문을 담당자가 확인하고 출처 URL과 원문 SHA-256을 기록한 자료만 AI 보고서의 확정 근거로 사용됩니다.</span>
+        <span>대한민국 법원 공식 원문을 담당자가 확인하고 출처 URL과 원문 무결성 확인값을 기록한 자료만 AI 보고서의 확정 근거로 사용됩니다.</span>
       </div>
 
       <div className="litigation-kpis" aria-label="소송 관리 요약">
@@ -325,7 +325,7 @@ export function PreviewLitigationCenter({ roles, onNavigate }: { roles: UserRole
                   <label className="span-2"><span>이력 제목</span><input value={eventForm.title} maxLength={300} disabled={!canMutate || busy === 'event'} onChange={(event) => setEventForm((current) => ({ ...current, title: event.target.value }))} placeholder="예: 제3차 변론기일" /></label>
                   <label className="span-2"><span>상세 내용</span><textarea value={eventForm.detailText} maxLength={5000} disabled={!canMutate || busy === 'event'} onChange={(event) => setEventForm((current) => ({ ...current, detailText: event.target.value }))} placeholder="법원 통지 내용, 제출 서면, 다음 조치 등을 기록하세요." /></label>
                   <label><span>근거 검증</span><select value={eventForm.verificationStatus} disabled={!canMutate || busy === 'event'} onChange={(event) => setEventForm((current) => ({ ...current, verificationStatus: event.target.value as VerificationStatus }))}><option value="UNVERIFIED">미확인</option><option value="VERIFIED">공식 원문 확인</option><option value="CONFLICT">자료 충돌</option></select></label>
-                  <label><span>원문 SHA-256</span><input value={eventForm.sourceSha256} pattern="[0-9A-Fa-f]{64}" disabled={!canMutate || busy === 'event'} onChange={(event) => setEventForm((current) => ({ ...current, sourceSha256: event.target.value }))} placeholder="공식 원문 확인 시 64자리 해시" /></label>
+                  <label><span>원문 무결성 확인값</span><input value={eventForm.sourceSha256} pattern="[0-9A-Fa-f]{64}" disabled={!canMutate || busy === 'event'} onChange={(event) => setEventForm((current) => ({ ...current, sourceSha256: event.target.value }))} placeholder="공식 원문 확인 시 64자리 값" /></label>
                   <label className="span-2"><span>법원 공식 출처 URL</span><input type="url" value={eventForm.officialSourceUrl} disabled={!canMutate || busy === 'event'} onChange={(event) => setEventForm((current) => ({ ...current, officialSourceUrl: event.target.value }))} placeholder="https://www.scourt.go.kr/..." /></label>
                 </div>
                 <div className="litigation-actions">
@@ -377,7 +377,7 @@ function RecordEditor({ title, form, cases, busy, creating, canMutate, version, 
       </div>
       <div className="litigation-actions">
         {onCancel && <button type="button" className="litigation-secondary" onClick={onCancel}>취소</button>}
-        <button type="button" className="litigation-primary" disabled={!canMutate || busy || !form.caseId || !form.courtName.trim() || !form.courtCaseNumber.trim() || !form.caseTitle.trim() || !form.partiesText.trim() || (officialRequired && !form.officialSourceUrl.trim())} onClick={onSubmit}>{busy ? 'D1 저장 중…' : creating ? '프로젝트에 연결' : '변경사항 저장'}</button>
+        <button type="button" className="litigation-primary" disabled={!canMutate || busy || !form.caseId || !form.courtName.trim() || !form.courtCaseNumber.trim() || !form.caseTitle.trim() || !form.partiesText.trim() || (officialRequired && !form.officialSourceUrl.trim())} onClick={onSubmit}>{busy ? '저장 중…' : creating ? '프로젝트에 연결' : '변경사항 저장'}</button>
       </div>
     </section>
   );

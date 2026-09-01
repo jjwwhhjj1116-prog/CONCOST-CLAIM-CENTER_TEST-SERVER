@@ -794,7 +794,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <EditorContent editor={editor} />
       </>}
     </div>
-    <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? 'Yjs + Hocuspocus CRDT' : 'Markdown + Tiptap JSON 호환'}</span></footer>
+    <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : '자동 저장 편집기'}</span></footer>
     </section>
   </>;
 });

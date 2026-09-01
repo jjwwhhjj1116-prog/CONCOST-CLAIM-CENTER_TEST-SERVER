@@ -366,7 +366,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         const isBusy = busy === field || busy === `test:${field}` || busy === `model:${field}`;
         return <section key={provider.providerKind} data-provider={provider.providerKind} data-configured={state.configured}>
           <header><span>{copy.short.slice(0, 2).toUpperCase()}</span><div><h3>{provider.label}</h3><p>{copy.use}</p></div><strong>{state.configured ? '연결됨' : '키 필요'}</strong></header>
-          <div className="credential-state"><span>{state.storage === 'ENCRYPTED_D1' ? 'AES-256-GCM 암호화 저장' : state.storage === 'CLOUDFLARE_SECRET' ? 'Cloudflare 서버 Secret' : '저장된 키 없음'}</span>{state.fingerprint && <small>키 지문 {state.fingerprint}… · v{state.version}</small>}</div>
+          <div className="credential-state"><span>{state.storage === 'ENCRYPTED_D1' ? '암호화 저장' : state.storage === 'CLOUDFLARE_SECRET' ? '회사 서버 보안 키' : '저장된 키 없음'}</span>{state.fingerprint && <small>등록된 키 확인값 · v{state.version}</small>}</div>
           <label htmlFor={`${field}-model`}>사용 모델</label>
           <select id={`${field}-model`} value={selectedModel} onChange={(event) => setSelectedModels((current) => ({ ...current, [provider.providerKind]: event.target.value }))}>
             {options.map((model) => <option key={model.code} value={model.code}>{model.label}</option>)}
@@ -393,14 +393,14 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   return <div className="content-stack preview-settings" aria-label="설정">
     <section className="preview-settings-hero"><div><span>WORKSPACE CONTROL CENTER</span><h2>설정</h2><p>개인 Gemini API 키와 관리자 전용 회사 Drive·공용 AI·Memory 정책을 한곳에서 관리합니다.</p></div><div><strong>{payload.masterKeyReady ? '암호화 저장 준비됨' : '서버 암호화키 필요'}</strong><small>키 원문은 브라우저와 API 응답에 다시 표시하지 않습니다.</small></div></section>
     <nav className="settings-section-tabs" aria-label="설정 종류">
-      <button type="button" className={section === 'PERSONAL' ? 'is-active' : ''} aria-current={section === 'PERSONAL' ? 'page' : undefined} onClick={() => changeSection('PERSONAL')}><span>PERSONAL</span><strong>개인 설정</strong><small>Gemini 개인 키·로컬 AI 안내</small></button>
+      <button type="button" className={section === 'PERSONAL' ? 'is-active' : ''} aria-current={section === 'PERSONAL' ? 'page' : undefined} onClick={() => changeSection('PERSONAL')}><span>PERSONAL</span><strong>개인 설정</strong><small>Gemini 개인 키·비밀번호</small></button>
       {isAdmin && <button type="button" className={section === 'ADMIN' ? 'is-active' : ''} aria-current={section === 'ADMIN' ? 'page' : undefined} onClick={() => changeSection('ADMIN')}><span>ADMIN ONLY</span><strong>관리자 설정</strong><small>회사 Drive·공용 AI·Hermes·사용자</small></button>}
     </nav>
     <section className="settings-access-strip" aria-label="현재 계정 설정 권한"><div><span>현재 로그인 역할</span><strong>{roles.map((role) => role.toUpperCase()).join(' · ') || 'USER'}</strong></div><p>{section === 'PERSONAL' ? '현재 화면의 API 키는 내 계정에만 적용됩니다.' : '조직 전체에 적용되는 관리자 전용 화면입니다.'}</p></section>
 
     {section === 'PERSONAL' && <>
       <Card title="로그인 비밀번호 변경" className="password-settings-card">
-        <p>내 계정의 비밀번호는 D1에 PBKDF2 해시로 저장됩니다. 변경 후 현재 브라우저는 유지되고 다른 기기의 기존 로그인은 종료됩니다.</p>
+        <p>내 계정의 비밀번호는 복원할 수 없는 안전한 방식으로 저장됩니다. 변경 후 현재 브라우저는 유지되고 다른 기기의 기존 로그인은 종료됩니다.</p>
         <div className="password-change-grid">
           <label>현재 비밀번호<input type="password" autoComplete="current-password" value={currentPassword} maxLength={128} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
           <label>새 비밀번호<input type="password" autoComplete="new-password" value={newPassword} minLength={4} maxLength={128} onChange={(event) => setNewPassword(event.target.value)} /></label>
@@ -409,7 +409,6 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         </div>
       </Card>
       {renderCredentials('USER', '개인 Gemini 연결 설정', '한 번 저장하면 내 계정에 암호화 등록되어 다시 로그인해도 자동으로 사용합니다. 무료 할당량을 모두 쓰면 새 키를 발급받아 “새 키로 교체”만 해주세요.')}
-      <Card title="로컬 AI 설정 가이드"><div className="local-ai-guide"><div><span>01</span><strong>로컬 모델 실행</strong><p>Ollama, LM Studio 또는 OpenAI Compatible 서버에서 모델을 실행합니다.</p><code>http://localhost:11434</code></div><div><span>02</span><strong>회사 서버 Bridge</strong><p>Cloudflare는 개인 PC localhost에 접근할 수 없어 추후 공유 서버의 HTTPS Bridge가 필요합니다.</p><code>HTTPS · VPN · 접근제어 필수</code></div><div><span>03</span><strong>관리자 활성화</strong><p>관리자 설정에서 PRIVATE_SERVER_BRIDGE와 Hermes 정책을 승인합니다.</p><code>현재 직접 호출 비활성</code></div></div></Card>
     </>}
 
     {section === 'ADMIN' && isAdmin && workspace && <>

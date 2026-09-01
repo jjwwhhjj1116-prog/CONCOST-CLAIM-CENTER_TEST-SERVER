@@ -43,7 +43,7 @@ function dateLabel(value: string | null, withTime = false): string {
 
 function errorLabel(reason: unknown): string {
   if (reason instanceof ApiError && reason.status === 403) return '배정받은 프로젝트의 제안서만 볼 수 있습니다.';
-  return reason instanceof Error ? reason.message : '저장된 제안서 DB를 불러오지 못했습니다.';
+  return reason instanceof Error ? reason.message : '저장된 제안서를 불러오지 못했습니다.';
 }
 
 function downloadWorkbook(proposals: SentProposal[]): void {
@@ -88,7 +88,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
     setBusy(`${proposal.id}:${action}`); setError(''); setNotice('');
     try {
       await apiRequest(`/api/proposal-catalog/${proposal.id}`, { method:'POST', body:JSON.stringify({ action,expectedVersion:proposal.catalogVersion }) });
-      setNotice(action === 'HIDE_FROM_LIST' ? '일반 제안서 목록에서 숨겼습니다. 관리자 DB에는 남습니다.' : action === 'RESTORE_TO_LIST' ? '일반 목록에 복원했습니다.' : action === 'ARCHIVE_TO_DRIVE' ? '제안서 감사본을 회사 Google Drive에 보관했습니다.' : '관리자 DB에서 삭제 처리했습니다.');
+      setNotice(action === 'HIDE_FROM_LIST' ? '일반 제안서 목록에서 숨겼습니다. 관리자 보관 이력에는 남습니다.' : action === 'RESTORE_TO_LIST' ? '일반 목록에 복원했습니다.' : action === 'ARCHIVE_TO_DRIVE' ? '제안서 감사본을 회사 Google Drive에 보관했습니다.' : '관리자 DB에서 삭제 처리했습니다.');
       setProposals((current)=>current.filter((row)=>row.id!==proposal.id));
     } catch (reason) { setError(errorLabel(reason)); }
     finally { setBusy(''); }
@@ -130,7 +130,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
 
       <div className="proposal-library__summary" aria-label="저장 제안서 요약">
         <article><span>저장 프로젝트</span><strong>{summary.projects}</strong><small>프로젝트별 묶음</small></article>
-        <article><span>제안서 DB</span><strong>{summary.proposals}</strong><small>스튜디오 저장본</small></article>
+        <article><span>{mode === 'projects' ? '저장 제안서' : '제안서 DB'}</span><strong>{summary.proposals}</strong><small>스튜디오 저장본</small></article>
         <article><span>접수 대기</span><strong>{summary.pending}</strong><small>수주 여부 확인 전</small></article>
         <article><span>확정 제안서</span><strong>{summary.verified}</strong><small>본문 SHA-256 고정</small></article>
       </div>
@@ -142,8 +142,8 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
 
       {error && <div className="proposal-library__message is-error" role="alert">{error}</div>}
       {notice && <div className="proposal-library__message" role="status">{notice}</div>}
-      {loading && <div className="proposal-library__message" role="status">D1 제안서 스튜디오 저장본을 불러오고 있습니다.</div>}
-      {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 저장된 제안서가 없습니다.</strong><span>제안서 작성 화면에서 초안을 저장하면 이 목록과 관리자 DB에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
+      {loading && <div className="proposal-library__message" role="status">저장된 제안서를 불러오고 있습니다.</div>}
+      {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 저장된 제안서가 없습니다.</strong><span>제안서 작성 화면에서 초안을 저장하면 이 목록에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
 
       {!loading && !error && mode === 'projects' && projects.length > 0 && (
         <div className="proposal-project-list">
@@ -159,7 +159,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
                   <div><strong>{proposal.proposalTitle}</strong><span>{proposal.proposalNumber} · {proposal.revisionLabel}</span></div>
                   <div><span>{proposal.clientName}</span><small>{dateLabel(proposal.sentAt, true)}</small></div>
                   <em className={`status-${proposal.verificationStatus.toLowerCase()}`}>{verificationLabels[proposal.verificationStatus]}</em>
-                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 파일 열기</a> : <span className="is-muted" title="제안서 작성본은 D1에 보존되어 있으나 별도 파일 다운로드 주소는 등록되지 않았습니다.">확정 파일 링크 없음</span>}
+                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 파일 열기</a> : <span className="is-muted" title="제안서 작성본은 안전하게 보관되어 있으나 별도 파일 다운로드 주소는 등록되지 않았습니다.">확정 파일 링크 없음</span>}
                 </div>)}
               </div>
               <footer><button type="button" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(project.caseId)}`)}>이 프로젝트 제안서 작성</button><button type="button" className="is-secondary" onClick={() => onNavigate('/workflow/award')}>접수·수주 상태 확인</button><button type="button" className="is-secondary" disabled={Boolean(busy)} onClick={()=>void catalogAction(latest,'HIDE_FROM_LIST')}>목록에서 숨기기</button></footer>

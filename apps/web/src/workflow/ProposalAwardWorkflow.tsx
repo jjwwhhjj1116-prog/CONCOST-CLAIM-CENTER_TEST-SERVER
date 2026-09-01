@@ -377,7 +377,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   }
 
   if (routeId === 'WF-02') {
-    if (receptionLoading && receptions.length === 0) return <StatusFeedbackState type="loading" message="D1에서 확정 제안서를 불러오고 있습니다." />;
+    if (receptionLoading && receptions.length === 0) return <StatusFeedbackState type="loading" message="확정 제안서를 불러오고 있습니다." />;
     const readyItemsAll = receptions.filter((item) => isReceptionReady(item.receptionStatus));
     const wonItemsAll = receptions.filter((item) => isReceptionWon(item.receptionStatus));
     const receptionNeedle = receptionQuery.trim().toLocaleLowerCase('ko-KR');
@@ -420,13 +420,13 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
     );
   }
 
-  if (loading && proposals.length === 0 && cases.length === 0) return <StatusFeedbackState type="loading" message="D1에서 연동 제안서와 수주 결정을 불러오고 있습니다." />;
+  if (loading && proposals.length === 0 && cases.length === 0) return <StatusFeedbackState type="loading" message="연동 제안서와 수주 결정을 불러오고 있습니다." />;
 
   return (
     <section className="route-view proposal-flow" aria-labelledby="proposal-flow-title">
       <header className="proposal-flow-hero">
         <div>
-          <span>BUSINESS DEVELOPMENT · D1 LIVE WORKFLOW</span>
+          <span>BUSINESS DEVELOPMENT · LIVE WORKFLOW</span>
           <h2 id="proposal-flow-title">{routeId === 'WF-01' ? '작성된 제안서를 프로젝트에 연결합니다.' : '수주 여부를 확정하고 수행 프로젝트로 전환합니다.'}</h2>
           <p>확정된 제안서를 연결하고 수주 또는 취소만 결정합니다. 수주가 확인된 프로젝트만 착수회의 이후 단계와 일정표·ERP 등록으로 넘어갑니다.</p>
         </div>
@@ -481,7 +481,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
                 <label><span>제안서 확정일</span><input type="datetime-local" value={linkForm.sentAt} disabled={!canMutate || busy === 'link'} onChange={(event) => setLinkForm((current) => ({ ...current, sentAt: event.target.value }))} /></label>
                 <label><span>회신 기한</span><input type="date" value={linkForm.responseDueOn} disabled={!canMutate || busy === 'link'} onChange={(event) => setLinkForm((current) => ({ ...current, responseDueOn: event.target.value }))} /></label>
                 <label className="span-2"><span>확정본 HTTPS URL</span><input type="url" value={linkForm.documentUrl} maxLength={1200} disabled={!canMutate || busy === 'link'} onChange={(event) => setLinkForm((current) => ({ ...current, documentUrl: event.target.value }))} placeholder="https://..." /></label>
-                <label className="span-2"><span>확정본 SHA-256</span><input value={linkForm.documentSha256} maxLength={64} disabled={!canMutate || busy === 'link'} onChange={(event) => setLinkForm((current) => ({ ...current, documentSha256: event.target.value }))} placeholder="64자리 SHA-256" /></label>
+                <label className="span-2"><span>확정본 무결성 확인값</span><input value={linkForm.documentSha256} maxLength={64} disabled={!canMutate || busy === 'link'} onChange={(event) => setLinkForm((current) => ({ ...current, documentSha256: event.target.value }))} placeholder="확정 파일의 64자리 확인값" /></label>
                 <label><span>원문 검증</span><select value={linkForm.verificationStatus} disabled={!canMutate || busy === 'link'} onChange={(event) => setLinkForm((current) => ({ ...current, verificationStatus: event.target.value as VerificationStatus }))}><option value="UNVERIFIED">원문 미확인</option><option value="VERIFIED">URL·SHA 검증</option><option value="CONFLICT">자료 충돌</option></select></label>
               </div>
               <div className="proposal-flow-submit"><button type="button" className="is-secondary" onClick={() => setShowLinkForm(false)}>취소</button><button type="button" disabled={!canMutate || busy === 'link'} onClick={() => void submitLink()}>{busy === 'link' ? '저장 중…' : '제안서 연동'}</button></div>

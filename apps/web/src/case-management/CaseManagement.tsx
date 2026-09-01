@@ -147,12 +147,12 @@ function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }): 
     </section>
 
     <section className="workspace-flow" aria-labelledby="workspace-flow-title">
-      <div className="workspace-flow-heading"><div><span className="workspace-eyebrow">CORE WORKFLOW</span><h4 id="workspace-flow-title">하나의 사건이 최종 보고서가 되는 5단계</h4></div><span>Cloudflare D1 자동저장</span></div>
+      <div className="workspace-flow-heading"><div><span className="workspace-eyebrow">CORE WORKFLOW</span><h4 id="workspace-flow-title">하나의 사건이 최종 보고서가 되는 5단계</h4></div><span>업무 기록 자동저장</span></div>
       <div className="workspace-flow-grid">
         {[
           ['01', '사건 등록', '기본정보와 클레임 유형을 등록합니다.', '/cases/new'],
           ['02', '자료 정리', '사건별 자료와 근거를 한곳에서 관리합니다.', '/cases/files'],
-          ['03', '보고서 작성', '작성 내용이 D1에 자동 저장됩니다.', '/reports/studio'],
+          ['03', '보고서 작성', '작성 내용이 자동 저장됩니다.', '/reports/studio'],
           ['04', '결재·승인', '제출된 버전을 독립 검토자가 승인합니다.', '/approval'],
           ['05', '최종 출력', '승인본에서 DOCX·PDF를 생성합니다.', '/reports/studio']
         ].map(([step, title, description, path]) => <button key={step} onClick={() => onNavigate(path)}><span>{step}</span><strong>{title}</strong><small>{description}</small></button>)}
@@ -336,7 +336,7 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
         <label className="case-description-field" htmlFor="case-description"><span>사건 설명 · 반드시 클라이언트 관점으로 작성 <i className="ui-required-mark">*</i></span><textarea required id="case-description" value={description} maxLength={5000} placeholder="우리 클라이언트가 무엇을 주장하고 어떤 피해·책임 쟁점을 다투는지, 확보 자료와 함께 입력하세요." onChange={(event) => { setDescription(event.target.value); invalidateReview(); }} /></label>
         <section className="case-intake-assistant"><div className="case-intake-assistant__heading"><span className="gemini-star" aria-hidden="true">✦</span><div><strong>Gemini AI 의뢰 자동작성</strong><small>회의록·녹음·TXT·CSV·Excel(.xlsx)의 문장과 셀을 읽어 위 기본정보와 사건 설명 초안을 채웁니다.</small></div></div><label className="case-intake-audio" htmlFor="case-intake-source"><span>분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel</span><input id="case-intake-source" type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/webm,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.mp3,.m4a,.wav,.ogg,.webm,.txt,.csv,.xlsx" onChange={(event) => {setIntakeFile(event.target.files?.[0] ?? null);setIntakeDraft(null);setReviewConfirmed(false);setReviewChecks([]);setReviewOpen(false);}} /><small>{intakeFile ? `${intakeFile.name} · ${(intakeFile.size/1024/1024).toFixed(1)}MB · “AI 자동 작성”을 눌러 초안을 만든 뒤 반드시 검수하세요.` : '지원 형식: 회의록 XLSX·CSV·TXT / 녹음 MP3·M4A·WAV·OGG·WEBM / 최대 10MB'}</small></label><div className="case-intake-assistant__actions"><Button type="button" className="gemini-action-button" size="lg" disabled={!intakeFile||aiGeneration?.status==='running'} onClick={()=>void generateDraft()}><span className="gemini-button-star" aria-hidden="true">✦</span> {intakeDraft?'AI 초안 다시 작성':'AI 자동 작성'}</Button>{intakeDraft&&<Button type="button" className="case-intake-review-open" size="lg" onClick={openReview}>{reviewConfirmed?'✓ 검수 완료 내용 다시 확인':'3단계 · 검수 완료하기'}</Button>}<span className={reviewConfirmed?'is-reviewed':'is-pending'}>{reviewConfirmed?'✓ 원문 대조·검수 완료':'AI 초안 작성 후 사람 검수가 필요합니다.'}</span></div></section>
         {intakeFile&&<section className="case-intake-flow" aria-label="프로젝트 의뢰 진행 단계"><header><b>현재 진행 단계</b><span>{reviewConfirmed?'검수 완료 · 저장 가능':intakeDraft?'3단계 사람 검수가 필요합니다':'AI 초안 작성이 필요합니다'}</span></header><ol><li className={intakeFile?'is-complete':''}><b>1</b><span>자료 선택<small>{intakeFile.name}</small></span></li><li className={intakeDraft?'is-complete':'is-current'}><b>2</b><span>AI 초안 작성<small>{intakeDraft?'작성 완료':'AI 자동 작성 버튼을 누르세요'}</small></span></li><li className={reviewConfirmed?'is-complete':intakeDraft?'is-current':''}><b>3</b><span>사람 검수<small>{reviewConfirmed?'검수 완료':intakeDraft?'검수 완료하기 버튼을 누르세요':'초안 작성 후 활성화'}</small></span></li><li className={reviewConfirmed?'is-current':''}><b>4</b><span>저장·제안서 이동<small>{reviewConfirmed?'아래 저장 버튼 활성화':'검수 완료 후 활성화'}</small></span></li></ol>{intakeDraft&&!reviewConfirmed&&<Button type="button" className="case-intake-review-open" size="lg" onClick={openReview}>3단계 검수 화면 열기</Button>}</section>}
-        <div className="case-create-summary"><span>저장 후 다음 단계</span><p>대분류·중분류·소분류와 담당자를 D1에 함께 저장한 뒤, 이 프로젝트가 선택된 제안서 작성 1단계로 이동합니다.</p></div>
+        <div className="case-create-summary"><span>저장 후 다음 단계</span><p>분류 정보와 담당자를 함께 저장한 뒤, 이 프로젝트가 선택된 제안서 작성 1단계로 이동합니다.</p></div>
         {error && <ErrorBox error={error} />}
         <div className="case-create-actions"><div className="case-create-action-status"><b>{!intakeFile?'수동 입력 저장 가능':reviewConfirmed?'✓ 검수 완료 · 저장 가능':intakeDraft?'검수 완료 후 저장 가능':'AI 초안 작성 후 검수 필요'}</b><small>필수 단계가 끝나면 오른쪽 저장 버튼이 활성화됩니다.</small></div><Button type="button" variant="secondary" onClick={() => onNavigate('/dashboard')}>취소</Button><Button type="submit" isLoading={saving} disabled={Boolean(intakeFile)&&(!intakeDraft||!reviewConfirmed)}>의뢰 저장 후 제안서 작성</Button></div>
       </form>
@@ -452,7 +452,7 @@ function MaterialsPage(): React.ReactElement {
                   <li key={ver.id}>
                     {ver.displayName} (v{String(ver.versionNumber).padStart(2, '0')})
                     {ver.isFinal && <span className="badge badge-final"> [최종본]</span>}
-                    <span className="muted"> · 원본명 {ver.originalName} · {ver.mimeType} · {ver.fileSize} bytes · SHA-256 {ver.sha256.slice(0, 12)}… · {ver.uploadedBy?.name ?? '알 수 없음'}</span>
+                    <span className="muted"> · 원본명 {ver.originalName} · {ver.mimeType} · {ver.fileSize} bytes · 무결성 확인 {ver.sha256.slice(0, 12)}… · {ver.uploadedBy?.name ?? '알 수 없음'}</span>
                     <Button size="sm" variant="secondary" onClick={() => void handleDownload(doc.id, ver.id)}>다운로드</Button>
                     {!ver.isFinal && <Button size="sm" variant="secondary" onClick={() => void handleFinalize(doc.id, ver.id)}>최종본 지정</Button>}
                   </li>

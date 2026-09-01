@@ -163,7 +163,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
       const result = await apiRequest<{ projects: WorkflowProject[]; dataBasis: string }>('/api/project-workflow/schedule');
       setProjects(result.projects); setLiveError('');
     } catch (reason) {
-      setLiveError(reason instanceof Error ? reason.message : 'D1 프로젝트를 불러오지 못했습니다.');
+      setLiveError(reason instanceof Error ? reason.message : '프로젝트를 불러오지 못했습니다.');
     }
   };
 
@@ -171,7 +171,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
     let active = true;
     apiRequest<{ projects: WorkflowProject[]; dataBasis: string }>('/api/project-workflow/schedule')
       .then((result) => { if (active) { setProjects(result.projects); setLiveError(''); } })
-      .catch((reason) => { if (active) setLiveError(reason instanceof Error ? reason.message : 'D1 프로젝트를 불러오지 못했습니다.'); });
+      .catch((reason) => { if (active) setLiveError(reason instanceof Error ? reason.message : '프로젝트를 불러오지 못했습니다.'); });
     return () => { active = false; };
   }, []);
 
@@ -192,7 +192,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
   }, [isProjectDialogOpen, onNavigate]);
 
   if (!selectedProject) return <section className="workflow-page" aria-label="프로젝트 일정표">
-    <header className="workflow-hero"><div><span className="workflow-kicker">CLAIM DELIVERY WORKFLOW</span><h2>프로젝트 통합 일정표</h2><p>제안서부터 보고서 작성까지 실제 D1 업무 기록을 연결합니다.</p></div></header>
+    <header className="workflow-hero"><div><span className="workflow-kicker">CLAIM DELIVERY WORKFLOW</span><h2>프로젝트 통합 일정표</h2><p>제안서부터 보고서 작성까지 실제 업무 기록을 연결합니다.</p></div></header>
     {liveError ? <p className="error-box" role="alert">{liveError}</p> : <p className="empty-box">등록된 프로젝트를 불러오는 중이거나 아직 프로젝트 의뢰가 없습니다.</p>}
   </section>;
 
@@ -249,13 +249,13 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
         </div>
         <div className="workflow-hero-actions">
           {!showOverview && <Button variant="secondary" onClick={() => onNavigate('/projects/schedule')}>← 전체 프로젝트</Button>}
-          <span className="workflow-live-badge">D1 LIVE PROJECTS · 신규 의뢰 자동 반영</span>
+          <span className="workflow-live-badge">실시간 프로젝트 · 신규 의뢰 자동 반영</span>
         </div>
       </header>
 
       {erpState && <div className={`erp-sync-banner is-${erpState.toLowerCase()}`} role="status">
         <strong>{erpState === 'SYNCED' ? 'ERP 프로젝트 등록 완료' : erpState === 'FAILED' ? '프로젝트 접수 완료 · ERP 재전송 대기' : '프로젝트 접수 완료 · ERP 연결 설정 대기'}</strong>
-        <span>{erpState === 'SYNCED' ? 'ERP 본체에 수주 프로젝트가 등록되었습니다.' : '접수 기록은 D1에 안전하게 저장되었습니다. ERP 주소·인증키를 연결하면 같은 프로젝트 번호로 중복 없이 전송됩니다.'}</span>
+        <span>{erpState === 'SYNCED' ? 'ERP 본체에 수주 프로젝트가 등록되었습니다.' : '접수 기록은 안전하게 저장되었습니다. ERP 주소·인증키를 연결하면 같은 프로젝트 번호로 중복 없이 전송됩니다.'}</span>
         {erpState !== 'SYNCED' && <button type="button" disabled={erpRetryBusy} onClick={() => void retryErpSync()}>{erpRetryBusy ? 'ERP 확인 중…' : 'ERP 등록 다시 시도'}</button>}
       </div>}
 
@@ -335,7 +335,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
           </div>
 
           <div className="workflow-summary" aria-label="프로젝트 일정 요약">
-            <article><span>전체 프로젝트</span><strong>{projects.length}</strong><small>D1 실제 단계 기록만 표시</small></article>
+            <article><span>전체 프로젝트</span><strong>{projects.length}</strong><small>실제 단계 기록만 표시</small></article>
             <article><span>수주 검토</span><strong>{projects.filter((project) => project.awardStatus === 'PENDING').length}</strong><small>의뢰·제안서 회신 대기</small></article>
             <article><span>팀 배정 프로젝트</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 5 && stage.status !== 'PLANNED')).length}</strong><small>실제 수량산출·내역 투입 기록</small></article>
             <article><span>보고서 작성 대기</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 6 && stage.status !== 'DONE')).length}</strong><small>전담 작성자 5명</small></article>

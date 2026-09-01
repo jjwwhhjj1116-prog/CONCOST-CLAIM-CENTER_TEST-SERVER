@@ -124,7 +124,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
     <header className="schedule-print-toolbar" aria-label="일정표 출력 설정">
       <div className="schedule-print-toolbar__title">
         <span aria-hidden="true">▦</span>
-        <div><strong>프로젝트 일정표 출력</strong><small>A4 가로 · 현재 D1 일정 기준</small></div>
+        <div><strong>프로젝트 일정표 출력</strong><small>A4 가로 · 현재 저장 일정 기준</small></div>
       </div>
       <div className="schedule-print-toolbar__controls">
         <button type="button" onClick={() => moveMonth(-1)}>‹ 이전</button>
@@ -148,7 +148,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
       인쇄 창의 <b>대상</b>에서 <b>PDF로 저장</b>, 레이아웃은 <b>가로</b>, 배율은 <b>페이지에 맞춤</b>을 선택하세요.
       <button type="button" onClick={() => setPdfGuide(false)}>확인</button>
     </aside>}
-    {loading && <p className="schedule-print-status">D1 프로젝트 일정을 불러오는 중입니다…</p>}
+    {loading && <p className="schedule-print-status">프로젝트 일정을 불러오는 중입니다…</p>}
     {error && <p className="schedule-print-status is-error" role="alert">{error}</p>}
 
     <section className="schedule-print-pages" aria-label={`${year}년 ${monthNumber}월 프로젝트 일정표`}>
@@ -194,7 +194,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
 
         <footer className="schedule-print-sheet__footer">
           <div className="schedule-print-legends"><span><i className="legend-project" />프로젝트 기간</span><span><i className="legend-weekend" />주말</span><span><i className="legend-korean-holiday" />한국 공휴일</span><span><i className="legend-vietnam-holiday" />베트남 휴일</span><span><i className="legend-shared-holiday" />양국 공통 휴일</span></div>
-          <p>※ 일정 변경은 프로젝트 일정표에서 저장한 최신 D1 기준 일정을 반영합니다.</p>
+          <p>※ 일정 변경은 프로젝트 일정표에 저장된 최신 일정을 반영합니다.</p>
         </footer>
       </article>)}
     </section>

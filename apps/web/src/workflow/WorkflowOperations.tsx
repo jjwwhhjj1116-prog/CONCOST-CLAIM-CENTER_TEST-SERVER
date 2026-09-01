@@ -310,7 +310,7 @@ export const WorkflowOperations: React.FC<{
       syncForms(payload);
       const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
       syncSharedSchedule(schedule.projects);
-      setNotice('payload' in result ? result.notice : `${label} 완료 · D1에 저장되었습니다.`);
+      setNotice('payload' in result ? result.notice : `${label} 완료 · 안전하게 저장되었습니다.`);
     } catch (error) {
       setFailure(messageFrom(error));
     } finally {
@@ -332,7 +332,7 @@ export const WorkflowOperations: React.FC<{
       await persistSharedSchedule({ startDate: meetingDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= meetingDate ? scheduleDraft.endDate : meetingDate });
       return { payload, notice: '착수회의 원문과 기준 일정을 저장했습니다. 이제 자동작성·정리를 실행하면 우측 검수본이 생성됩니다.' };
     } catch (error) {
-      return { payload, notice: `착수회의 원문은 D1에 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
+      return { payload, notice: `착수회의 원문은 안전하게 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -345,7 +345,7 @@ export const WorkflowOperations: React.FC<{
       const archived = await archiveWorkflowResult(selectedCaseId, 'KICKOFF', kickoffRecordAsImport(payload.kickoff), `자동작성_v${payload.kickoff.version}`);
       return { payload, notice: workflowArchiveNotice('회의록 자동작성 완료', archived) };
     } catch (error) {
-      return { payload, notice: `회의록 자동작성 결과는 D1과 우측 검수본에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+      return { payload, notice: `회의록 자동작성 결과는 우측 검수본과 임시 보관함에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -364,7 +364,7 @@ export const WorkflowOperations: React.FC<{
       const archived = await archiveWorkflowResult(selectedCaseId, 'KICKOFF', kickoffRecordAsImport(payload.kickoff), `최종확정_v${payload.kickoff.version}`);
       return { payload, notice: workflowArchiveNotice('회의록 최종본 확정 완료', archived) };
     } catch (error) {
-      return { payload, notice: `회의록 최종본은 D1에 확정했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+      return { payload, notice: `회의록 최종본은 안전하게 확정했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -376,7 +376,7 @@ export const WorkflowOperations: React.FC<{
       await persistSharedSchedule({ startDate: survey.surveyDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= survey.surveyDate ? scheduleDraft.endDate : survey.surveyDate });
       return { payload, notice: '현장조사 원문과 기준 일정을 저장했습니다. 이제 자동작성·정리를 실행하면 우측 검수본이 생성됩니다.' };
     } catch (error) {
-      return { payload, notice: `현장조사 원문은 D1에 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
+      return { payload, notice: `현장조사 원문은 안전하게 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -390,7 +390,7 @@ export const WorkflowOperations: React.FC<{
       const archived = await archiveWorkflowResult(selectedCaseId, 'SITE_SURVEY', surveyRecordAsImport(record), `자동작성_v${record.outputVersion}`);
       return { payload, notice: workflowArchiveNotice('현장조사 자동작성 완료', archived) };
     } catch (error) {
-      return { payload, notice: `현장조사 자동작성 결과는 D1과 우측 검수본에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+      return { payload, notice: `현장조사 자동작성 결과는 우측 검수본과 임시 보관함에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -404,7 +404,7 @@ export const WorkflowOperations: React.FC<{
       const archived = await archiveWorkflowResult(selectedCaseId, 'SITE_SURVEY', surveyRecordAsImport(record), `최종확정_v${record.outputVersion}`);
       return { payload, notice: workflowArchiveNotice('현장조사 최종본 확정 완료', archived) };
     } catch (error) {
-      return { payload, notice: `현장조사 최종본은 D1에 확정했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+      return { payload, notice: `현장조사 최종본은 안전하게 확정했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -430,7 +430,7 @@ export const WorkflowOperations: React.FC<{
     <section className="workflow-operations" aria-labelledby="workflow-operations-title">
       <header className="workflow-operations-hero" style={{ '--stage-color': stage.color } as React.CSSProperties}>
         <div><span>PROJECT DELIVERY · STEP {stageId}</span><h2 id="workflow-operations-title">{stage.name}</h2><p>{stage.description}</p></div>
-        <div className="workflow-save-state"><strong>D1 LIVE WORKSPACE</strong><span>입력값·변경 이력 자동 보존</span></div>
+        <div className="workflow-save-state"><strong>업무 기록 자동 저장</strong><span>입력값·변경 이력 자동 보존</span></div>
       </header>
 
       <nav className="workflow-stepper" aria-label="프로젝트 6단계">
@@ -446,7 +446,7 @@ export const WorkflowOperations: React.FC<{
       </div>
 
       {!loading && data && <section className="shared-stage-schedule" aria-labelledby="shared-stage-schedule-title">
-        <header><div><span>PROJECT CALENDAR · SINGLE SOURCE</span><h3 id="shared-stage-schedule-title">{stage.name} 기준 일정</h3><p>여기서 저장한 날짜와 프로젝트 일정표 팝업의 날짜는 같은 D1 일정입니다. 어느 화면에서 수정해도 양쪽에 즉시 반영됩니다.</p></div><em>{scheduleDraft.explicit ? `저장됨 · v${scheduleDraft.version}` : '일정 미입력'}</em></header>
+        <header><div><span>PROJECT CALENDAR · SINGLE SOURCE</span><h3 id="shared-stage-schedule-title">{stage.name} 기준 일정</h3><p>여기서 저장한 날짜와 프로젝트 일정표 팝업은 같은 일정을 사용합니다. 어느 화면에서 수정해도 양쪽에 즉시 반영됩니다.</p></div><em>{scheduleDraft.explicit ? `저장됨 · v${scheduleDraft.version}` : '일정 미입력'}</em></header>
         {scheduleProject ? <>
           <div className="shared-stage-schedule-fields">
             <label>시작일<input type="date" value={scheduleDraft.startDate} disabled={Boolean(busy) || !scheduleProject.canManageSchedule} onChange={(event) => setScheduleDraft((current) => ({ ...current, startDate:event.target.value }))} /></label>
@@ -553,7 +553,7 @@ async function archiveWorkflowResult(caseId: string, kind: 'KICKOFF' | 'SITE_SUR
 function workflowArchiveNotice(prefix: string, file: WorkflowArchivedFile): string {
   return file.storageProvider === 'GOOGLE_DRIVE'
     ? `${prefix} · Google Drive 회의록 폴더에 자동 저장했습니다.`
-    : `${prefix} · Drive 미설정 테스트 환경이어서 D1 임시보관에 안전하게 저장했습니다.`;
+    : `${prefix} · 회사 Drive 연결 전 임시 보관함에 안전하게 저장했습니다.`;
 }
 
 function downloadWorkflowTemplate(kind: 'KICKOFF' | 'SITE_SURVEY'): void {
@@ -616,7 +616,7 @@ const WorkflowAiImporter: React.FC<{
       try {
         const archived = await archiveWorkflowResult(caseId, kind, payload.import, '파일_자동작성');
         onArchived?.(archived);
-        setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영하고 ${archived.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive에 자동 저장했습니다.' : 'D1 임시보관에 저장했습니다.'}${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''}`);
+        setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영하고 ${archived.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive에 자동 저장했습니다.' : '임시 보관함에 저장했습니다.'}${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''}`);
       } catch (archiveError) {
         onArchived?.(null);
         setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영했습니다.`);
@@ -680,7 +680,7 @@ const KickoffEditor: React.FC<{
     <article className="workflow-editor-card is-output">
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문이 먼저 미리보기로 표시됩니다. 자동작성·정리 후에는 결정사항과 후속업무를 검수하고 최종 확정합니다.</p>
-      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : 'D1 임시보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
       {displayedSummary ? <>
         <div className="company-minutes-scroll" tabIndex={0} role="region" aria-label="회사 회의록 최종본 표">
           <table className="company-minutes-table">
@@ -761,12 +761,12 @@ const SurveyEditor: React.FC<{
         <label className="is-wide">조사 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="현장 관찰, 인터뷰, 사진·도면 번호와 추가 확인사항을 입력하세요." /></label>
       </div>
       <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사 기록 저장' ? '조사 원문 저장 중…' : '3. 조사 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === '현장조사 자동작성·정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
-      <p className="workflow-honest-note">조사 계획은 D1에 보존되고, 아래 원본 자료는 회사 Google Drive의 프로젝트/현장조사/월 폴더에 저장됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
+      <p className="workflow-honest-note">조사 계획은 자동 보존되고, 아래 원본 자료는 회사 Google Drive의 프로젝트/현장조사/월 폴더에 저장됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>SITE NOTES · HUMAN REVIEW</span><h3>현장조사 최종본 · 관찰사항 · 후속확인</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문을 먼저 미리보기로 확인합니다. 자동작성·정리 후에는 관찰사항과 추가 확인업무를 원문과 대조하고 최종 확정합니다.</p>
-      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : 'D1 임시보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
       {displayedSummary ? <><pre className="workflow-summary-text">{displayedSummary}</pre><ol className="workflow-timeline">{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol>{record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}</> : <div className="workflow-empty"><strong>아직 정리된 현장조사 기록이 없습니다.</strong><p>현장 원본을 가져오거나 조사 메모를 저장한 뒤 자동작성·정리를 실행하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-survey-ledger-card">

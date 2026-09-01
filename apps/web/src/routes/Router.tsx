@@ -63,7 +63,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'CASE-03', path: '/cases/detail', name: '사건 상세-개요' },
   { id: 'CASE-04', path: '/cases/schedule', name: '사건 상세-일정' },
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
-  { id: 'CASE-06', path: '/cases/files', name: '클레임센터 자료실' },
+  { id: 'CASE-06', path: '/cases/files', name: '드라이브' },
   { id: 'CASE-09', path: '/cases/files/templates', name: '문서 양식' },
   { id: 'CONTACT-01', path: '/contacts', name: '인맥관리' },
   { id: 'CONTACT-02', path: '/contacts/cards/new', name: '명함등록' },
@@ -218,7 +218,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
           <h2 id="route-title">{currentRoute.name}</h2>
-          <span className="preview-pill">D1 LIVE DATA</span>
+          <span className="preview-pill">업무 기록 자동 저장</span>
         </div>
         <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} previewMode />
       </section>

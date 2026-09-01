@@ -24,7 +24,7 @@ function dateLabel(value: string): string {
 
 function errorLabel(reason: unknown): string {
   if (reason instanceof ApiError && reason.status === 403) return '배정받은 프로젝트의 보고서만 볼 수 있습니다.';
-  return reason instanceof Error ? reason.message : '저장된 보고서 DB를 불러오지 못했습니다.';
+  return reason instanceof Error ? reason.message : '저장된 보고서를 불러오지 못했습니다.';
 }
 
 export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'database'; onNavigate: (path: string) => void }): React.ReactElement {
@@ -70,7 +70,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
       </header>
 
       <div className="proposal-library__summary" aria-label="저장 보고서 요약">
-        <article><span>저장 프로젝트</span><strong>{workspaces.length}</strong><small>D1 보고서 작업공간</small></article>
+        <article><span>저장 프로젝트</span><strong>{workspaces.length}</strong><small>보고서 작업공간</small></article>
         <article><span>작성 진행 중</span><strong>{editing}</strong><small>1~4단계</small></article>
         <article><span>출력 단계</span><strong>{completed}</strong><small>5단계 도달</small></article>
         <article><span>전체 버전</span><strong>{workspaces.reduce((sum, item) => sum + item.version, 0)}</strong><small>프로젝트별 버전 합계</small></article>
@@ -81,7 +81,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
       </div>
 
       {error && <div className="proposal-library__message is-error" role="alert">{error}</div>}
-      {loading && <div className="proposal-library__message" role="status">D1 보고서 작업공간을 불러오고 있습니다.</div>}
+      {loading && <div className="proposal-library__message" role="status">보고서 작업공간을 불러오고 있습니다.</div>}
       {!loading && !error && filtered.length === 0 && <div className="proposal-library__empty"><strong>조건에 맞는 저장 보고서가 없습니다.</strong><span>보고서 작성 화면에서 첫 저장을 하면 이곳에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/reports/studio')}>첫 보고서 작성하기</button></div>}
 
       {!loading && !error && mode === 'projects' && filtered.length > 0 && <div className="proposal-project-list report-project-list">

@@ -133,6 +133,6 @@ test('CF14 routes WF-01 and WF-02 to a responsive D1 proposal-award workspace', 
   assert.match(router, /\['WF-01', 'WF-02'\][\s\S]*ProposalAwardWorkflow/u);
   assert.match(component, /수주가 확인된 프로젝트만 착수회의 이후 단계/u);
   assert.match(component, /LINKED PROPOSAL SNAPSHOT/u);
-  assert.match(component, /D1 LIVE WORKFLOW/u);
+  assert.match(component, /BUSINESS DEVELOPMENT · LIVE WORKFLOW/u);
   assert.match(css, /@media \(max-width: 1024px\)/u); assert.match(css, /@media \(max-width: 680px\)/u);
 });

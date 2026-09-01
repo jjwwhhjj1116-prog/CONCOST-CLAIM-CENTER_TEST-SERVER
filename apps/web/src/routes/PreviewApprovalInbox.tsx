@@ -69,19 +69,19 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
     } finally { setBusyId(''); }
   };
 
-  if (loading) return <StatusFeedbackState type="loading" message="D1 검토·승인 대기열을 불러오고 있습니다." />;
+  if (loading) return <StatusFeedbackState type="loading" message="검토·승인 대기열을 불러오고 있습니다." />;
   if (error && reviews.length === 0) return <StatusFeedbackState type="error" title="승인함을 불러오지 못했습니다" message={error} actionLabel="다시 시도" onAction={() => void load()} />;
 
   return (
-    <div className="content-stack" aria-label="D1 보고서 검토 승인함">
-      <Card title="REVIEW & APPROVAL · D1 AUDIT TRAIL">
+    <div className="content-stack" aria-label="보고서 검토 승인함">
+      <Card title="REVIEW & APPROVAL · APPROVAL HISTORY">
         <div className="inline-form">
           <Select label="승인 상태" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)} options={[
             { value: 'PENDING', label: '검토 대기' }, { value: 'APPROVED', label: '승인 완료' }, { value: 'CHANGES_REQUESTED', label: '수정 요청' }, { value: 'ALL', label: '전체 이력' }
           ]} />
           <div className="action-row"><span className="preview-pill">대기 {reviews.filter((review) => review.status === 'PENDING').length}건</span><Button variant="secondary" onClick={() => void load()}>새로고침</Button></div>
         </div>
-        <p className="muted">승인은 제출된 정확한 보고서 버전에 고정됩니다. 수정 요청은 검토자도 할 수 있지만 최종 승인은 CEO·DIRECTOR 역할(현동명 대표 또는 이원희 부사장)만 할 수 있으며 자기 승인은 서버와 D1에서 모두 차단됩니다.</p>
+        <p className="muted">승인은 제출된 정확한 보고서 버전에 고정됩니다. 수정 요청은 검토자도 할 수 있지만 최종 승인은 CEO·DIRECTOR 역할(현동명 대표 또는 이원희 부사장)만 할 수 있으며 자기 승인은 시스템에서 차단됩니다.</p>
         {error && <p className="error-box" role="alert">{error}</p>}
       </Card>
 

@@ -24,7 +24,7 @@ export function previewBrowserKey(): string {
 const statusCopy: Record<DraftStatus, string> = {
   loading: '클라우드 초안을 불러오는 중',
   ready: '입력 대기',
-  saving: 'D1에 저장 중',
+  saving: '자동 저장 중',
   saved: '클라우드 저장 완료',
   error: '클라우드 연결 대기 중'
 };
@@ -52,7 +52,7 @@ export const PreviewCloudDraft: React.FC = () => {
         const payload = await response.json() as PreviewDraftPayload;
         if (!response.ok) throw new Error(payload.code ?? 'DRAFT_LOAD_FAILED');
         setTitle(payload.draft?.title ?? '새 클레임 검토 보고서');
-        setContent(payload.draft?.content ?? '핵심 쟁점과 근거 자료를 여기에 정리하세요. 입력 내용은 Cloudflare D1에 자동 저장됩니다.');
+        setContent(payload.draft?.content ?? '핵심 쟁점과 근거 자료를 여기에 정리하세요. 입력 내용은 자동 저장됩니다.');
         setUpdatedAt(payload.draft?.updatedAt ?? null);
         hydratedRef.current = true;
         setStatus('ready');
@@ -103,7 +103,7 @@ export const PreviewCloudDraft: React.FC = () => {
     <section className="preview-cloud-draft" aria-labelledby="preview-cloud-draft-title">
       <header>
         <div>
-          <span className="workspace-eyebrow">CLOUDFLARE D1 · AUTO SAVE</span>
+          <span className="workspace-eyebrow">WORKSPACE · AUTO SAVE</span>
           <h3 id="preview-cloud-draft-title">Cloud Draft</h3>
           <p>브라우저를 닫아도 이 기기의 초안을 다시 불러옵니다.</p>
         </div>

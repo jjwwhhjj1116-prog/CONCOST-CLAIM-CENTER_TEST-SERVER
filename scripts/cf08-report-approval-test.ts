@@ -182,6 +182,6 @@ test('CF08 production UI exposes submission, independent decisions, and real pre
   assert.match(studio, /report-review:\$\{requestCaseId\}:v\$\{version\}/u);
   assert.match(inbox, /이 버전 승인/u);
   assert.match(inbox, /수정 요청/u);
-  assert.match(inbox, /자기 승인은 서버와 D1에서 모두 차단/u);
+  assert.match(inbox, /자기 승인은 시스템에서 차단/u);
   assert.match(router, /currentRoute\.id === 'APPR-01'.*PreviewApprovalInbox/u);
 });

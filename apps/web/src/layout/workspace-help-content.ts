@@ -29,8 +29,8 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   {
     eyebrow: 'PROPOSAL · 제안서 작성', title: '의뢰 내용을 제안서로 이어갑니다.',
     explanation: '의뢰 프로젝트와 HWP 템플릿을 선택하고, Gemini 초안 → 사람 편집 → 전체 미리보기·확정 순서로 진행합니다.',
-    tasks: ['연결 프로젝트·원본 템플릿 확인', 'Gemini 1~3장 초안과 회사 고정 모듈 확인', '담당자 검수 편집기·AI 글쓰기 개선 사용', 'HWP·DOCX·PDF 내보내기와 DB 보관 확인'],
-    completion: '전체 미리보기에서 확정한 제안서가 DB에 보관되면 완료입니다.', path: '/proposals/editor', pathLabel: '제안서 스튜디오 열기',
+    tasks: ['연결 프로젝트·원본 템플릿 확인', 'Gemini 1~3장 초안과 회사 고정 모듈 확인', '담당자 검수 편집기·AI 글쓰기 개선 사용', 'HWP·DOCX·PDF 내보내기와 확정본 보관 확인'],
+    completion: '전체 미리보기에서 확정한 제안서가 변경 이력과 함께 보관되면 완료입니다.', path: '/proposals/editor', pathLabel: '제안서 스튜디오 열기',
     targetSelectors: ['.proposal-intake-context select', '.proposal-step-card', '.proposal-editor-toolbar, .proposal-step-card textarea', '.proposal-step-button, .proposal-export-actions']
   },
   {
@@ -84,8 +84,8 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     eyebrow: 'EVIDENCE · 자료실', title: '모든 원본 자료는 회사 Google Drive에 모읍니다.',
-    explanation: '프로젝트 워크로 전환된 활성 프로젝트만 선택할 수 있습니다. 브라우저는 Worker를 통해 업로드하고, 원본은 클레임센터 전용 Drive 폴더에, 파일 ID·해시·업로더·시간은 D1에 남습니다.',
-    tasks: ['프로젝트 선택', '착수·현장·산출·내역 등 자료 종류 선택', '드래그앤드롭 업로드', 'Drive 폴더·업로더·날짜·SHA-256 확인'],
+    explanation: '프로젝트 워크로 전환된 활성 프로젝트만 선택할 수 있습니다. 원본은 클레임센터 전용 Drive 폴더에 저장되고 업로더·시간·무결성 확인 이력이 함께 남습니다.',
+    tasks: ['프로젝트 선택', '착수·현장·산출·내역 등 자료 종류 선택', '드래그앤드롭 업로드', 'Drive 폴더·업로더·날짜·무결성 확인'],
     completion: 'GOOGLE_DRIVE 저장 표시와 다운로드 링크가 보이면 완료입니다.', path: '/cases/files', pathLabel: '자료실 열고 확인',
     targetSelectors: ['.preview-evidence-hero', '.inline-form', '.case-evidence-dropzone']
   },
@@ -98,7 +98,7 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     eyebrow: 'COURT · 법원 자료', title: '법원 사건번호와 소송 일정을 사람이 확인해 등록합니다.',
-    explanation: '현재는 법원 자동 스크래핑이 아니라 D1 기반 내부 검증 시스템입니다. 공식 출처를 확인한 값만 일정표에 반영합니다.',
+    explanation: '현재는 법원 자동 스크래핑이 아니라 사람이 공식 출처를 확인하는 내부 검증 방식입니다. 확인된 값만 일정표에 반영합니다.',
     tasks: ['법원·사건번호 입력', '공식 출처 URL 기록', '기일·제출기한 등록', '검증 상태 확인'],
     completion: '프로젝트와 법원 일정이 연결되면 완료입니다.', path: '/after-delivery', pathLabel: '법원 자료 열고 확인',
     targetSelectors: ['.litigation-search', '.litigation-list', '.litigation-detail']
@@ -106,7 +106,7 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   {
     eyebrow: 'SETTINGS · 안전한 연결', title: '마지막으로 개인·관리자 연결 상태를 확인합니다.',
     explanation: '개인은 Gemini 보조 키와 비밀번호를, 관리자는 회사 Google Drive·회원·OpenAI/Claude/Gemini 모델·유형별 프롬프트·메모리 브리지를 관리합니다.',
-    tasks: ['개인 Gemini 키·비밀번호 저장 상태 확인', '회사 Google Drive OAuth·허용 계정 확인', '회원 승인·관리자 전용 DB·AI 모델 선택 확인', 'Hermes 단기·장기 기억과 Yjs/Hocuspocus 브리지 준비 상태 확인'],
+    tasks: ['개인 Gemini 키·비밀번호 저장 상태 확인', '회사 Google Drive 연결 계정 확인', '회원 승인·AI 모델 선택 확인', '자동 저장·협업 기능 준비 상태 확인'],
     completion: '비밀키 원문 없이 연결 상태만 표시되면 완료입니다.', path: '/settings', pathLabel: '설정 열고 확인',
     targetSelectors: ['.settings-section-tabs', '.credential-settings-card', '.settings-admin-links', '.settings-admin-links, .settings-memory-card']
   }
@@ -123,19 +123,19 @@ export interface HelpArticle {
 
 export const CATEGORY_HELP: Record<string, HelpArticle> = {
   home: { title: 'HOME', purpose: '오늘 처리할 프로젝트와 병목을 가장 먼저 찾는 화면입니다.', inputs: ['담당 프로젝트', '검토 대기', '마감 일정'], actions: ['프로젝트 선택', '현재 단계 확인', '다음 업무 화면 이동'], outputs: ['오늘의 우선순위', '프로젝트 진행률'], cautions: ['표시 숫자는 상세 목록과 함께 확인하세요.'] },
-  proposal: { title: '프로젝트 제안 및 수주', purpose: '승인 회원 모두가 같은 의뢰 → 제안서 → 접수 원장을 보고, 확정된 건만 실제 프로젝트로 전환합니다.', inputs: ['조직 공용 의뢰 원문·첨부자료', 'HWP 제안서 템플릿', 'Gemini API', '거래처 수주 회신'], actions: ['AI 의뢰서 초안 검수', '제안서 4단계 작성·담당자 편집', 'HWP·DOCX·PDF 확정본 보관', '제안서 연동 후 수주·수정 또는 취소'], outputs: ['전 회원 공용 프로젝트 원장', '프로젝트별 제안서 버전', '수주 프로젝트', 'ERP 전송 대기정보'], cautions: ['작성자 개인 목록이 아닙니다. 수주·취소 변경 전 프로젝트와 제안서 번호를 다시 확인하세요.'] },
+  proposal: { title: '프로젝트 접수', purpose: '승인 회원 모두가 같은 의뢰 → 제안서 → 접수 원장을 보고, 확정된 건만 실제 프로젝트로 전환합니다.', inputs: ['조직 공용 의뢰 원문·첨부자료', 'HWP 제안서 템플릿', 'Gemini API', '거래처 수주 회신'], actions: ['AI 의뢰서 초안 검수', '제안서 4단계 작성·담당자 편집', 'HWP·DOCX·PDF 확정본 보관', '제안서 연동 후 수주·수정 또는 취소'], outputs: ['전 회원 공용 프로젝트 원장', '프로젝트별 제안서 버전', '수주 프로젝트', 'ERP 전송 대기정보'], cautions: ['작성자 개인 목록이 아닙니다. 수주·취소 변경 전 프로젝트와 제안서 번호를 다시 확인하세요.'] },
   work: { title: '프로젝트 워크', purpose: '수주 후 PM 일정부터 착수·현장·산출·보고서 협업까지 실행 자료와 일정을 양방향 연결합니다.', inputs: ['수주 프로젝트', 'PM·단계별 기간', '회의록', '현장 자료', '산출·내역 자료', '유형별 보고서 템플릿'], actions: ['완료월까지 일정·휴일 저장', '회의록·현장자료 AI 정리', '자료 Drive 업로드', 'PM의 챕터별 담당 배정', '담당자 작성·PM 반영·HWP 출력'], outputs: ['단계별 완료 상태', '통합 일정', '챕터 담당·검수 이력', '보고서 근거·버전'], cautions: ['담당자는 배정된 챕터를, PM은 전체 본문과 배정·반영을 담당합니다. 충돌 안내가 뜨면 최신본을 다시 불러오세요.'] },
-  library: { title: '클레임센터 자료실', purpose: '활성 프로젝트 원본과 명함 인맥을 클레임센터 전용 회사 Google Drive 구조에 연결합니다.', inputs: ['사진·녹음·문서', '자료 종류', '명함 촬영본', '촬영·작성 날짜'], actions: ['활성 프로젝트 선택', '자료 업로드·분류·해시 확인', 'Gemini 명함 인식', '사람 확인 후 인맥 등록·검색'], outputs: ['Drive 원본', 'D1 자료 메타데이터', '검색 가능한 인맥 목록'], cautions: ['삭제·취소된 프로젝트는 선택되지 않습니다. AI 명함 인식값은 등록 전에 원본과 반드시 대조하세요.'] },
+  library: { title: '드라이브', purpose: '활성 프로젝트 원본과 명함 인맥을 클레임센터 전용 회사 Google Drive 구조에 연결합니다.', inputs: ['사진·녹음·문서', '자료 종류', '명함 촬영본', '촬영·작성 날짜'], actions: ['활성 프로젝트 선택', '자료 업로드·분류·무결성 확인', 'Gemini 명함 인식', '사람 확인 후 인맥 등록·검색'], outputs: ['Drive 원본', '자료 등록 이력', '검색 가능한 인맥 목록'], cautions: ['삭제·취소된 프로젝트는 선택되지 않습니다. AI 명함 인식값은 등록 전에 원본과 반드시 대조하세요.'] },
   court: { title: '법원 자료', purpose: '사건번호, 법원, 기일과 제출 자료를 프로젝트별로 관리합니다.', inputs: ['사건번호', '법원·재판부', '기일', '제출·송달 자료'], actions: ['일정 등록', '자료 연결', '상태 갱신'], outputs: ['소송 일정표', '법원 자료 이력'], cautions: ['법원 공식 자료와 사람이 대조한 값만 확정하세요.'] },
-  quality: { title: '검토·납품·품질관리', purpose: '작성자와 다른 검토자가 승인한 버전만 납품본으로 확정합니다.', inputs: ['최신 보고서 버전', '검토 의견', '납품 정보', '판결 결과'], actions: ['검토 요청', '수정·승인', 'DOCX/PDF 생성', '납품·성과 기록'], outputs: ['불변 승인 이력', '최종 납품 파일'], cautions: ['승인 전 초안을 납품본으로 사용하지 마세요.'] },
-  settings: { title: '설정', purpose: '개인 Gemini와 관리자 공용 Drive·회원·프롬프트·메모리·협업 브리지를 안전하게 관리합니다.', inputs: ['개인 API 키', '회사 OAuth', '회원 권한', '제안서·보고서 프롬프트', 'Hermes·Yjs 서버 주소'], actions: ['암호화 저장', 'Drive 계정 연결·교체', '회원 승인·비밀번호 관리', '유형별 지침 수정', 'Private Bridge 연결 점검'], outputs: ['사용자별 연결 상태', '조직 공용 정책', '서버 브리지 준비도'], cautions: ['비밀키 원문을 문서·보고서·메모리에 붙이지 말고 브라우저에 다시 표시하지 마세요.'] }
+  quality: { title: '검토·납품 관리', purpose: '작성자와 다른 검토자가 승인한 버전만 납품본으로 확정합니다.', inputs: ['최신 보고서 버전', '검토 의견', '납품 정보', '판결 결과'], actions: ['검토 요청', '수정·승인', 'DOCX/PDF 생성', '납품·성과 기록'], outputs: ['불변 승인 이력', '최종 납품 파일'], cautions: ['승인 전 초안을 납품본으로 사용하지 마세요.'] },
+  settings: { title: '설정', purpose: '개인 계정과 AI 연결을 관리하고, 관리자는 회사 Drive·회원·공용 작성 정책을 관리합니다.', inputs: ['개인 API 키', '비밀번호', '회사 Drive 계정', '회원 권한'], actions: ['안전하게 저장', 'Drive 계정 연결·교체', '회원 승인·비밀번호 관리', '작성 정책 확인'], outputs: ['사용자별 연결 상태', '조직 공용 정책'], cautions: ['비밀키 원문을 문서·보고서·메모리에 붙이지 말고 브라우저에 다시 표시하지 마세요.'] }
 };
 
 export const ROUTE_HELP: Record<string, { title: string; steps: readonly string[]; next: string }> = {
   'CASE-02': { title: '프로젝트 의뢰서 작성', steps: ['필수 의뢰정보 입력', '클레임 유형·클라이언트 지위 선택', '녹음·TXT·CSV·Excel 자료를 Gemini로 정리', '저장 후 제안서 작성으로 이동'], next: '프로젝트 의뢰 목록' },
   'CASE-07': { title: '프로젝트 의뢰 목록', steps: ['등록된 의뢰 검색', '의뢰 원문과 상태 확인', '제안서 작성으로 연결', '완료 항목은 일반 목록에서 숨기기'], next: '프로젝트 제안서' },
   'CASE-08': { title: '프로젝트 의뢰 DB관리', steps: ['숨긴 의뢰까지 전체 확인', '일반 목록 복원', 'Google Drive 감사본 보관', '관리자 삭제 처리'], next: '감사 원장 확인' },
-  'PROP-02': { title: '제안서 작성', steps: ['의뢰 프로젝트·HWP 원본 템플릿 선택', 'Gemini로 1~3장 순차 초안 작성', '4~12장 회사 공통 기본 모듈·이미지 배치 확인', '담당자 편집·글꼴·색상·AI 문장 개선', '전체 미리보기 확정 후 HWP·DOCX·PDF·DB 보관'], next: '프로젝트 접수' },
+  'PROP-02': { title: '제안서 작성', steps: ['의뢰 프로젝트·HWP 원본 템플릿 선택', 'Gemini로 1~3장 순차 초안 작성', '4~12장 회사 공통 기본 모듈·이미지 배치 확인', '담당자 편집·글꼴·색상·AI 문장 개선', '전체 미리보기 확정 후 HWP·DOCX·PDF 확정본 보관'], next: '프로젝트 접수' },
   'PROP-03': { title: '프로젝트별 제안서 목록', steps: ['제안서를 발송한 프로젝트 확인', '프로젝트별 발송 버전 비교', '회신·수주 상태 확인', '필요 시 작성 화면에서 이어서 수정'], next: '프로젝트 접수' },
   'PROP-04': { title: '제안서 DB관리', steps: ['발송본 개별 원장 확인', '원문 URL·SHA-256 검증', '등록자·발송시각 감사', '필요한 원장을 Excel로 내보내기'], next: '감사로그' },
   'WF-02': { title: '프로젝트 접수', steps: ['연동 제안서 확인', '수주 확정 또는 접수 취소', '수주 시 ERP 등록 요청 후 일정표 열기'], next: '프로젝트 일정표' },
@@ -145,11 +145,11 @@ export const ROUTE_HELP: Record<string, { title: string; steps: readonly string[
   'WF-04': { title: '현장조사', steps: ['조사 범위 확인', '사진·녹음 업로드', '날짜·사용자·자료 유형 확인', '특이사항 기록'], next: '물량산출 및 내역' },
   'WF-05': { title: '물량산출 및 내역', steps: ['산출 범위·기준 기록', '팀·기간 배정', '산출서·내역서 업로드', '자료실 반영 확인'], next: '보고서 작성' },
   'REPO-02': { title: '보고서 작성', steps: ['저장본 이어쓰기·템플릿·목차 확인', 'PM이 근거 기반 초안 준비', 'PM이 챕터별 담당자 지정·수정', '담당자가 배정 챕터 작성·검수 완료', 'PM이 최신 챕터를 전체 편집본에 반영', 'Ctrl+S·자동저장·Ctrl+Z로 본문 보호', '검토·승인 후 HWP·DOCX·PDF 출력'], next: '담당자 검수·최종 승인' },
-  'CASE-06': { title: '클레임센터 자료실', steps: ['프로젝트 선택', '자료 구분 선택', '파일 업로드', 'Drive·D1 저장 상태 확인'], next: '해당 프로젝트 업무 단계' },
+  'CASE-06': { title: '드라이브', steps: ['프로젝트 선택', '자료 구분 선택', '파일 업로드', 'Drive 저장 상태 확인'], next: '해당 프로젝트 업무 단계' },
   'CONTACT-01': { title: '인맥관리', steps: ['이름·회사·부서·직함·연락처·태그 검색', '연락처 상세 확인', 'Drive 원본 명함 열기', '필요하면 새 명함 등록'], next: '명함등록' },
   'CONTACT-02': { title: '명함등록', steps: ['모바일 촬영 또는 이미지 선택', 'Gemini 구조화 인식', '원본과 인식값 대조·수정', '확인 완료 후 Drive 저장·인맥 등록'], next: '인맥관리 검색' },
   'CONTACT-03': { title: '명함 DB관리', steps: ['관리자 권한 확인', '활성·보관 명함 통합 검색', 'Drive 원본·등록자·모델 확인', '물리 삭제 없이 보관 또는 복원'], next: '인맥관리' },
   'POST-01': { title: '법원 자료·소송 일정', steps: ['프로젝트 선택', '사건번호·법원 입력', '기일·제출기한 등록', '공식 출처 연결'], next: '판결·성과 관리' },
   'APPR-01': { title: '검토·승인', steps: ['제출 버전 확인', '근거·수치 검토', '수정 요청 또는 승인', '감사 이력 확인'], next: '납품 보고서' },
-  'MY-01': { title: '설정', steps: ['개인 Gemini 키·비밀번호 저장', '회사 Google Drive OAuth 연결·계정 교체', '관리자 회원 승인·권한 관리', '제안서·보고서 유형별 프롬프트 편집', 'Hermes 메모리·Yjs/Hocuspocus Private Bridge 상태 확인'], next: '업무 화면으로 복귀' }
+  'MY-01': { title: '설정', steps: ['개인 Gemini 키·비밀번호 저장', '회사 Google Drive 연결·계정 교체', '관리자 회원 승인·권한 관리', '제안서·보고서 작성 정책 확인', '자동 저장·협업 기능 상태 확인'], next: '업무 화면으로 복귀' }
 };

@@ -75,7 +75,7 @@ test('CF27 live D1 cases are visible in the project schedule instead of static s
   assert.match(schedule, /apiRequest<\{ projects: WorkflowProject\[\]; dataBasis: string \}>\('\/api\/project-workflow\/schedule'\)/u);
   assert.match(schedule, /setProjects\(result\.projects\)/u);
   assert.doesNotMatch(schedule, /WORKFLOW_PROJECTS/u);
-  assert.match(schedule, /D1 LIVE PROJECTS · 신규 의뢰 자동 반영/u);
+  assert.match(schedule, /실시간 프로젝트 · 신규 의뢰 자동 반영/u);
   assert.match(schedule, /프로젝트별 담당 PM·기준 일정 설정/u);
   assert.match(schedule, /PM·일정 설정/u);
   assert.match(schedule, /\/proposals\/editor\?caseId=\$\{caseId\}&projectId=/u);

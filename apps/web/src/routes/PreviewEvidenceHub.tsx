@@ -20,8 +20,8 @@ export function PreviewEvidenceHub({ roles, onNavigate }: { userName: string; ro
   const selected = cases.find((entry) => entry.id === selectedCaseId) ?? null;
   return <section className="route-view preview-evidence-hub" aria-labelledby="preview-evidence-title">
     <div className="workspace-hero preview-evidence-hero">
-      <div><span className="workspace-eyebrow">PROJECT EVIDENCE LIBRARY · GOOGLE DRIVE</span><h2 id="preview-evidence-title">의뢰부터 최종 납품까지<br />모든 자료를 한곳에 모읍니다.</h2><p>발주처 제공자료, 회의록·녹음, 현장사진, 산출·내역, 법원자료와 최종 납품본을 프로젝트별로 분류합니다. 파일명·업로드 시간·사용자·SHA-256을 기록합니다.</p></div>
-      <div className="preview-drive-card"><span>COMPANY STORAGE · CLAIM CENTER ONLY</span><strong>클레임센터 전용 Google Drive</strong><small>CONCOST ERP 그룹웨어 / 02_클레임센터 / 프로젝트 / 업무단계별 자료 · 최대 10MB · R2 미사용</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·계정 변경</button>}</div>
+      <div><span className="workspace-eyebrow">PROJECT EVIDENCE LIBRARY · GOOGLE DRIVE</span><h2 id="preview-evidence-title">의뢰부터 최종 납품까지<br />모든 자료를 한곳에 모읍니다.</h2><p>발주처 제공자료, 회의록·녹음, 현장사진, 산출·내역, 법원자료와 최종 납품본을 프로젝트별로 분류합니다. 파일명·업로드 시간·사용자·무결성 확인 이력을 기록합니다.</p></div>
+      <div className="preview-drive-card"><span>COMPANY STORAGE · CLAIM CENTER ONLY</span><strong>클레임센터 전용 Google Drive</strong><small>CONCOST ERP 그룹웨어 / 02_클레임센터 / 프로젝트 / 업무단계별 자료 · 파일당 최대 10MB</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·계정 변경</button>}</div>
     </div>
     <Card title="프로젝트 자료실 선택">
       <div className="inline-form"><Select label="프로젝트" value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />{selected && <span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div>

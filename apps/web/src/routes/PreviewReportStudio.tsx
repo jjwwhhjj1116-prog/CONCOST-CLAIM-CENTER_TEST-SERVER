@@ -78,7 +78,7 @@ const REPORT_WIZARD_STEPS: readonly {
   { id: 1, title: '프로젝트·템플릿 확인', shortHelp: '어떤 프로젝트의 보고서를 만들지 먼저 고릅니다.', tasks: ['프로젝트 이름 확인', '클레임 유형 확인', 'AI가 참고할 자료 준비도 확인'], doneText: '프로젝트와 승인 템플릿이 연결되면 완료' },
   { id: 2, title: '목차 기획', shortHelp: '선택한 템플릿에서 목차를 자동 만들고 제목만 쉽게 다듬습니다.', tasks: ['AI·템플릿으로 목차 자동 만들기', '이상한 챕터 제목만 바로 수정하기', '목차 확정 누르기'], doneText: '목차 확정 표시가 나오면 완료' },
   { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성, 직접 작성 또는 HWP·DOCX 전체 문서 적용을 선택합니다.', tasks: ['작성 방식 선택', '전체 문서 적용 또는 챕터 작성', 'Ctrl+S·자동저장 확인'], doneText: '전체 문서 적용 또는 모든 챕터 초안 작성 시 완료' },
-  { id: 4, title: '담당자 검수·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 담당자가 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', 'D1 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
+  { id: 4, title: '담당자 검수·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 담당자가 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', '자동 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
   { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', '미리보기와 동일한 DOCX·PDF·HWP 내려받기'], doneText: '승인본을 확정하면 보고서 작업 완료' }
 ] as const;
 const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
@@ -417,9 +417,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       applyCollaborationPayload(payload);
       if (action === 'APPLY') {
         await loadDraft(selectedCaseId);
-        setChapterNotice(`${selectedChapterAssignment.chapterCode} 검수본을 보고서 최신 버전에 반영했습니다. 이전 본문은 D1 버전 이력에 보존됩니다.`);
+        setChapterNotice(`${selectedChapterAssignment.chapterCode} 검수본을 보고서 최신 버전에 반영했습니다. 이전 본문은 버전 이력에 보존됩니다.`);
       } else {
-        setChapterNotice(action === 'MARK_READY' ? '담당자 검수를 완료했습니다. 담당 PM의 보고서 반영을 기다립니다.' : '현재 챕터 협업 초안을 D1 버전으로 저장했습니다.');
+        setChapterNotice(action === 'MARK_READY' ? '담당자 검수를 완료했습니다. 담당 PM의 보고서 반영을 기다립니다.' : '현재 챕터 협업 초안을 새 버전으로 저장했습니다.');
       }
     } catch (reason) { setError(reason instanceof ApiError && reason.status === 409 ? '다른 회원이 먼저 수정했습니다. 최신 협업본을 다시 불러온 뒤 계속해 주세요.' : reason instanceof Error ? reason.message : String(reason)); }
     finally { setChapterBusy(''); }
@@ -483,7 +483,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const saveCaseLawSelection = async () => {
     if(selectedPrecIds.length<1||selectedPrecIds.length>3||caseLawBusy)return;
     setCaseLawBusy('select');setError('');setCaseLawNotice('');
-    try{const payload=await apiRequest<CaseLawPayload>('/api/report-authoring/case-law/select',{method:'POST',body:JSON.stringify({caseId:selectedCaseId,chapterId:selectedChapterId,precIds:selectedPrecIds})});setCaseLawSources(payload.sources);setCaseLawCitations(payload.citations);setUseCaseLaw(true);setCaseLawNotice('선택 판례의 원본 JSON·공식 링크·조회시각·SHA-256을 D1에 보존했습니다.');}
+    try{const payload=await apiRequest<CaseLawPayload>('/api/report-authoring/case-law/select',{method:'POST',body:JSON.stringify({caseId:selectedCaseId,chapterId:selectedChapterId,precIds:selectedPrecIds})});setCaseLawSources(payload.sources);setCaseLawCitations(payload.citations);setUseCaseLaw(true);setCaseLawNotice('선택 판례의 원문·공식 링크·조회시각·무결성 확인값을 근거 이력에 보존했습니다.');}
     catch(reason){setError(reason instanceof Error?reason.message:String(reason));}
     finally{setCaseLawBusy('');}
   };
@@ -739,7 +739,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setEditorJson(null);
     setDraftMethod('MANUAL');
     setDirty(true);
-    setMemoryNotice('HWP/HWPX 전체 문서를 챕터 구분 없이 보고서 본문 전체에 적용했습니다. 0.9초 자동저장 또는 Ctrl+S로 D1 백업본을 남길 수 있습니다.');
+    setMemoryNotice('HWP/HWPX 전체 문서를 챕터 구분 없이 보고서 본문 전체에 적용했습니다. 0.9초 자동저장 또는 Ctrl+S로 백업본을 남길 수 있습니다.');
   };
 
   const importQuantitySpreadsheet = async (file: File | undefined) => {
@@ -777,7 +777,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const restoreRevision = (revision: ReportRevision) => {
     titleRef.current = revision.title; contentRef.current = revision.content;
     setTitle(revision.title); setContent(revision.content); setEditorJson(revision.editorJson); setDraftMethod('MANUAL'); setDirty(true);
-    setMemoryNotice(`D1 백업 버전 ${revision.version}을 작업 화면에 불러왔습니다. 현재 버전을 덮어쓰지 않았으며 저장하면 새 버전으로 기록됩니다.`);
+    setMemoryNotice(`백업 버전 ${revision.version}을 작업 화면에 불러왔습니다. 현재 버전을 덮어쓰지 않았으며 저장하면 새 버전으로 기록됩니다.`);
   };
 
   const continueWithoutAi = () => {
@@ -940,7 +940,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       : activeStep === 3
         ? '모든 챕터를 작성하거나 HWP·DOCX 전체 문서를 적용하세요. AI 없이 바로 담당자 검수로 이동할 수도 있습니다.'
         : activeStep === 4
-          ? '본문을 저장해 D1 저장 완료 표시를 확인해 주세요.'
+          ? '본문을 저장해 자동 저장 완료 표시를 확인해 주세요.'
           : '';
   const reportDocumentTools=(stepId: ReportWizardStep)=>stepId === 1 || stepId === 3 || stepId === 4 ? <DocumentToolMenus groups={[
     {id:'excel',label:'Excel',actions:[
@@ -963,16 +963,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     </header>;
   };
 
-  if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
+  if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 보고서 작업공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
 
   return (
-    <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
+    <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="보고서 자동 저장 스튜디오">
       <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel={activeStep===4&&selectedChapter?`현재 내용을 ${selectedChapter.chapterCode}에 적용`:'HWP 전체 문서를 보고서에 적용'} onApplyContent={activeStep===4?applyHwpTextToCurrentChapter:applyHwpTextToWholeReport} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
       <input ref={quantityExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importQuantitySpreadsheet(event.target.files?.[0])}/>
-      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형 확인','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 D1에 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
+      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형 확인','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
         <div className="report-authoring-hero__actions">
@@ -1017,14 +1017,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <div className="inline-form">
           <Select required label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row report-autosave-status" aria-live="polite" aria-label="지금 저장 상태">
-            <span className="preview-pill">{error ? '자동 저장 일시 중단' : saving ? 'D1에 자동 저장 중' : dirty || workspaceDirty || outlineDirty ? '변경사항 감지 · 잠시 후 자동 저장' : version ? `자동 저장 완료 · ${savedAt ? new Date(savedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : `v${version}`}` : '첫 입력 후 자동 저장'}</span>
+            <span className="preview-pill">{error ? '자동 저장 일시 중단' : saving ? '자동 저장 중' : dirty || workspaceDirty || outlineDirty ? '변경사항 감지 · 잠시 후 자동 저장' : version ? `자동 저장 완료 · ${savedAt ? new Date(savedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : `v${version}`}` : '첫 입력 후 자동 저장'}</span>
             {error && <Button className="report-action-danger" onClick={() => selectedCaseId && void loadDraft(selectedCaseId)}>최신본 다시 불러오기</Button>}
           </div>
         </div>
         <div className="report-template-contract">
           <div><span>CLAIM TYPE</span><strong>{authoring?.claimType ?? selectedCase?.claimType ?? '불러오는 중'}</strong><small>프로젝트 의뢰에 등록된 6대 고정 유형</small></div>
           <div><span>APPROVED TEMPLATE</span><strong>{authoring?.available ? '유형별 템플릿 적용' : '템플릿 확인 필요'}</strong><small>{authoring?.available ? `${authoring.chapters.length}개 챕터 구성` : authoring?.unavailableReason ?? '구성을 불러오는 중'}</small></div>
-          <div><span>AUTOSAVE</span><strong>D1 자동 저장</strong><small>입력은 자동 저장 · 복구용 백업은 1시간 단위</small></div>
+          <div><span>AUTOSAVE</span><strong>자동 저장</strong><small>입력은 자동 저장 · 복구용 백업은 1시간 단위</small></div>
           {roles.includes('admin') && <Button variant="secondary" onClick={() => onNavigate('/ai-config')}>유형별 템플릿·프롬프트 관리</Button>}
         </div>
         <div className="report-template-viewer-control">
@@ -1050,7 +1050,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => changeSelectedChapter(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {outlineTitles[chapter.id] || chapter.title}</strong><small>{chapter.agentCode} · 제목 편집 가능</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
             {selectedChapter && <div className="report-outline-note report-outline-title-editor"><label htmlFor="report-outline-title"><span>{selectedChapter.chapterCode}</span> 챕터 제목 직접 수정</label><input id="report-outline-title" maxLength={300} value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} disabled={!editable || savingOutline} onChange={(event) => { setOutlineTitles((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} /><small>본문 작성 방향은 관리자의 유형별 지침과 프로젝트 근거로 자동 적용됩니다. 사용자는 목차 제목만 고치면 됩니다.</small></div>}
             <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 대기'}</span><Button className="report-action-ai" disabled={!editable || generatingOutline || savingOutline} onClick={() => void generateOutline()}>{generatingOutline ? '템플릿 목차 불러오는 중…' : '✦ AI·템플릿으로 목차 자동 만들기'}</Button><Button className="report-action-review" variant="secondary" disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '수정한 목차 저장'}</Button><Button className="report-action-confirm" disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 확정 · 다음 단계'}</Button></div>
-            {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장용 D1 마이그레이션이 아직 적용되지 않았습니다. 배포 상태를 확인해 주세요.</div>}
+            {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장 기능을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
           </div>}
         </Card>
         <Card title="" className="report-step-card report-step-card--3 report-stage-card">
@@ -1077,7 +1077,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               {caseLawNotice&&<p className="notice-box" role="status">{caseLawNotice}</p>}
             </section>}
             {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>담당자 직접 편집</b><span>AI·수동·외부 문서 초안을 전체폭 편집기에서 고칩니다. 입력은 자동 저장되고 Ctrl+S로 즉시 저장 지점을 만들 수 있습니다.</span></div><div className="report-stage-inline-editor__actions"><Button className="report-action-review" variant="secondary" onClick={() => void saveNow('MANUAL')} disabled={!dirty || saving}>{saving ? '저장 중…' : 'Ctrl+S 저장 지점 만들기'}</Button>{backups.length > 0 && <a href="#report-backups">시간별 백업 불러오기</a>}</div></header><StructuredDocumentEditor ref={reportBodyRef} documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></section>}
-            {draftMethod === 'AI' && <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? 'Cloudflare 서버 Secret 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>}
+            {draftMethod === 'AI' && <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? '회사 서버 보안 키 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>}
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
             {draftMethod === 'AI' && !authoring.aiConnected && <div className="error-box">AI 연결이 없어 자동작성을 사용할 수 없습니다. 수동·외부 LLM을 선택하면 API 키 없이 계속 작성할 수 있습니다.</div>}
             {draftMethod === 'AI' && (dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
@@ -1087,7 +1087,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           {renderStageHeader(4)}
           <div className="form-stack">
             <section className="report-chapter-collaboration" aria-labelledby="report-chapter-collaboration-title">
-              <header><div><span>CHAPTER COLLABORATION · D1 VERSIONED</span><h3 id="report-chapter-collaboration-title">챕터별 담당 지정·작성·검수</h3><p>담당 PM이 챕터별 회원을 지정합니다. 담당자는 배정된 챕터만 작성·검수하고, PM이 검수 완료본을 전체 보고서에 반영합니다.</p></div><em>{chapterCollaboration?.canManage ? 'PM · ASSIGNMENT CONTROL' : 'MY ASSIGNED CHAPTERS'}</em></header>
+              <header><div><span>CHAPTER COLLABORATION · VERSIONED</span><h3 id="report-chapter-collaboration-title">챕터별 담당 지정·작성·검수</h3><p>담당 PM이 챕터별 회원을 지정합니다. 담당자는 배정된 챕터만 작성·검수하고, PM이 검수 완료본을 전체 보고서에 반영합니다.</p></div><em>{chapterCollaboration?.canManage ? 'PM · ASSIGNMENT CONTROL' : 'MY ASSIGNED CHAPTERS'}</em></header>
               {chapterCollaboration?.canManage && <div className="report-chapter-assignment-grid">{authoring?.chapters.map((chapter) => {
                 const assignment = chapterCollaboration.assignments.find((item) => item.chapterId === chapter.id);
                 return <label key={chapter.id}><span><b>{chapter.chapterCode}</b>{outlineTitles[chapter.id] || chapter.title}</span><select aria-label={`${chapter.chapterCode} 담당자`} value={assignment?.assigneeId ?? ''} disabled={Boolean(chapterBusy)} onChange={(event) => void assignChapter(chapter.id, event.target.value)}><option value="">담당 미지정</option>{chapterCollaboration.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.roles.join('/')}</option>)}</select><small data-status={assignment?.status ?? 'UNASSIGNED'}>{assignment?.assigneeName ?? '담당 없음'} · {assignment?.status === 'READY' ? 'PM 반영 대기' : assignment?.status === 'APPLIED' ? '보고서 반영 완료' : assignment?.status === 'IN_PROGRESS' ? `작성 중 · v${assignment.version}` : '미지정'}</small></label>;
@@ -1105,11 +1105,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <Input required label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} />
             {activeStep === 4 && <StructuredDocumentEditor ref={reportBodyRef} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} />}
             {editable && <section className="report-writing-assistant" aria-label="Gemini 글쓰기 개선 도우미"><div><span>GEMINI WRITING ASSISTANT</span><strong>다듬을 문장을 드래그한 뒤 원하는 작업을 누르세요.</strong><small>원문은 바로 덮어쓰지 않습니다. Google Docs처럼 개선안을 비교한 뒤 적용하거나 취소합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="report-selection-assistant"><span>{selectedTextRange ? `${selectedTextRange.text.length}자 선택됨` : '먼저 본문에서 문장을 드래그하세요'}</span><div className="action-row"><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting('문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.')} disabled={!authoring?.assistantConnected || !selectedTextRange || improving}>✦ 전문적으로</Button><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting('중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.')} disabled={!authoring?.assistantConnected || !selectedTextRange || improving}>✦ 간결하게</Button><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting()} disabled={!authoring?.assistantConnected || !selectedTextRange || improving || improvementInstruction.trim().length < 3}>{improving ? '개선 중…' : '✦ 맞춤 요청'}</Button></div></div><div className="action-row"><Button className="report-action-review" variant="secondary" onClick={() => onNavigate('/settings')}>Gemini 설정 열기</Button><Button className="report-action-review" variant="secondary" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>원본 템플릿 다시 보기</Button><Button className="report-action-review" variant="secondary" onClick={() => void improveWriting()} disabled={!authoring?.assistantConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>본문 전체 개선</Button></div>{!authoring?.assistantConnected && <small>설정에서 개인 또는 관리자 공용 Gemini API 키를 연결하면 글 개선 버튼이 열립니다.</small>}</section>}
-            {editable && selectedChapter && <section className="report-memory-feedback" aria-label="AI 학습 피드백"><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>D1 HERMES COMPATIBLE</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</section>}
-            <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 D1에 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
+            {editable && selectedChapter && <section className="report-memory-feedback" aria-label="AI 학습 피드백"><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>APPROVED MEMORY</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</section>}
+            <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
           </div>
-          <details id="report-backups" className="report-revision-history"><summary>시간별 백업 불러오기 · 최근 {backups.length}건</summary>{backups.length ? <ul className="dashboard-work-list">{backups.map((backup) => <li key={backup.id}><span><strong>{backup.backupHour.replace('T',' ')}시 백업 · {backup.title}</strong><small>보고서 v{backup.version} · {new Date(backup.savedAt).toLocaleString('ko-KR')} · {backup.savedBy.name} · SHA {backup.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(backup)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">첫 자동 저장 때 백업이 생성되고, 이후 변경된 작업은 1시간 단위로 D1에 보관됩니다.</p>}</details>
+          <details id="report-backups" className="report-revision-history"><summary>시간별 백업 불러오기 · 최근 {backups.length}건</summary>{backups.length ? <ul className="dashboard-work-list">{backups.map((backup) => <li key={backup.id}><span><strong>{backup.backupHour.replace('T',' ')}시 백업 · {backup.title}</strong><small>보고서 v{backup.version} · {new Date(backup.savedAt).toLocaleString('ko-KR')} · {backup.savedBy.name} · 무결성 확인 {backup.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(backup)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">첫 자동 저장 때 백업이 생성되고, 이후 변경된 작업은 1시간 단위로 안전하게 보관됩니다.</p>}</details>
         </Card>
         <Card title="" className="report-step-card report-step-card--5 report-stage-card">
           {renderStageHeader(5)}
@@ -1125,7 +1125,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·3종 다운로드</h3>
           {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 미리보기와 동일한 DOCX·PDF·HWP 출력이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
-            <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
+            <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 이후 변경·삭제할 수 없습니다.</span></div>
           </div> : <div className="form-stack">
             <p className="notice-box"><strong>최종 확정 완료 · v{currentFinalization.reportVersion}</strong><br />{currentFinalization.finalizedBy.name} · {new Date(currentFinalization.finalizedAt).toLocaleString('ko-KR')} · 승인자 {currentFinalization.approvedBy}</p>
             <div ref={finalReportPreviewRef} className="report-final-export-source"><ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={editorJson}/></div>
@@ -1151,8 +1151,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       </footer>
       <Dialog isOpen={Boolean(pendingNavigation)} title="보고서 작업을 저장하고 이동할까요?" onClose={() => !navigationBusy && setPendingNavigation(null)}>
         <div className="report-navigation-save-dialog">
-          <div className="report-navigation-save-dialog__project"><span>현재 작성 중</span><strong>{selectedCase?.caseNumber} · {selectedCase?.title}</strong><small>{activeStep}단계 · {REPORT_WIZARD_STEPS[activeStep - 1].title} · {version ? `D1 v${version}` : '아직 저장하지 않은 새 초안'}</small></div>
-          <p>{dirty || workspaceDirty || outlineDirty ? '저장하지 않은 본문·목차·진행 단계가 있습니다. “저장하고 이동”을 누르면 현재 상태를 D1에 저장한 뒤 이동합니다.' : '현재 상태는 이미 저장되어 있습니다. “저장하고 이동”을 누르면 안전하게 다음 화면으로 이동합니다.'}</p>
+          <div className="report-navigation-save-dialog__project"><span>현재 작성 중</span><strong>{selectedCase?.caseNumber} · {selectedCase?.title}</strong><small>{activeStep}단계 · {REPORT_WIZARD_STEPS[activeStep - 1].title} · {version ? `저장본 v${version}` : '아직 저장하지 않은 새 초안'}</small></div>
+          <p>{dirty || workspaceDirty || outlineDirty ? '저장하지 않은 본문·목차·진행 단계가 있습니다. “저장하고 이동”을 누르면 현재 상태를 안전하게 저장한 뒤 이동합니다.' : '현재 상태는 이미 저장되어 있습니다. “저장하고 이동”을 누르면 안전하게 다음 화면으로 이동합니다.'}</p>
           <div className="action-row">
             <Button variant="secondary" onClick={() => setPendingNavigation(null)} disabled={navigationBusy}>계속 작성</Button>
             <Button variant="danger" onClick={continuePendingNavigation} disabled={navigationBusy || saving || savingOutline}>저장하지 않고 이동</Button>
