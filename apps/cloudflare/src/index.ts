@@ -3753,7 +3753,6 @@ async function handlePreviewIntakeCatalog(request: Request, env: CloudflareEnv, 
   if (mode === 'database' && !user.roles.includes('admin')) return json({ error:'관리자만 프로젝트 의뢰 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN' },403);
   const q = (url.searchParams.get('q') ?? '').trim().slice(0,120);
   const like = `%${q.replaceAll('%','\\%').replaceAll('_','\\_')}%`;
-  const admin = user.roles.includes('admin') ? 1 : 0;
   const rows = await env.DB.prepare(
     'SELECT c.id,c.case_number AS caseNumber,c.title,c.description,c.claim_type AS claimType,c.status,c.version,c.client_legal_position AS clientLegalPosition,c.client_position_detail AS clientPositionDetail,'+
     'c.created_at AS createdAt,c.updated_at AS updatedAt,u.display_name AS createdByName,COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,'+
@@ -5489,7 +5488,7 @@ async function generateGeminiContent(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
   const startedAt = Date.now();
-  let response: Response;
+  let response: Response | undefined;
   try {
     const generationConfig: Record<string, unknown> = {
       maxOutputTokens: request.maxOutputTokens,
@@ -5497,7 +5496,8 @@ async function generateGeminiContent(
     };
     if (request.responseMimeType) generationConfig.responseMimeType = request.responseMimeType;
     if (request.responseSchema) generationConfig.responseSchema = request.responseSchema;
-    response = await (env.GEMINI_TEST_FETCH ?? fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(request.modelCode)}:generateContent`, {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(request.modelCode)}:generateContent`;
+    const init: RequestInit = {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': request.apiKey },
@@ -5506,7 +5506,14 @@ async function generateGeminiContent(
         contents: [{ role: 'user', parts: request.parts }],
         generationConfig
       })
-    });
+    };
+    const providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
+    const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      response = await providerFetch(endpoint, init);
+      if (response.ok || !retryableStatuses.has(response.status) || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 350 : 900));
+    }
   } catch (reason) {
     clearTimeout(timeout);
     return {
@@ -5515,6 +5522,12 @@ async function generateGeminiContent(
     };
   }
   clearTimeout(timeout);
+  if (!response) {
+    return {
+      latencyMs: Date.now() - startedAt,
+      response: json({ error: 'Gemini 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.', code: 'GEMINI_EMPTY_RESPONSE' }, 502)
+    };
+  }
   if (!response.ok) {
     const safe = safeGeminiProviderError(await response.json().catch(() => null), response.status);
     return {

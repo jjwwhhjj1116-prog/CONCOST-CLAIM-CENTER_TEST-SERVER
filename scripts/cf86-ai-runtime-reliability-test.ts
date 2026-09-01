@@ -10,6 +10,8 @@ test('CF86 uses one bounded Gemini runtime and provider-specific reasoning contr
   assert.equal((source.match(/generativelanguage\.googleapis\.com\/v1beta\/models/g) ?? []).length, 1);
   assert.doesNotMatch(source, /v1beta\/interactions/u);
   assert.match(source, /thinkingConfig: \{ thinkingLevel: request\.reasoningEffort \}/u);
+  assert.match(source, /const retryableStatuses = new Set\(\[429, 500, 502, 503, 504\]\)/u);
+  assert.match(source, /for \(let attempt = 0; attempt < 3; attempt \+= 1\)/u);
   assert.match(source, /normalizedOpenAiReasoningEffort\(route\.reasoningEffort\)/u);
   assert.match(source, /const isConnectionCheck = maxOutputTokens <= 128/u);
   assert.match(source, /body\.thinking = isConnectionCheck \? \{ type: 'disabled' \} : \{ type: 'adaptive' \}/u);
