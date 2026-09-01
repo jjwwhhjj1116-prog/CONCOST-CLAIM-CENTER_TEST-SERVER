@@ -5407,9 +5407,9 @@ function normalizedOpenAiReasoningEffort(value: string): 'low' | 'medium' | 'hig
   return value === 'minimal' ? 'low' : 'medium';
 }
 
-function normalizedAnthropicReasoningEffort(value: string): 'low' | 'medium' | 'high' | 'max' {
-  if (value === 'max' || value === 'high' || value === 'low') return value;
-  return value === 'xhigh' ? 'max' : value === 'minimal' ? 'low' : 'medium';
+function normalizedAnthropicReasoningEffort(value: string): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
+  if (value === 'max' || value === 'xhigh' || value === 'high' || value === 'low') return value;
+  return value === 'minimal' ? 'low' : 'medium';
 }
 
 function previewAiNetworkFailure(provider: PreviewAiProvider, reason: unknown, unavailableCode?: string, unavailableLabel?: string): Response {
@@ -5537,8 +5537,12 @@ async function generatePreviewAiText(
     providerFetch = env.ANTHROPIC_TEST_FETCH ?? fetch;
     body = { model: route.modelCode, max_tokens: maxOutputTokens, system, messages: [{ role: 'user', content: input }] };
     if (/^claude-(?:fable|opus|sonnet)-5$/u.test(route.modelCode)) {
-      body.thinking = { type: 'adaptive' };
-      body.output_config = { effort: normalizedAnthropicReasoningEffort(route.reasoningEffort) };
+      // A connection check only verifies credentials/model access. Disabling
+      // thinking keeps its 64-token probe valid and does not lower the
+      // reasoning effort used by real report/proposal generation requests.
+      const isConnectionCheck = maxOutputTokens <= 128;
+      body.thinking = isConnectionCheck ? { type: 'disabled' } : { type: 'adaptive' };
+      if (!isConnectionCheck) body.output_config = { effort: normalizedAnthropicReasoningEffort(route.reasoningEffort) };
     }
   }
   let response: Response;
