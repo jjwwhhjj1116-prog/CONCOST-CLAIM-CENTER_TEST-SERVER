@@ -106,7 +106,11 @@ export function PreviewAiAdmin(): React.ReactElement {
 
   const importTemplateFolder = async (incoming: FileList | null) => {
     if (!incoming?.length || !payload) return;
-    const files = Array.from(incoming).filter((file) => /\.(?:pdf|hwp|hwpx|xlsx)$/iu.test(file.name));
+    const files = Array.from(incoming).filter((file) => {
+      const normalizedName = file.name.normalize('NFC');
+      return /\.(?:pdf|hwp|hwpx|xlsx)$/iu.test(normalizedName)
+        && normalizedName !== '클레임 업무 프로세스.xlsx';
+    });
     if (!files.length) { setError('선택한 폴더에 PDF·HWP·HWPX·XLSX 보고서 템플릿이 없습니다.'); return; }
     setTemplateImporting(true); setError(''); setNotice('');
     let completed = 0;

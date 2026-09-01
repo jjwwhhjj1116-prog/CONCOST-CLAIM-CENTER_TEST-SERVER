@@ -95,6 +95,7 @@ test('CF32 UI replaces fake-only preview with authenticated Drive originals and 
   assert.match(studio, /PRIVATE COMPANY GOOGLE DRIVE/u);
   assert.match(admin, /원본 32개 폴더 선택·등록/u);
   assert.match(admin, /webkitdirectory/u);
+  assert.match(admin, /클레임 업무 프로세스\.xlsx/u);
   assert.match(admin, /원본 분석 근거/u);
   assert.match(worker, /TEMPLATE_SOURCE_INTEGRITY_MISMATCH/u);
   assert.match(worker, /Only Admin can import report templates/u);
