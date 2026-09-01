@@ -34,5 +34,8 @@
   },
   "observability": {
     "enabled": true
+  },
+  "secrets": {
+    "required": ["GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY"]
   }
 }

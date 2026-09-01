@@ -39,9 +39,11 @@ docs/reviews/P*-codex-review.json
 .env*.local
 .env.production
 .env.development
+.env.cloudflare.shared.local
 *.pem
 *.key
 credentials.json
+*.vietnam-env.enc.json
 
 # OS & IDE
 .DS_Store
