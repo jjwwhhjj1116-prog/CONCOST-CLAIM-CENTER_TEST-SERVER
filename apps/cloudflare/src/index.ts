@@ -5425,24 +5425,38 @@ function previewAiNetworkFailure(provider: PreviewAiProvider, reason: unknown, u
   }, 504);
 }
 
-function safeNonGeminiProviderError(provider: 'OPENAI' | 'ANTHROPIC', payload: unknown, httpStatus: number): { code: string; error: string; providerReason: string } {
+function safeProviderDiagnostic(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/sk-(?:ant-)?[A-Za-z0-9_-]+/gu, '[REDACTED]')
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/gu, '[REDACTED]')
+    .replace(/[\r\n\t]+/gu, ' ')
+    .replace(/[^\p{L}\p{N} .,:'"()_\-\/]/gu, '?')
+    .trim()
+    .slice(0, 240);
+}
+
+function safeNonGeminiProviderError(provider: 'OPENAI' | 'ANTHROPIC', payload: unknown, httpStatus: number, includeAdminDiagnostic = false): { code: string; error: string; providerReason: string } {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : null;
   const nested = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : null;
   const rawReason = [nested?.code, nested?.type, record?.type].find((value): value is string => typeof value === 'string') ?? `HTTP_${httpStatus}`;
   const providerReason = rawReason.replace(/[^A-Za-z0-9_-]/gu, '_').toUpperCase().slice(0, 64) || `HTTP_${httpStatus}`;
-  const safeMessage = typeof nested?.message === 'string' ? nested.message.toLowerCase() : '';
+  const providerMessage = [nested?.message, record?.message, typeof record?.error === 'string' ? record.error : null].find((value): value is string => typeof value === 'string') ?? '';
+  const safeMessage = providerMessage.toLowerCase();
+  const diagnostic = includeAdminDiagnostic ? safeProviderDiagnostic(providerMessage) : '';
+  const explain = (message: string) => diagnostic ? `${message} 공급자 진단: ${diagnostic}` : message;
   const label = provider === 'OPENAI' ? 'OpenAI' : 'Claude';
-  if (httpStatus === 401) return { code: `${provider}_INVALID_API_KEY`, error: `${label} API 키가 유효하지 않습니다. 설정에서 키를 교체한 뒤 연결 확인을 실행해 주세요.`, providerReason };
-  if (httpStatus === 403) return { code: `${provider}_PERMISSION_DENIED`, error: `${label} API 또는 선택 모델 사용 권한이 없습니다. 공급자 프로젝트 권한을 확인해 주세요.`, providerReason };
-  if (httpStatus === 429) return { code: `${provider}_QUOTA_OR_RATE_LIMIT`, error: `${label} 사용 한도 또는 호출 속도 제한에 도달했습니다. 공급자 사용량과 결제 상태를 확인해 주세요.`, providerReason };
+  if (httpStatus === 401) return { code: `${provider}_INVALID_API_KEY`, error: explain(`${label} API 키가 유효하지 않습니다. 설정에서 키를 교체한 뒤 연결 확인을 실행해 주세요.`), providerReason };
+  if (httpStatus === 403) return { code: `${provider}_PERMISSION_DENIED`, error: explain(`${label} API 또는 선택 모델 사용 권한이 없습니다. 공급자 프로젝트 권한을 확인해 주세요.`), providerReason };
+  if (httpStatus === 429) return { code: `${provider}_QUOTA_OR_RATE_LIMIT`, error: explain(`${label} 사용 한도 또는 호출 속도 제한에 도달했습니다. 공급자 사용량과 결제 상태를 확인해 주세요.`), providerReason };
   if (provider === 'ANTHROPIC' && httpStatus === 400) {
     if (/credit balance|usage credit|billing/u.test(safeMessage)) return { code: 'ANTHROPIC_BILLING_REQUIRED', error: 'Claude API 사용 크레딧이 없거나 결제 설정이 완료되지 않았습니다. Anthropic Console의 Billing에서 사용 크레딧을 확인해 주세요.', providerReason };
     if (/max_tokens|token limit/u.test(safeMessage)) return { code: 'ANTHROPIC_OUTPUT_LIMIT_REJECTED', error: 'Claude가 출력 토큰 설정을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.', providerReason };
     if (/thinking|effort/u.test(safeMessage)) return { code: 'ANTHROPIC_REASONING_CONFIG_REJECTED', error: 'Claude가 사고 수준 설정을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.', providerReason };
     if (/model/u.test(safeMessage)) return { code: 'ANTHROPIC_MODEL_UNAVAILABLE', error: '저장된 Anthropic API 키로 선택한 Claude 모델을 사용할 수 없습니다. Console의 모델 접근 권한을 확인해 주세요.', providerReason };
   }
-  if (httpStatus === 400 || httpStatus === 404) return { code: `${provider}_MODEL_OR_REQUEST_REJECTED`, error: `${label}가 선택 모델 또는 요청 형식을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.`, providerReason };
-  return { code: `${provider}_REQUEST_FAILED`, error: `${label}가 요청을 처리하지 못했습니다. 잠시 후 다시 시도하고 계속 실패하면 설정에서 연결 상태를 확인해 주세요.`, providerReason };
+  if (httpStatus === 400 || httpStatus === 404) return { code: `${provider}_MODEL_OR_REQUEST_REJECTED`, error: explain(`${label}가 선택 모델 또는 요청 형식을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.`), providerReason };
+  return { code: `${provider}_REQUEST_FAILED`, error: explain(`${label}가 요청을 처리하지 못했습니다. 잠시 후 다시 시도하고 계속 실패하면 설정에서 연결 상태를 확인해 주세요.`), providerReason };
 }
 
 async function generateGeminiContent(
@@ -5504,7 +5518,8 @@ async function generatePreviewAiText(
   actorId: string,
   credentialOverride?: ResolvedPreviewAiCredential,
   timeoutMs = 90_000,
-  maxOutputTokens = 16_000
+  maxOutputTokens = 16_000,
+  includeProviderDiagnostic = false
 ): Promise<{ content?: string; credentialSource?: PreviewAiCredentialSource; response?: Response }> {
   const provider = route.providerKind as PreviewAiProvider;
   const credential = credentialOverride ?? await resolvePreviewAiCredential(env, actorId, provider);
@@ -5577,7 +5592,7 @@ async function generatePreviewAiText(
   }
   clearTimeout(timeout);
   if (!response.ok) {
-    const safeFailure = safeNonGeminiProviderError(provider, await response.json().catch(() => null), response.status);
+    const safeFailure = safeNonGeminiProviderError(provider, await response.json().catch(() => null), response.status, includeProviderDiagnostic);
     return { response: json({ ...safeFailure, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
   }
   const payload = await response.json().catch(() => null);
@@ -5626,7 +5641,7 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
       secretName: previewProviderSecretName(provider), version: 1, updatedAt: new Date().toISOString(), updatedByName: user.displayName
     } as PreviewAiRouteRow;
     const startedAt = Date.now();
-    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential, 30_000, probeOutputTokens);
+    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential, 30_000, probeOutputTokens, true);
     const checkedAt = new Date().toISOString();
     const latencyMs = Date.now() - startedAt;
     if (tested.response) {
