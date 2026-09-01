@@ -62,8 +62,8 @@ async function integrationSetup(): Promise<{ sql: Database; env: CloudflareEnv }
     return new Response('unexpected Google request', { status: 500 });
   };
   const geminiFetch: typeof fetch = async (input, init) => {
-    assert.match(String(input), /gemini-3\.6-flash/u, 'intake automation must use the approved organization Gemini route');
-    assert.doesNotMatch(String(input), /gemini-3\.7-flash/u, 'intake automation must not call an unavailable hard-coded model');
+    assert.match(String(input), /gemini-3\.7-flash/u, 'intake automation must use the current approved Gemini model');
+    assert.doesNotMatch(String(input), /gemini-3\.6-flash/u, 'intake automation must not fall back to a retired model');
     const body = JSON.parse(String(init?.body)) as any;
     assert.equal('temperature' in body.generationConfig, false, 'Gemini document calls must omit deprecated sampling controls');
     assert.match(body.contents[0].parts[1].text, /발주처가 추가 공사를 지시/u);
@@ -211,6 +211,6 @@ test('CF47 UI and Worker connect the generic source route to Drive, D1, Gemini, 
   const worker = readFileSync('apps/cloudflare/src/index.ts', 'utf8');
   const ui = readFileSync('apps/web/src/case-management/CaseManagement.tsx', 'utf8');
   for (const marker of ['intake-source|intake-audio', 'extractIntakeSource', 'INTAKE_SOURCE_SUMMARIZED', '프로젝트 의뢰 원본', "SET description=?", 'latestIntakeSourceSummary']) assert.match(worker, new RegExp(marker));
-  for (const marker of ['/intake-source/draft', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '3단계 · 자동작성 결과 검수', '확인 항목 전체 체크 · 검수 완료', 'useReviewedCaseDescription', 'timeoutMs:105_000', 'timeoutHintSeconds={90}', 'intakeStorage=pending']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
+  for (const marker of ['/intake-source/draft', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '3단계 · 자동작성 결과 검수', '확인 항목 전체 체크 · 검수 완료', 'useReviewedCaseDescription', 'timeoutMs:55_000', 'timeoutHintSeconds={45}', 'intakeStorage=pending']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
   const api = readFileSync('apps/web/src/api.ts','utf8'); assert.match(api,/!\(init\.body instanceof FormData\)/u);
 });

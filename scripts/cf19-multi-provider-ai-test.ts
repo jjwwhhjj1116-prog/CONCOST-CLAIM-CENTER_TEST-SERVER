@@ -72,8 +72,8 @@ test('CF19 routes chapter writing through Gemini and never exposes the API key',
   assert.equal(config.aiConnected, true); assert.equal(config.providerLabel, 'GEMINI'); assert.equal(config.modelLabel, 'gemini-3.6-flash');
   const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
   assert.equal(generated.status, 200); const generatedText = await generated.text(); assert.match(generatedText, /Gemini 검증 초안/u); assert.doesNotMatch(generatedText, new RegExp(GEMINI_KEY, 'u'));
-  assert.equal(requests.length, 1); assert.match(requests[0].url, /generativelanguage\.googleapis\.com\/v1beta\/interactions/u);
-  assert.equal(requests[0].body.model, 'gemini-3.6-flash'); assert.equal(typeof requests[0].body.input, 'string'); assert.equal(typeof requests[0].body.system_instruction, 'string');
+  assert.equal(requests.length, 1); assert.match(requests[0].url, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.6-flash:generateContent/u);
+  assert.equal((requests[0].body.generationConfig as any).thinkingConfig.thinkingLevel, 'medium'); assert.equal(typeof (requests[0].body.contents as any[])[0].parts[0].text, 'string'); assert.equal(typeof (requests[0].body.system_instruction as any).parts[0].text, 'string');
   assert.deepEqual(sql.exec('SELECT provider_kind, task_kind, model_code FROM preview_report_ai_generations')[0].values[0], ['GEMINI','CHAPTER_WRITING','gemini-3.6-flash']);
   sql.close();
 });

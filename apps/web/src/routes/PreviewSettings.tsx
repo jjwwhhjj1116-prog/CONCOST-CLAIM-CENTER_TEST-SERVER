@@ -16,6 +16,14 @@ interface CredentialState {
   version: number;
   updatedAt: string | null;
   fingerprint: string | null;
+  health?: {
+    status: 'UNCHECKED' | 'HEALTHY' | 'FAILED';
+    modelCode: string;
+    latencyMs: number | null;
+    failureCode: string | null;
+    providerStatus: number | null;
+    checkedAt: string | null;
+  };
 }
 interface ProviderState { providerKind: ProviderKind; label: string; personal: CredentialState; organization: CredentialState }
 interface SettingsPayload { personalPriority: boolean; masterKeyReady: boolean; canManageOrganization: boolean; providers: ProviderState[] }
@@ -229,11 +237,15 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     const field = inputKey(provider.providerKind, scope);
     setBusy(`test:${field}`); setError(''); setNotice('');
     try {
-      const result = await apiRequest<{ source: string; checkedAt: string }>(`/api/settings/ai-credentials/${provider.providerKind}/test`, {
-        method: 'POST', timeoutMs: 105_000, body: JSON.stringify({ scope, modelCode: selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
+      const result = await apiRequest<{ source: string; checkedAt: string; latencyMs: number }>(`/api/settings/ai-credentials/${provider.providerKind}/test`, {
+        method: 'POST', timeoutMs: 40_000, body: JSON.stringify({ scope, modelCode: selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
       });
-      setNotice(`${PROVIDER_COPY[provider.providerKind].short} 연결 확인 완료 · ${result.source} · ${new Date(result.checkedAt).toLocaleString('ko-KR')}`);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials'));
+      setNotice(`${PROVIDER_COPY[provider.providerKind].short} 연결 정상 · ${result.latencyMs.toLocaleString('ko-KR')}ms · ${new Date(result.checkedAt).toLocaleString('ko-KR')}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      try { setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials')); } catch { /* keep the provider failure visible */ }
+    }
     finally { setBusy(''); }
   };
 
@@ -364,9 +376,17 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         const modelRoute = aiConfig?.routes.find((route) => route.taskKind === PRIMARY_TASK[provider.providerKind].task);
         const modelDirty = scope === 'ORGANIZATION' && Boolean(modelRoute) && (modelRoute?.providerKind !== provider.providerKind || modelRoute?.modelCode !== selectedModel);
         const isBusy = busy === field || busy === `test:${field}` || busy === `model:${field}`;
-        return <section key={provider.providerKind} data-provider={provider.providerKind} data-configured={state.configured}>
-          <header><span>{copy.short.slice(0, 2).toUpperCase()}</span><div><h3>{provider.label}</h3><p>{copy.use}</p></div><strong>{state.configured ? '연결됨' : '키 필요'}</strong></header>
-          <div className="credential-state"><span>{state.storage === 'ENCRYPTED_D1' ? '암호화 저장' : state.storage === 'CLOUDFLARE_SECRET' ? '회사 서버 보안 키' : '저장된 키 없음'}</span>{state.fingerprint && <small>등록된 키 확인값 · v{state.version}</small>}</div>
+        const healthStatus = state.health?.status ?? 'UNCHECKED';
+        const healthLabel = !state.configured ? '키 필요' : healthStatus === 'HEALTHY' ? '연결 정상' : healthStatus === 'FAILED' ? '연결 오류' : '확인 필요';
+        return <section key={provider.providerKind} data-provider={provider.providerKind} data-configured={state.configured} data-health={healthStatus}>
+          <header><span>{copy.short.slice(0, 2).toUpperCase()}</span><div><h3>{provider.label}</h3><p>{copy.use}</p></div><strong>{healthLabel}</strong></header>
+          <div className="credential-state">
+            <span>{state.storage === 'ENCRYPTED_D1' ? '키 암호화 저장됨' : state.storage === 'CLOUDFLARE_SECRET' ? '회사 서버 보안 키 저장됨' : '저장된 키 없음'}</span>
+            {state.configured && healthStatus === 'UNCHECKED' && <small>저장만 완료되었습니다. 실제 사용 전 ‘연결 확인’을 실행해 주세요.</small>}
+            {healthStatus === 'HEALTHY' && <small>{state.health?.modelCode} · {state.health?.latencyMs?.toLocaleString('ko-KR')}ms · {state.health?.checkedAt ? new Date(state.health.checkedAt).toLocaleString('ko-KR') : ''}</small>}
+            {healthStatus === 'FAILED' && <small>최근 확인 실패 · {state.health?.failureCode ?? '원인 확인 필요'}{state.health?.providerStatus ? ` · HTTP ${state.health.providerStatus}` : ''}</small>}
+            {state.fingerprint && <small>등록 키 확인값 · v{state.version}</small>}
+          </div>
           <label htmlFor={`${field}-model`}>사용 모델</label>
           <select id={`${field}-model`} value={selectedModel} onChange={(event) => setSelectedModels((current) => ({ ...current, [provider.providerKind]: event.target.value }))}>
             {options.map((model) => <option key={model.code} value={model.code}>{model.label}</option>)}

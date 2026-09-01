@@ -572,7 +572,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         setAiGeneration((current) => current?.kind === 'outline' ? { ...current, status: 'complete' } : current);
         return;
       }
-      const result = await apiRequest<{ suggestions: Array<{ chapterId: string; chapterCode: string; chapterTitle?: string; planningNote: string }>; guidelineVersion: number }>('/api/report-authoring/outline/generate', { method: 'POST', body: JSON.stringify({ caseId: requestCaseId }) });
+      const result = await apiRequest<{ suggestions: Array<{ chapterId: string; chapterCode: string; chapterTitle?: string; planningNote: string }>; guidelineVersion: number }>('/api/report-authoring/outline/generate', { method: 'POST', timeoutMs: 65_000, body: JSON.stringify({ caseId: requestCaseId }) });
       if (selectedCaseRef.current !== requestCaseId) return;
       setOutlineNotes(Object.fromEntries(result.suggestions.map((item) => [item.chapterId, item.planningNote])));
       setOutlineTitles(Object.fromEntries(authoring.chapters.map((chapter) => {
@@ -595,7 +595,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setGenerating(true); setError(''); setAiGeneration({ kind: 'chapter', status: 'running', title: `${selectedChapter?.title ?? '선택 챕터'} 초안을 작성하고 있습니다` });
     try {
       const result = await apiRequest<{ chapter: { chapterCode: string; title: string; content: string; promptVersion: number; caseLawCitations?: CaseLawCitation[]; memory?: { engine: string; shortTermItems: number; approvedLongTermRules: number; personalRules: number; organizationRules: number } } }>('/api/report-authoring/generate', {
-        method: 'POST', body: JSON.stringify({ caseId: requestCaseId, chapterId: selectedChapterId, expectedDraftVersion: version, useCaseLaw: useCaseLaw && caseLawSources.length > 0 })
+        method: 'POST', timeoutMs: 105_000, body: JSON.stringify({ caseId: requestCaseId, chapterId: selectedChapterId, expectedDraftVersion: version, useCaseLaw: useCaseLaw && caseLawSources.length > 0 })
       });
       if (selectedCaseRef.current !== requestCaseId) return;
       const start = `<!-- AI-CHAPTER:${result.chapter.chapterCode}:START -->`;
@@ -793,7 +793,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setImproving(true); setError(''); setAiGeneration({ kind: 'improve', status: 'running', title: 'Gemini가 보고서 문장을 개선하고 있습니다' });
     try {
       const result = await apiRequest<{ content: string; credentialSource: string; providerKind: string; modelCode: string }>('/api/report-authoring/improve', {
-        method: 'POST', body: JSON.stringify({ caseId: requestCaseId, content, instruction: improvementInstruction.trim(), expectedDraftVersion: version })
+        method: 'POST', timeoutMs: 100_000, body: JSON.stringify({ caseId: requestCaseId, content, instruction: improvementInstruction.trim(), expectedDraftVersion: version })
       });
       if (selectedCaseRef.current !== requestCaseId) return;
       contentRef.current = result.content; setContent(result.content); setEditorJson(null); setDirty(true); setAiGeneration((current) => current?.kind === 'improve' ? { ...current, status: 'complete' } : current);
@@ -812,7 +812,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setImproving(true); setError(''); setAiGeneration({ kind: 'improve', status: 'running', title: '선택한 문장을 Gemini가 다듬고 있습니다' });
     try {
       const result = await apiRequest<{ content: string }>('/api/report-authoring/improve', {
-        method: 'POST', body: JSON.stringify({ caseId: requestCaseId, content: original, instruction: instruction.trim(), expectedDraftVersion: version })
+        method: 'POST', timeoutMs: 100_000, body: JSON.stringify({ caseId: requestCaseId, content: original, instruction: instruction.trim(), expectedDraftVersion: version })
       });
       if (selectedCaseRef.current !== requestCaseId) return;
       setAiGeneration(null);
@@ -972,7 +972,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
       <input ref={quantityExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importQuantitySpreadsheet(event.target.files?.[0])}/>
-      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형 확인','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
+      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} providerLabel={aiGeneration?.kind==='outline'?'OpenAI':aiGeneration?.kind==='improve'?'Gemini':'Claude'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['AI 공급자 응답 대기','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['AI 공급자 응답 대기','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['AI 공급자 응답 대기','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
         <div className="report-authoring-hero__actions">

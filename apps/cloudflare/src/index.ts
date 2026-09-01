@@ -298,17 +298,19 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
     if (!body || typeof body.loginId !== 'string' || typeof body.password !== 'string') {
       return json({ error: 'loginId and password are required', code: 'INVALID_LOGIN_PAYLOAD' }, 400);
     }
+    const loginId = body.loginId.trim();
+    const password = body.password;
 
     const loginQuery = (includeDepartment: boolean) => env.DB!.prepare(
       'SELECT id, login_id AS loginId, password_salt AS passwordSalt, password_hash AS passwordHash, ' +
       `password_iterations AS passwordIterations, display_name AS displayName, email, roles_json AS rolesJson, ${includeDepartment ? 'department_code' : "'CLAIM_CENTER'"} AS departmentCode ` +
       'FROM preview_users WHERE login_id = ? COLLATE NOCASE AND is_active = 1'
-    ).bind(body.loginId.trim()).first<PreviewUserRow>();
+    ).bind(loginId).first<PreviewUserRow>();
     const user = await loginQuery(true).catch(() => loginQuery(false));
 
     if (!user) return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
 
-    const derivedHash = await derivePreviewPassword(body.password, user.passwordSalt, user.passwordIterations);
+    const derivedHash = await derivePreviewPassword(password, user.passwordSalt, user.passwordIterations);
     if (!constantTimeHexEqual(derivedHash, user.passwordHash)) {
       return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
     }
@@ -1083,25 +1085,13 @@ async function generateWorkflowAiImport(
   const prompt = `프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n유형: ${caseRow.claimType}\n자료종류: ${kind}\n파일명: ${file.name}\n반드시 이 JSON 스키마만 반환: ${schema}\n확인되지 않은 필드는 빈 값/null로 두고 missingFields에 넣으세요.`;
   const parts: Array<Record<string, unknown>> = [{ text: textLike ? `${prompt}\n\n[개인정보 최소화가 적용된 원문]\n${redacted.text}` : prompt }];
   if (!textLike) parts.push({ inline_data: { mime_type: mimeType, data: bytesToBase64(bytes) } });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90_000);
-  let response: Response;
-  try {
-    response = await (env.GEMINI_TEST_FETCH ?? fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`, {
-      method: 'POST', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': credential.apiKey },
-      body: JSON.stringify({ system_instruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts }], generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 } })
-    });
-  } catch {
-    clearTimeout(timeout);
-    return { modelCode, redactionCount: redacted.count, response: json({ error: 'Gemini 문서 정리 시간이 초과되었습니다.', code: 'GEMINI_WORKFLOW_IMPORT_UNAVAILABLE' }, 504) };
-  }
-  clearTimeout(timeout);
-  if (!response.ok) {
-    const safe = safeGeminiProviderError(await response.json().catch(() => null), response.status);
-    return { modelCode, redactionCount: redacted.count, response: json({ ...safe, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
-  }
-  const result = parseWorkflowAiImport(extractGeminiText(await response.json().catch(() => null)) ?? '', kind);
+  const generated = await generateGeminiContent(env, {
+    modelCode, apiKey: credential.apiKey, system, parts, reasoningEffort: 'low',
+    maxOutputTokens: 8192, timeoutMs: 60_000, responseMimeType: 'application/json',
+    unavailableCode: 'GEMINI_WORKFLOW_IMPORT_UNAVAILABLE', unavailableLabel: 'Gemini 문서 정리'
+  });
+  if (generated.response) return { modelCode, redactionCount: redacted.count, response: generated.response };
+  const result = parseWorkflowAiImport(generated.content ?? '', kind);
   if (!result) return { modelCode, redactionCount: redacted.count, response: json({ error: 'Gemini 응답을 안전한 회의·조사 양식으로 확인하지 못했습니다.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502) };
   return { result, modelCode, redactionCount: redacted.count };
 }
@@ -3003,28 +2993,32 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         template:{id:selectedSource.id,name:selectedSource.sourceName,category:promptProfile.templateCategory,format:selectedSource.sourceFormat},
         sourcePriority:['latestIntakeSourceSummary','project.description','writerInputs.keyIssues','writerInputs.objective','writerInputs.planNotes']
       };
-      const callChapter=async(chapterNumber:1|2|3,context:Record<string,unknown>)=>{
+      const orderedPrompts=([2,1,3] as const).map((chapterNumber)=>{
         const prompt=promptProfile.chapters.find((item)=>item.chapterNumber===chapterNumber);
-        if(!prompt)return {response:json({error:`${chapterNumber}장 지침이 없습니다.`,code:'PROPOSAL_TEMPLATE_PROMPTS_NOT_READY'},503),value:null as Record<string,unknown>|null};
-        const generated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[선택 템플릿]\n${selectedSource.sourceName}\n분류: ${promptProfile.templateCategory}\n\n[관리자 승인 ${chapterNumber}장 지침 · v${prompt.version}]\n${prompt.instructionText}`,JSON.stringify(context),user.id,organizationGemini,75_000);
-        if(generated.response)return {response:generated.response,value:null as Record<string,unknown>|null};
-        const value=proposalAiJson(generated.content??'');
-        if(!value)return {response:json({error:`Gemini ${chapterNumber}장 응답이 JSON 형식이 아닙니다. 다시 생성해 주세요.`,code:'MALFORMED_PROPOSAL_AI_RESPONSE',chapterNumber},502),value:null as Record<string,unknown>|null};
-        return {response:null,value};
-      };
-      const chapter2Result=await callChapter(2,{input:generationInput});if(chapter2Result.response)return chapter2Result.response;const chapter2=chapter2Result.value!;
-      const chapter1Result=await callChapter(1,{input:generationInput,확정된_2장:chapter2});if(chapter1Result.response)return chapter1Result.response;const chapter1=chapter1Result.value!;
-      const chapter3Result=await callChapter(3,{input:generationInput,확정된_2장:chapter2,확정된_1장:chapter1});if(chapter3Result.response)return chapter3Result.response;const chapter3=chapter3Result.value!;
+        return prompt?`[관리자 승인 ${chapterNumber}장 지침 · v${prompt.version}]\n${prompt.instructionText}`:'';
+      });
+      if(orderedPrompts.some((prompt)=>!prompt))return json({error:'1~3장 작성 지침을 불러오지 못했습니다.',code:'PROPOSAL_TEMPLATE_PROMPTS_NOT_READY'},503);
+      const combinedRoute={...route,reasoningEffort:'medium'} as PreviewAiRouteRow;
+      const combinedGenerated=await generatePreviewAiText(
+        env,
+        combinedRoute,
+        `${promptProfile.systemInstruction}\n\n[선택 템플릿]\n${selectedSource.sourceName}\n분류: ${promptProfile.templateCategory}\n\n${orderedPrompts.join('\n\n')}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}\n\n반드시 2장→1장→3장 순서로 내부 작성한 뒤 JSON 객체 하나만 반환하십시오. 최상위 키는 chapter2, chapter1, chapter3, validation 네 개입니다.`,
+        JSON.stringify({input:generationInput,responseContract:{chapter2:'2장 JSON',chapter1:'1장 JSON',chapter3:'3장 JSON',validation:{result:'PASS|FAIL',findings:[]}}}),
+        user.id,
+        organizationGemini,
+        90_000
+      );
+      if(combinedGenerated.response)return combinedGenerated.response;
+      const combined=proposalAiJson(combinedGenerated.content??'');
+      const chapter2=combined?.chapter2&&typeof combined.chapter2==='object'&&!Array.isArray(combined.chapter2)?combined.chapter2 as Record<string,unknown>:null;
+      const chapter1=combined?.chapter1&&typeof combined.chapter1==='object'&&!Array.isArray(combined.chapter1)?combined.chapter1 as Record<string,unknown>:null;
+      const chapter3=combined?.chapter3&&typeof combined.chapter3==='object'&&!Array.isArray(combined.chapter3)?combined.chapter3 as Record<string,unknown>:null;
+      if(!chapter1||!chapter2||!chapter3)return json({error:'Gemini가 제안서 1~3장 전체를 완성하지 못했습니다. 입력 근거를 확인한 뒤 다시 생성해 주세요.',code:'MALFORMED_PROPOSAL_AI_RESPONSE'},502);
       const rendered1=proposalRenderedAiChapter(1,chapter1);const rendered2=proposalRenderedAiChapter(2,chapter2);const rendered3=proposalRenderedAiChapter(3,chapter3);
       if(!rendered1||!rendered2||!rendered3)return json({error:'Gemini 초안이 선택 템플릿의 1~3장 구조 기준에 미달하여 저장하지 않았습니다.',code:'INCOMPLETE_PROPOSAL_AI_RESPONSE',requiredOrder:[2,1,3]},502);
-      const validationGenerated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}`,JSON.stringify({input:generationInput,chapter1,chapter2,chapter3}),user.id,organizationGemini,45_000);
       let validation:Record<string,unknown>;
-      if(validationGenerated.response){
-        validation={result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 서비스가 응답하지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'PROVIDER_VALIDATION_UNAVAILABLE'};
-      }else{
-        const parsedValidation=proposalAiJson(validationGenerated.content??'');
-        validation=parsedValidation&&['PASS','FAIL'].includes(String(parsedValidation.result))?parsedValidation:{result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 응답 형식이 올바르지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'MALFORMED_PROPOSAL_AI_VALIDATION'};
-      }
+      const returnedValidation=combined?.validation&&typeof combined.validation==='object'&&!Array.isArray(combined.validation)?combined.validation as Record<string,unknown>:null;
+      validation=returnedValidation&&['PASS','FAIL'].includes(String(returnedValidation.result))?returnedValidation:{result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 응답 형식이 올바르지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'MALFORMED_PROPOSAL_AI_VALIDATION'};
       if(validation.result==='FAIL')validation={...validation,result:'REVIEW_REQUIRED',fallbackReason:'AI_VALIDATION_REQUIRES_HUMAN_REVIEW',findings:[...(Array.isArray(validation.findings)?validation.findings:[]),{level:'WARNING',location:'1~3장 전체',issue:'AI 자가검증에서 사람이 확인해야 할 항목을 발견했습니다.',fix:'생성된 초안은 보존되며 3단계에서 사실·수치·근거를 직접 검수한 뒤 수정하세요.'}]};
       for(const [number,generatedText] of [[1,rendered1],[2,rendered2],[3,rendered3]] as const){inputs.chapters[number-1].body=sanitizeInput(generatedText,50000);delete inputs.chapters[number-1].editorJson;}
       inputs.objective=inputs.chapters[0].body;inputs.keyIssues=inputs.chapters[1].body;inputs.planNotes=inputs.chapters[2].body;
@@ -3152,14 +3146,15 @@ async function generateIntakeAssistantDraft(env:CloudflareEnv,bytes:Uint8Array,f
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
   const modelCode=(await previewOrganizationGeminiAutomationRoute(env)).modelCode;
   if(!credential)return{modelCode,response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
-  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
-  let response:Response;
-  try{
-    response=await(env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 접수 보조자입니다. 첨부 원문에 명시된 사실만 사용하고 추측하지 마세요. 클라이언트와 상대방을 구분하고 불확실한 값은 반드시 확인 필요라고 표시하세요.'}]},contents:[{role:'user',parts:[{text:`첨부 자료 ${fileName} (${source.kind})를 읽고 프로젝트 의뢰 기본정보 초안을 만드세요. 현재 입력값은 참고만 하며 원문과 충돌하면 reviewChecklist에 적으세요.\n현재 사건명: ${current.title||'[없음]'}\n현재 유형: ${current.claimType||'[없음]'}\n현재 법적 지위: ${current.clientLegalPosition||'[없음]'}\n현재 입장 상세: ${current.clientPositionDetail||'[없음]'}\n현재 설명: ${current.description||'[없음]'}\n\nJSON 객체 하나만 반환하세요: {"title":"사건명","claimType":"TYPE-01~TYPE-06 중 하나","clientLegalPosition":"VICTIM|SUSPECT|OTHER","clientPositionDetail":"우리 클라이언트의 구체적 지위","description":"클라이언트 관점의 사건 설명. 시간순 사실·주장·상대방 주장·핵심 쟁점·확보자료·확인필요 사항 포함","reviewChecklist":["사람이 원문과 대조할 항목"]}`},intakeGeminiSourcePart(bytes,source)]}],generationConfig:{maxOutputTokens:4096,responseMimeType:'application/json'}})});
-  }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 의뢰 초안 작성 시간이 초과되었습니다.',code:'GEMINI_INTAKE_DRAFT_UNAVAILABLE'},504)}}
-  clearTimeout(timeout);
-  if(!response.ok){const safe=safeGeminiProviderError(await response.json().catch(()=>null),response.status);return{modelCode,response:json({...safe,providerStatus:response.status},response.status===401||response.status===403?503:502)}}
-  const text=extractGeminiText(await response.json().catch(()=>null)); const draft=text?parseIntakeAssistantDraft(text,current):null;
+  const generated=await generateGeminiContent(env,{
+    modelCode,apiKey:credential.apiKey,
+    system:'당신은 건설 클레임 프로젝트 의뢰 접수 보조자입니다. 첨부 원문에 명시된 사실만 사용하고 추측하지 마세요. 클라이언트와 상대방을 구분하고 불확실한 값은 반드시 확인 필요라고 표시하세요.',
+    parts:[{text:`첨부 자료 ${fileName} (${source.kind})를 읽고 프로젝트 의뢰 기본정보 초안을 만드세요. 현재 입력값은 참고만 하며 원문과 충돌하면 reviewChecklist에 적으세요.\n현재 사건명: ${current.title||'[없음]'}\n현재 유형: ${current.claimType||'[없음]'}\n현재 법적 지위: ${current.clientLegalPosition||'[없음]'}\n현재 입장 상세: ${current.clientPositionDetail||'[없음]'}\n현재 설명: ${current.description||'[없음]'}\n\nJSON 객체 하나만 반환하세요: {"title":"사건명","claimType":"TYPE-01~TYPE-06 중 하나","clientLegalPosition":"VICTIM|SUSPECT|OTHER","clientPositionDetail":"우리 클라이언트의 구체적 지위","description":"클라이언트 관점의 사건 설명. 시간순 사실·주장·상대방 주장·핵심 쟁점·확보자료·확인필요 사항 포함","reviewChecklist":["사람이 원문과 대조할 항목"]}`},intakeGeminiSourcePart(bytes,source)],
+    reasoningEffort:'low',maxOutputTokens:4096,timeoutMs:45_000,responseMimeType:'application/json',
+    unavailableCode:'GEMINI_INTAKE_DRAFT_UNAVAILABLE',unavailableLabel:'Gemini 의뢰 초안 작성'
+  });
+  if(generated.response)return{modelCode,response:generated.response};
+  const draft=generated.content?parseIntakeAssistantDraft(generated.content,current):null;
   if(!draft)return{modelCode,response:json({error:'Gemini 의뢰 초안 결과 형식이 올바르지 않습니다.',code:'GEMINI_MALFORMED_INTAKE_DRAFT'},502)};
   return{draft,modelCode};
 }
@@ -3181,15 +3176,15 @@ async function summarizeIntakeSource(env: CloudflareEnv,user: SessionUser,caseRo
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
   const modelCode=(await previewOrganizationGeminiAutomationRoute(env)).modelCode;
   if(!credential) return {modelCode,response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
-  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
-  let response:Response;
-  try{
-    const sourcePart=intakeGeminiSourcePart(bytes,source);
-    response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 자료 정리 담당자입니다. 녹음·텍스트·표에서 확인되는 사실만 사용하고, 추측하지 말며, 클라이언트 관점과 상대방 주장을 명확히 구분하세요.'}]},contents:[{role:'user',parts:[{text:`프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n클라이언트 법적 지위: ${caseRow.clientLegalPosition}\n기존 사건 설명: ${caseRow.description||'[없음]'}\n첨부 자료: ${fileName}\n자료 종류: ${source.kind}\n기존 설명과 첨부 원문을 함께 검토하여 다음 형식으로 한국어 작성: 1) 시간순 타임라인 2) 의뢰 배경 3) 클라이언트 주장 4) 상대방 주장 또는 쟁점 5) 확보 자료 6) 추가 확인 질문 7) 제안서·보고서 작성 시 관점 주의사항. 원문에 없는 항목은 '확인 필요'로 표시하세요.`},sourcePart]}],generationConfig:{maxOutputTokens:4096}})});
-  }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 의뢰 자료 정리 시간이 초과되었습니다.',code:'GEMINI_INTAKE_SOURCE_UNAVAILABLE'},504)}}
-  clearTimeout(timeout);
-  if(!response.ok){const safe=safeGeminiProviderError(await response.json().catch(()=>null),response.status);return{modelCode,response:json({...safe,providerStatus:response.status},response.status===401||response.status===403?503:502)}}
-  const summary=extractGeminiText(await response.json().catch(()=>null));
+  const generated=await generateGeminiContent(env,{
+    modelCode,apiKey:credential.apiKey,
+    system:'당신은 건설 클레임 프로젝트 의뢰 자료 정리 담당자입니다. 녹음·텍스트·표에서 확인되는 사실만 사용하고, 추측하지 말며, 클라이언트 관점과 상대방 주장을 명확히 구분하세요.',
+    parts:[{text:`프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n클라이언트 법적 지위: ${caseRow.clientLegalPosition}\n기존 사건 설명: ${caseRow.description||'[없음]'}\n첨부 자료: ${fileName}\n자료 종류: ${source.kind}\n기존 설명과 첨부 원문을 함께 검토하여 다음 형식으로 한국어 작성: 1) 시간순 타임라인 2) 의뢰 배경 3) 클라이언트 주장 4) 상대방 주장 또는 쟁점 5) 확보 자료 6) 추가 확인 질문 7) 제안서·보고서 작성 시 관점 주의사항. 원문에 없는 항목은 '확인 필요'로 표시하세요.`},intakeGeminiSourcePart(bytes,source)],
+    reasoningEffort:'medium',maxOutputTokens:4096,timeoutMs:60_000,
+    unavailableCode:'GEMINI_INTAKE_SOURCE_UNAVAILABLE',unavailableLabel:'Gemini 의뢰 자료 정리'
+  });
+  if(generated.response)return{modelCode,response:generated.response};
+  const summary=generated.content;
   if(!summary||summary.length>30000)return{modelCode,response:json({error:'Gemini 의뢰 자료 정리 결과 형식이 올바르지 않습니다.',code:'GEMINI_MALFORMED_RESPONSE'},502)};
   return{summary,modelCode};
 }
@@ -4651,6 +4646,18 @@ interface ResolvedPreviewAiCredential {
   fingerprint: string | null;
 }
 
+interface PreviewAiProviderHealthRow {
+  ownerScope: PreviewAiCredentialScope;
+  ownerId: string;
+  providerKind: PreviewAiProvider;
+  modelCode: string;
+  status: 'UNCHECKED' | 'HEALTHY' | 'FAILED';
+  latencyMs: number | null;
+  failureCode: string | null;
+  providerStatus: number | null;
+  checkedAt: string | null;
+}
+
 function previewAiMasterKey(env: CloudflareEnv): string | null {
   const key = env.AI_CREDENTIAL_MASTER_KEY ?? env.GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY ?? '';
   return /^[0-9a-f]{64}$/iu.test(key) ? key.toLowerCase() : null;
@@ -4710,9 +4717,26 @@ async function resolveOrganizationAiCredential(env: CloudflareEnv, provider: Pre
   return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) } : null;
 }
 
+async function writePreviewAiProviderHealth(
+  env: CloudflareEnv,
+  input: PreviewAiProviderHealthRow & { checkedBy: string | null }
+): Promise<void> {
+  if (!env.DB) return;
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      'INSERT INTO preview_ai_provider_health (organization_id,owner_scope,owner_id,provider_kind,model_code,status,latency_ms,failure_code,provider_status,checked_by,checked_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ' +
+      'ON CONFLICT(organization_id,owner_scope,owner_id,provider_kind) DO UPDATE SET model_code=excluded.model_code,status=excluded.status,latency_ms=excluded.latency_ms,failure_code=excluded.failure_code,provider_status=excluded.provider_status,checked_by=excluded.checked_by,checked_at=excluded.checked_at,updated_at=excluded.updated_at'
+    ).bind(PREVIEW_ORGANIZATION_ID,input.ownerScope,input.ownerId,input.providerKind,input.modelCode,input.status,input.latencyMs,input.failureCode,input.providerStatus,input.checkedBy,input.checkedAt,now).run();
+  } catch {
+    // Isolated fixtures created before CF86 remain compatible.
+  }
+}
+
 async function previewAiCredentialMetadata(env: CloudflareEnv, user: SessionUser): Promise<Record<string, unknown>> {
   const providers = ['OPENAI', 'ANTHROPIC', 'GEMINI'] as PreviewAiProvider[];
   const rows: PreviewAiCredentialRow[] = [];
+  const healthRows: PreviewAiProviderHealthRow[] = [];
   if (env.DB) {
     try {
       const result = await env.DB.prepare(
@@ -4723,17 +4747,28 @@ async function previewAiCredentialMetadata(env: CloudflareEnv, user: SessionUser
     } catch {
       // The additive credential migration may not exist in older isolated fixtures.
     }
+    try {
+      const result = await env.DB.prepare(
+        'SELECT owner_scope AS ownerScope,owner_id AS ownerId,provider_kind AS providerKind,model_code AS modelCode,status,latency_ms AS latencyMs,failure_code AS failureCode,provider_status AS providerStatus,checked_at AS checkedAt ' +
+        'FROM preview_ai_provider_health WHERE organization_id=? AND ((owner_scope=\'USER\' AND owner_id=?) OR (owner_scope=\'ORGANIZATION\' AND owner_id=?))'
+      ).bind(PREVIEW_ORGANIZATION_ID,user.id,PREVIEW_ORGANIZATION_ID).all<PreviewAiProviderHealthRow>();
+      healthRows.push(...result.results.map((row)=>({...row,latencyMs:row.latencyMs===null?null:Number(row.latencyMs),providerStatus:row.providerStatus===null?null:Number(row.providerStatus)})));
+    } catch {
+      // CF86 health metadata is optional in older isolated fixtures.
+    }
   }
   const state = (provider: PreviewAiProvider, scope: PreviewAiCredentialScope) => {
     const ownerId = scope === 'USER' ? user.id : PREVIEW_ORGANIZATION_ID;
     const row = rows.find((item) => item.providerKind === provider && item.ownerScope === scope && item.ownerId === ownerId);
+    const health = healthRows.find((item) => item.providerKind === provider && item.ownerScope === scope && item.ownerId === ownerId);
     const environment = scope === 'ORGANIZATION' && previewProviderConfigured(env, provider);
     return {
       configured: row?.status === 'ACTIVE' || environment,
       storage: row?.status === 'ACTIVE' ? 'ENCRYPTED_D1' : environment ? 'CLOUDFLARE_SECRET' : 'NONE',
       version: Number(row?.version ?? 0),
       updatedAt: row?.updatedAt ?? null,
-      fingerprint: row?.status === 'ACTIVE' ? row.keyFingerprint.slice(0, 12) : null
+      fingerprint: row?.status === 'ACTIVE' ? row.keyFingerprint.slice(0, 12) : null,
+      health: health ?? { status: 'UNCHECKED', modelCode: '', latencyMs: null, failureCode: null, providerStatus: null, checkedAt: null }
     };
   };
   return {
@@ -4792,8 +4827,9 @@ function previewPersonalGeminiAssistantRoute(routes: PreviewAiRouteRow[]): Previ
 
 async function previewOrganizationGeminiAutomationRoute(env: CloudflareEnv): Promise<PreviewAiRouteRow> {
   const routes = await previewAiRoutes(env);
-  const configured = routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'FACT_CHECK' && previewModelAllowed('GEMINI', route.modelCode))
+  const configured = routes.find((route) => route.providerKind === 'GEMINI' && route.modelCode === 'gemini-3.7-flash')
     ?? routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'CHAPTER_WRITING' && previewModelAllowed('GEMINI', route.modelCode))
+    ?? routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'FACT_CHECK' && previewModelAllowed('GEMINI', route.modelCode))
     ?? routes.find((route) => route.providerKind === 'GEMINI' && previewModelAllowed('GEMINI', route.modelCode));
   return configured ?? {
     taskKind: 'CHAPTER_WRITING',
@@ -5346,6 +5382,113 @@ function safeGeminiProviderError(payload: unknown, httpStatus: number): { code: 
   return { code: 'GEMINI_REQUEST_FAILED', error: 'Gemini가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', providerReason };
 }
 
+type PreviewAiReasoningEffort = 'low' | 'medium' | 'high';
+
+interface GeminiContentRequest {
+  modelCode: string;
+  apiKey: string;
+  system: string;
+  parts: Array<Record<string, unknown>>;
+  reasoningEffort: PreviewAiReasoningEffort;
+  maxOutputTokens: number;
+  timeoutMs: number;
+  responseMimeType?: 'application/json' | 'text/plain';
+  responseSchema?: Record<string, unknown>;
+  unavailableCode?: string;
+  unavailableLabel?: string;
+}
+
+function normalizedGeminiReasoningEffort(value: string): PreviewAiReasoningEffort {
+  return value === 'high' ? 'high' : value === 'low' || value === 'minimal' ? 'low' : 'medium';
+}
+
+function normalizedOpenAiReasoningEffort(value: string): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
+  if (value === 'max' || value === 'xhigh' || value === 'high' || value === 'low') return value;
+  return value === 'minimal' ? 'low' : 'medium';
+}
+
+function normalizedAnthropicReasoningEffort(value: string): 'low' | 'medium' | 'high' | 'max' {
+  if (value === 'max' || value === 'high' || value === 'low') return value;
+  return value === 'xhigh' ? 'max' : value === 'minimal' ? 'low' : 'medium';
+}
+
+function previewAiNetworkFailure(provider: PreviewAiProvider, reason: unknown, unavailableCode?: string, unavailableLabel?: string): Response {
+  const timedOut = reason instanceof Error && reason.name === 'AbortError';
+  const code = unavailableCode ?? `${provider}_${timedOut ? 'TIMEOUT' : 'NETWORK_UNAVAILABLE'}`;
+  const label = unavailableLabel ?? (provider === 'OPENAI' ? 'OpenAI' : provider === 'ANTHROPIC' ? 'Claude' : 'Gemini');
+  return json({
+    error: timedOut
+      ? `${label} 응답 제한 시간을 초과했습니다. 잠시 후 다시 시도하거나 설정에서 연결 상태를 확인해 주세요.`
+      : `${label} 서버에 연결하지 못했습니다. 잠시 후 다시 시도하거나 설정에서 연결 상태를 확인해 주세요.`,
+    code,
+    providerReason: timedOut ? 'TIMEOUT' : 'NETWORK_FAILURE'
+  }, 504);
+}
+
+function safeNonGeminiProviderError(provider: 'OPENAI' | 'ANTHROPIC', payload: unknown, httpStatus: number): { code: string; error: string; providerReason: string } {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : null;
+  const nested = record?.error && typeof record.error === 'object' ? record.error as Record<string, unknown> : null;
+  const rawReason = [nested?.code, nested?.type, record?.type].find((value): value is string => typeof value === 'string') ?? `HTTP_${httpStatus}`;
+  const providerReason = rawReason.replace(/[^A-Za-z0-9_-]/gu, '_').toUpperCase().slice(0, 64) || `HTTP_${httpStatus}`;
+  const label = provider === 'OPENAI' ? 'OpenAI' : 'Claude';
+  if (httpStatus === 401) return { code: `${provider}_INVALID_API_KEY`, error: `${label} API 키가 유효하지 않습니다. 설정에서 키를 교체한 뒤 연결 확인을 실행해 주세요.`, providerReason };
+  if (httpStatus === 403) return { code: `${provider}_PERMISSION_DENIED`, error: `${label} API 또는 선택 모델 사용 권한이 없습니다. 공급자 프로젝트 권한을 확인해 주세요.`, providerReason };
+  if (httpStatus === 429) return { code: `${provider}_QUOTA_OR_RATE_LIMIT`, error: `${label} 사용 한도 또는 호출 속도 제한에 도달했습니다. 공급자 사용량과 결제 상태를 확인해 주세요.`, providerReason };
+  if (httpStatus === 400 || httpStatus === 404) return { code: `${provider}_MODEL_OR_REQUEST_REJECTED`, error: `${label}가 선택 모델 또는 요청 형식을 승인하지 않았습니다. 관리자 모델 설정을 확인해 주세요.`, providerReason };
+  return { code: `${provider}_REQUEST_FAILED`, error: `${label}가 요청을 처리하지 못했습니다. 잠시 후 다시 시도하고 계속 실패하면 설정에서 연결 상태를 확인해 주세요.`, providerReason };
+}
+
+async function generateGeminiContent(
+  env: CloudflareEnv,
+  request: GeminiContentRequest
+): Promise<{ content?: string; payload?: unknown; latencyMs: number; response?: Response }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    const generationConfig: Record<string, unknown> = {
+      maxOutputTokens: request.maxOutputTokens,
+      thinkingConfig: { thinkingLevel: request.reasoningEffort }
+    };
+    if (request.responseMimeType) generationConfig.responseMimeType = request.responseMimeType;
+    if (request.responseSchema) generationConfig.responseSchema = request.responseSchema;
+    response = await (env.GEMINI_TEST_FETCH ?? fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(request.modelCode)}:generateContent`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': request.apiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: request.system }] },
+        contents: [{ role: 'user', parts: request.parts }],
+        generationConfig
+      })
+    });
+  } catch (reason) {
+    clearTimeout(timeout);
+    return {
+      latencyMs: Date.now() - startedAt,
+      response: previewAiNetworkFailure('GEMINI', reason, request.unavailableCode, request.unavailableLabel)
+    };
+  }
+  clearTimeout(timeout);
+  if (!response.ok) {
+    const safe = safeGeminiProviderError(await response.json().catch(() => null), response.status);
+    return {
+      latencyMs: Date.now() - startedAt,
+      response: json({ ...safe, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502)
+    };
+  }
+  const payload = await response.json().catch(() => null);
+  const content = extractGeminiText(payload) ?? undefined;
+  if (!content || content.length > 200_000) {
+    return {
+      latencyMs: Date.now() - startedAt,
+      response: json({ error: 'Gemini 응답 형식이 올바르지 않습니다.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502)
+    };
+  }
+  return { content, payload, latencyMs: Date.now() - startedAt };
+}
+
 async function generatePreviewAiText(
   env: CloudflareEnv,
   route: PreviewAiRouteRow,
@@ -5353,12 +5496,27 @@ async function generatePreviewAiText(
   input: string,
   actorId: string,
   credentialOverride?: ResolvedPreviewAiCredential,
-  timeoutMs = 90_000
+  timeoutMs = 90_000,
+  maxOutputTokens = 16_000
 ): Promise<{ content?: string; credentialSource?: PreviewAiCredentialSource; response?: Response }> {
   const provider = route.providerKind as PreviewAiProvider;
   const credential = credentialOverride ?? await resolvePreviewAiCredential(env, actorId, provider);
   const apiKey = credential?.apiKey;
   if (!apiKey) return { response: json({ error: `내 설정 또는 관리자 설정에서 ${provider} API 키를 연결해 주세요.`, code: `${provider}_NOT_CONFIGURED` }, 503) };
+  if (provider === 'GEMINI') {
+    const generated = await generateGeminiContent(env, {
+      modelCode: route.modelCode,
+      apiKey,
+      system,
+      parts: [{ text: input }],
+      reasoningEffort: normalizedGeminiReasoningEffort(route.reasoningEffort),
+      maxOutputTokens,
+      timeoutMs
+    });
+    return generated.response
+      ? { response: generated.response }
+      : { content: generated.content, credentialSource: credential.source };
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let endpoint = '';
@@ -5371,36 +5529,32 @@ async function generatePreviewAiText(
     providerFetch = env.OPENAI_TEST_FETCH ?? fetch;
     body = {
       model: route.modelCode, store: false, safety_identifier: await sha256Hex(`${PREVIEW_ORGANIZATION_ID}:${actorId}`),
-      reasoning: { effort: route.reasoningEffort }, text: { verbosity: 'high' }, instructions: system, input
+      reasoning: { effort: normalizedOpenAiReasoningEffort(route.reasoningEffort) }, text: { verbosity: maxOutputTokens <= 128 ? 'low' : 'high' }, max_output_tokens: maxOutputTokens, instructions: system, input
     };
-  } else if (provider === 'GEMINI') {
-    endpoint = 'https://generativelanguage.googleapis.com/v1beta/interactions';
-    headers = { ...headers, 'x-goog-api-key': apiKey };
-    providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
-    body = { model: route.modelCode, system_instruction: system, input, generation_config: { thinking_level: route.reasoningEffort } };
   } else {
     endpoint = 'https://api.anthropic.com/v1/messages';
     headers = { ...headers, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
     providerFetch = env.ANTHROPIC_TEST_FETCH ?? fetch;
-    body = { model: route.modelCode, max_tokens: 16_000, system, messages: [{ role: 'user', content: input }] };
+    body = { model: route.modelCode, max_tokens: maxOutputTokens, system, messages: [{ role: 'user', content: input }] };
+    if (/^claude-(?:fable|opus|sonnet)-5$/u.test(route.modelCode)) {
+      body.thinking = { type: 'adaptive' };
+      body.output_config = { effort: normalizedAnthropicReasoningEffort(route.reasoningEffort) };
+    }
   }
   let response: Response;
   try {
     response = await providerFetch(endpoint, { method: 'POST', signal: controller.signal, headers, body: JSON.stringify(body) });
-  } catch {
+  } catch (reason) {
     clearTimeout(timeout);
-    return { response: json({ error: 'AI 공급자 응답 시간이 초과되었거나 연결에 실패했습니다.', code: `${provider}_UNAVAILABLE` }, 504) };
+    return { response: previewAiNetworkFailure(provider, reason) };
   }
   clearTimeout(timeout);
   if (!response.ok) {
-    if (provider === 'GEMINI') {
-      const safeFailure = safeGeminiProviderError(await response.json().catch(() => null), response.status);
-      return { response: json({ ...safeFailure, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
-    }
-    return { response: json({ error: 'AI 공급자가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', code: `${provider}_REQUEST_FAILED`, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
+    const safeFailure = safeNonGeminiProviderError(provider, await response.json().catch(() => null), response.status);
+    return { response: json({ ...safeFailure, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
   }
   const payload = await response.json().catch(() => null);
-  const content = provider === 'OPENAI' ? extractOpenAiText(payload) : provider === 'GEMINI' ? extractGeminiText(payload) : extractAnthropicText(payload);
+  const content = provider === 'OPENAI' ? extractOpenAiText(payload) : extractAnthropicText(payload);
   if (!content || content.length > 200_000) return { response: json({ error: 'AI 공급자 응답 형식이 올바르지 않습니다.', code: `${provider}_MALFORMED_RESPONSE` }, 502) };
   return { content, credentialSource: credential.source };
 }
@@ -5439,12 +5593,24 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
     if (!credential) return json({ error: '저장된 API 키가 없습니다.', code: `${provider}_NOT_CONFIGURED` }, 409);
     const modelCode = hasModelCode ? String(body.modelCode) : PREVIEW_AI_MODELS[provider][0]?.code ?? '';
     const route = {
-      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: provider === 'GEMINI' ? 'medium' : provider === 'OPENAI' ? 'low' : 'high',
+      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: 'low',
       secretName: previewProviderSecretName(provider), version: 1, updatedAt: new Date().toISOString(), updatedByName: user.displayName
     } as PreviewAiRouteRow;
-    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential);
-    if (tested.response) return tested.response;
-    return json({ ok: true, providerKind: provider, source: credential.source, checkedAt: new Date().toISOString(), phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
+    const startedAt = Date.now();
+    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential, 30_000, 64);
+    const checkedAt = new Date().toISOString();
+    const latencyMs = Date.now() - startedAt;
+    if (tested.response) {
+      const failure = await tested.response.clone().json().catch(() => null) as Record<string,unknown> | null;
+      await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode,status:'FAILED',latencyMs,failureCode:typeof failure?.code==='string'?failure.code:'UNKNOWN_PROVIDER_FAILURE',providerStatus:typeof failure?.providerStatus==='number'?failure.providerStatus:null,checkedBy:user.id,checkedAt});
+      return tested.response;
+    }
+    if (!/^OK\b/iu.test(tested.content?.trim() ?? '')) {
+      await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode,status:'FAILED',latencyMs,failureCode:`${provider}_CONNECTION_CHECK_MALFORMED`,providerStatus:502,checkedBy:user.id,checkedAt});
+      return json({error:'AI 공급자가 연결 확인용 정상 응답을 반환하지 않았습니다. 선택 모델과 공급자 상태를 확인해 주세요.',code:`${provider}_CONNECTION_CHECK_MALFORMED`},502);
+    }
+    await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode,status:'HEALTHY',latencyMs,failureCode:null,providerStatus:200,checkedBy:user.id,checkedAt});
+    return json({ ok: true, providerKind: provider, source: credential.source, checkedAt, latencyMs, phase: 'CF86_AI_RUNTIME_RELIABILITY' });
   }
 
   if (!['PUT', 'DELETE'].includes(request.method)) return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
@@ -5480,6 +5646,7 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
   } catch {
     return json({ error: '암호화된 AI 키를 저장하지 못했습니다.', code: 'AI_CREDENTIAL_WRITE_FAILED' }, 503);
   }
+  await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode:PREVIEW_AI_MODELS[provider][0]?.code??'',status:'UNCHECKED',latencyMs:null,failureCode:null,providerStatus:null,checkedBy:null,checkedAt:null});
   return json({ ...(await previewAiCredentialMetadata(env, user)), canManageOrganization: user.roles.includes('admin'), phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
 }
 
@@ -7567,35 +7734,20 @@ async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, f
   const credential = await resolveOrganizationAiCredential(env, 'GEMINI');
   if (!credential) return json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503);
   const route = await previewOrganizationGeminiAutomationRoute(env);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90_000);
-  let response: Response;
-  try {
-    response = await (env.GEMINI_TEST_FETCH ?? fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(route.modelCode)}:generateContent`, {
-      method: 'POST', signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': credential.apiKey },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: '당신은 한국어와 영문 명함을 정확하게 구조화하는 회사 인맥관리 보조자입니다. 이미지에서 실제로 보이는 정보만 추출하고 추측하지 마세요. 값이 없거나 불확실하면 빈 문자열로 반환하세요. 전화번호 종류와 이름·회사·부서·직함을 문맥으로 구분하세요.' }] },
-        contents: [{ role: 'user', parts: [
-          { text: '이 명함을 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 짧게 정리하고, 개인정보를 새로 추측하지 마세요.' },
-          { inline_data: { mime_type: validated.mimeType, data: bytesToBase64(validated.bytes) } }
-        ] }],
-        generationConfig: {
-          responseMimeType: 'application/json', maxOutputTokens: 2048,
-          responseSchema: { type: 'OBJECT', required: [...BUSINESS_CARD_FIELD_KEYS], properties: Object.fromEntries(BUSINESS_CARD_FIELD_KEYS.map((key) => [key, { type: 'STRING' }])) }
-        }
-      })
-    });
-  } catch {
-    clearTimeout(timeout);
-    return json({ error: 'Gemini 명함 인식 시간이 초과되었습니다. 이미지를 확인한 뒤 다시 시도해 주세요.', code: 'GEMINI_BUSINESS_CARD_UNAVAILABLE' }, 504);
-  }
-  clearTimeout(timeout);
-  if (!response.ok) {
-    const safe = safeGeminiProviderError(await response.json().catch(() => null), response.status);
-    return json({ ...safe, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502);
-  }
-  const rawText = extractGeminiText(await response.json().catch(() => null));
+  const generated = await generateGeminiContent(env, {
+    modelCode: route.modelCode, apiKey: credential.apiKey,
+    system: '당신은 한국어와 영문 명함을 정확하게 구조화하는 회사 인맥관리 보조자입니다. 이미지에서 실제로 보이는 정보만 추출하고 추측하지 마세요. 값이 없거나 불확실하면 빈 문자열로 반환하세요. 전화번호 종류와 이름·회사·부서·직함을 문맥으로 구분하세요.',
+    parts: [
+      { text: '이 명함을 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 짧게 정리하고, 개인정보를 새로 추측하지 마세요.' },
+      { inline_data: { mime_type: validated.mimeType, data: bytesToBase64(validated.bytes) } }
+    ],
+    reasoningEffort: 'low', maxOutputTokens: 2048, timeoutMs: 45_000,
+    responseMimeType: 'application/json',
+    responseSchema: { type: 'OBJECT', required: [...BUSINESS_CARD_FIELD_KEYS], properties: Object.fromEntries(BUSINESS_CARD_FIELD_KEYS.map((key) => [key, { type: 'STRING' }])) },
+    unavailableCode: 'GEMINI_BUSINESS_CARD_UNAVAILABLE', unavailableLabel: 'Gemini 명함 인식'
+  });
+  if (generated.response) return generated.response;
+  const rawText = generated.content;
   let parsedJson: unknown = null;
   if (rawText) {
     try {

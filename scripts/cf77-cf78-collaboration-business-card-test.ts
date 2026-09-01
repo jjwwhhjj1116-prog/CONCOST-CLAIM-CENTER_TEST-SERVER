@@ -105,5 +105,5 @@ test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the ori
 
 test('CF78 routes and responsive UI expose contacts to members and DB management only to admins',()=>{
   const router=readFileSync('apps/web/src/routes/Router.tsx','utf8');const shell=readFileSync('apps/web/src/layout/AppShell.tsx','utf8');const ui=readFileSync('apps/web/src/routes/BusinessCardContacts.tsx','utf8');const css=readFileSync('apps/web/src/routes/BusinessCardContacts.css','utf8');
-  assert.match(router,/CONTACT-03[\s\S]*allowedRoles: ADMIN_ONLY/u);assert.match(shell,/인맥관리[\s\S]*CONTACT-03/u);assert.match(ui,/Gemini 구조화 인식/u);assert.match(ui,/Google Drive 원본 저장/u);assert.match(ui,/AiGenerationProgressModal/u);assert.match(ui,/timeoutMs:105_000/u);assert.match(ui,/Gemini 인식 다시 시도/u);assert.match(css,/@media\(max-width:720px\)/u);
+  assert.match(router,/CONTACT-03[\s\S]*allowedRoles: ADMIN_ONLY/u);assert.match(shell,/인맥관리[\s\S]*CONTACT-03/u);assert.match(ui,/Gemini 구조화 인식/u);assert.match(ui,/Google Drive 원본 저장/u);assert.match(ui,/AiGenerationProgressModal/u);assert.match(ui,/timeoutMs:55_000/u);assert.match(ui,/Gemini 인식 다시 시도/u);assert.match(css,/@media\(max-width:720px\)/u);
 });

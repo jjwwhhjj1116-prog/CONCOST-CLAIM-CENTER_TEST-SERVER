@@ -82,9 +82,14 @@
 .credential-provider-grid h3 { margin:0; color:#172033; font-size:.95rem; }
 .credential-provider-grid header p { margin:3px 0 0; color:#64748b; font-size:.72rem; }
 .credential-provider-grid header > strong { color:#64748b; font-size:.7rem; }
-.credential-provider-grid [data-configured='true'] header > strong { color:#059669; }
+.credential-provider-grid [data-health='HEALTHY'] header > strong { color:#047857; }
+.credential-provider-grid [data-health='FAILED'] header > strong { color:#b42318; }
+.credential-provider-grid [data-health='UNCHECKED'][data-configured='true'] header > strong { color:#a15c05; }
 .credential-state { min-height:48px; display:grid; align-content:center; margin:14px 0; padding:9px 11px; border-radius:10px; background:#f1f5f9; color:#475569; font-size:.72rem; }
 .credential-state small { color:#7c8ba1; }
+.credential-provider-grid [data-health='HEALTHY'] .credential-state { border:1px solid #a7f3d0; background:#ecfdf5; }
+.credential-provider-grid [data-health='FAILED'] .credential-state { border:1px solid #fecaca; background:#fff1f2; }
+.credential-provider-grid [data-health='FAILED'] .credential-state small { color:#9f2f28; overflow-wrap:anywhere; }
 .credential-provider-grid label { display:block; margin-bottom:6px; color:#334155; font-weight:800; font-size:.72rem; }
 .credential-provider-grid input,.credential-provider-grid select { width:100%; box-sizing:border-box; min-height:42px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#172033; }
 .credential-input-help { display:block; margin-top:6px; color:#64748b; line-height:1.45; }

@@ -39,8 +39,8 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; usedKeys: s
   for (const name of ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql']) sql.exec(migration(name));
   const now = new Date().toISOString();
   const insertUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
-  insertUser(ADMIN_ID,'admin','["admin"]'); sql.exec(migration('0010_cf10_product_experience.sql')); insertUser(STAFF_ID,'staff','["staff"]');
-  for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql']) sql.exec(migration(name));
+  insertUser(ADMIN_ID,'admin','["admin"]'); sql.exec(migration('0010_cf10_product_experience.sql')); insertUser(STAFF_ID,'staff','["pm"]');
+  for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0056_cf86_ai_runtime_reliability.sql']) sql.exec(migration(name));
   sql.run('INSERT INTO preview_case_assignments VALUES (?, ?, ?, ?)', [CASE_ID, STAFF_ID, ADMIN_ID, now]);
   for (const [token,id] of [[ADMIN_TOKEN,ADMIN_ID],[STAFF_TOKEN,STAFF_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token),id,now,new Date(Date.now()+3_600_000).toISOString()]);
   const usedKeys: string[] = [];
@@ -50,7 +50,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; usedKeys: s
     GEMINI_API_KEY: ENVIRONMENT_KEY,
     GEMINI_TEST_FETCH: async (_input, init) => {
       usedKeys.push(new Headers(init?.headers).get('x-goog-api-key') ?? '');
-      return new Response(JSON.stringify({ status:'completed', steps:[{ type:'model_output', content:[{ type:'text', text:'암호화 설정 검증 초안' }] }] }), { status:200, headers:{ 'Content-Type':'application/json' } });
+      return new Response(JSON.stringify({ candidates:[{ content:{ parts:[{ text:'OK' }] } }] }), { status:200, headers:{ 'Content-Type':'application/json' } });
     }
   };
   return { sql, env, usedKeys };
@@ -86,6 +86,7 @@ test('CF26 uses personal key before organization and environment, then falls bac
   configResponse=await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`,STAFF_TOKEN),env); config=await configResponse.json() as {credentialSource:string;assistantConnected:boolean;assistantCredentialSource:string;chapters:Array<{id:string}>}; assert.equal(config.credentialSource,'ORGANIZATION'); assert.equal(config.assistantConnected,true); assert.equal(config.assistantCredentialSource,'ORGANIZATION');
   const organizationImprove=await worker.fetch(request('/api/report-authoring/improve',STAFF_TOKEN,{method:'POST',body:JSON.stringify({caseId:CASE_ID,content:'개인 키가 없으면 관리자 공용 키로 개선합니다.',instruction:'문장을 더 명확하게 개선해 주세요.',expectedDraftVersion:0})}),env); assert.equal(organizationImprove.status,200); assert.equal((await organizationImprove.json() as {credentialSource:string}).credentialSource,'ORGANIZATION'); assert.equal(usedKeys.at(-1),ORGANIZATION_KEY);
   const tested=await worker.fetch(request('/api/settings/ai-credentials/GEMINI/test',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({scope:'ORGANIZATION',modelCode:'gemini-3.7-flash'})}),env); assert.equal(tested.status,200); assert.equal(usedKeys.at(-1),ORGANIZATION_KEY);
+  const health=sql.exec("SELECT status,model_code,provider_status,latency_ms FROM preview_ai_provider_health WHERE owner_scope='ORGANIZATION' AND provider_kind='GEMINI'")[0].values[0];assert.equal(health[0],'HEALTHY');assert.equal(health[1],'gemini-3.7-flash');assert.equal(health[2],200);assert.ok(Number(health[3])>=0);
   const responseText=await tested.text(); assert.doesNotMatch(responseText,new RegExp(`${PERSONAL_KEY}|${ORGANIZATION_KEY}|${ENVIRONMENT_KEY}`,'u'));
   sql.close();
 });
