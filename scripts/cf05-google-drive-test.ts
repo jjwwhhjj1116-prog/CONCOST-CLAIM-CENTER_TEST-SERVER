@@ -289,10 +289,10 @@ describe('CF05 Google Drive direct storage contract', () => {
         }
       }
       if (method === 'POST' && body?.appProperties && (body.appProperties as Record<string, unknown>).concostFolderKind === 'ORGANIZATION_ROOT') {
-        return Response.json({ id: 'concost_root_12345', name: 'CONCOST ERP 그룹웨어', mimeType: 'application/vnd.google-apps.folder', trashed: false });
+        return Response.json({ id: 'concost_root_12345', name: 'CONCOST 자료실', mimeType: 'application/vnd.google-apps.folder', trashed: false });
       }
       if (method === 'POST' && body?.appProperties && (body.appProperties as Record<string, unknown>).concostFolderKind === 'DEPARTMENT_ROOT') {
-        return Response.json({ id: 'claim_department_12345', name: '02_클레임센터', mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: ['concost_root_12345'] });
+        return Response.json({ id: 'claim_department_12345', name: '20_클레임센터', mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: ['concost_root_12345'] });
       }
       if (method === 'PATCH' && url.pathname.endsWith('/legacy_project_12345')) {
         return Response.json({ id: 'legacy_project_12345', name: '기존 프로젝트', mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: ['claim_department_12345'] });

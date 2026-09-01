@@ -355,8 +355,8 @@ function driveQueryValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
 }
 
-export const CONCOST_DRIVE_ROOT_NAME = 'CONCOST ERP 그룹웨어';
-export const CLAIM_CENTER_DEPARTMENT_FOLDER_NAME = '02_클레임센터';
+export const CONCOST_DRIVE_ROOT_NAME = 'CONCOST 자료실';
+export const CLAIM_CENTER_DEPARTMENT_FOLDER_NAME = '20_클레임센터';
 
 export async function ensureClaimCenterDepartmentRoot(
   fetcher: GoogleFetch,
@@ -388,7 +388,22 @@ export async function ensureClaimCenterDepartmentRoot(
       .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
       .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
       .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
-    if (existing) return String(existing.id);
+    if (existing) {
+      const existingId = String(existing.id);
+      if (existing.name !== name) {
+        const renamed = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(existingId)}?fields=id,name`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        if (!renamed.ok) throw providerFailure(renamed, 'Google Drive department folder rename', true);
+        const result = await safeJson(renamed);
+        if (result.id !== existingId || result.name !== name) {
+          throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid renamed department folder metadata', true);
+        }
+      }
+      return existingId;
+    }
     const metadata = {
       name,
       mimeType: 'application/vnd.google-apps.folder',

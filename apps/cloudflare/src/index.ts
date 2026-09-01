@@ -6,6 +6,7 @@ import {
   createPkce,
   decryptSecret,
   downloadEvidenceFromDrive,
+  ensureClaimCenterDepartmentRoot,
   ensureClaimCenterFolder,
   ensureReportTemplateFolder,
   encryptSecret,
@@ -19,6 +20,8 @@ import {
   validateEvidenceFile,
   validateReportTemplateFile,
   verifyDriveFolder,
+  CLAIM_CENTER_DEPARTMENT_FOLDER_NAME,
+  CONCOST_DRIVE_ROOT_NAME,
   type ClaimCenterFolderKind,
   type GoogleFetch
 } from './google-drive';
@@ -154,6 +157,8 @@ const PREVIEW_SESSION_SECONDS = 12 * 60 * 60;
 // login, signup, and password changes use the same Worker-safe cost.
 const PREVIEW_PASSWORD_ITERATIONS = 100_000;
 const PREVIEW_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
+const PREVIEW_DEPARTMENTS = new Set(['MANAGEMENT_SUPPORT', 'TECHNICAL_HQ', 'CLAIM_CENTER', 'DEVELOPMENT', 'UNASSIGNED']);
+const CLAIM_CENTER_DRIVE_DEPARTMENTS = new Set(['MANAGEMENT_SUPPORT', 'CLAIM_CENTER']);
 const RESPONSIBLE_PM_NAMES = ['현동명', '이원희', '이경훈', '최영배', '장범선'] as const;
 const RESPONSIBLE_PM_NAME_SET = new Set<string>(RESPONSIBLE_PM_NAMES);
 
@@ -166,6 +171,7 @@ interface PreviewUserRow {
   displayName: string;
   email: string;
   rolesJson: string;
+  departmentCode?: string;
 }
 
 interface SessionUser {
@@ -174,6 +180,11 @@ interface SessionUser {
   displayName: string;
   email: string;
   roles: string[];
+  departmentCode: string;
+}
+
+function canAccessClaimCenterDrive(user: SessionUser): boolean {
+  return user.roles.includes('admin') || CLAIM_CENTER_DRIVE_DEPARTMENTS.has(user.departmentCode);
 }
 
 function constantTimeHexEqual(left: string | null, right: string): boolean {
@@ -218,8 +229,8 @@ async function previewSessionUser(request: Request, env: CloudflareEnv): Promise
   if (!token) return null;
 
   const tokenHash = await sha256Hex(token);
-  const row = await env.DB.prepare(
-    'SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson ' +
+  const query = (includeDepartment: boolean) => env.DB!.prepare(
+    `SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson, ${includeDepartment ? 'u.department_code' : "'CLAIM_CENTER'"} AS departmentCode ` +
     'FROM preview_sessions s JOIN preview_users u ON u.id = s.user_id ' +
     'WHERE s.id_hash = ? AND s.expires_at > ? AND u.is_active = 1'
   ).bind(tokenHash, new Date().toISOString()).first<{
@@ -228,7 +239,9 @@ async function previewSessionUser(request: Request, env: CloudflareEnv): Promise
     displayName: string;
     email: string;
     rolesJson: string;
+    departmentCode: string;
   }>();
+  const row = await query(true).catch(() => query(false));
 
   if (!row) return null;
   return {
@@ -236,7 +249,8 @@ async function previewSessionUser(request: Request, env: CloudflareEnv): Promise
     loginId: row.loginId,
     displayName: row.displayName,
     email: row.email,
-    roles: parsePreviewRoles(row.rolesJson)
+    roles: parsePreviewRoles(row.rolesJson),
+    departmentCode: PREVIEW_DEPARTMENTS.has(row.departmentCode) ? row.departmentCode : 'UNASSIGNED'
   };
 }
 
@@ -274,6 +288,7 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
       name: user.displayName,
       organizationId: 'concost',
       roles: user.roles,
+      departmentCode: user.departmentCode,
       previewMode: true
     });
   }
@@ -284,11 +299,12 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
       return json({ error: 'loginId and password are required', code: 'INVALID_LOGIN_PAYLOAD' }, 400);
     }
 
-    const user = await env.DB.prepare(
+    const loginQuery = (includeDepartment: boolean) => env.DB!.prepare(
       'SELECT id, login_id AS loginId, password_salt AS passwordSalt, password_hash AS passwordHash, ' +
-      'password_iterations AS passwordIterations, display_name AS displayName, email, roles_json AS rolesJson ' +
+      `password_iterations AS passwordIterations, display_name AS displayName, email, roles_json AS rolesJson, ${includeDepartment ? 'department_code' : "'CLAIM_CENTER'"} AS departmentCode ` +
       'FROM preview_users WHERE login_id = ? COLLATE NOCASE AND is_active = 1'
     ).bind(body.loginId.trim()).first<PreviewUserRow>();
+    const user = await loginQuery(true).catch(() => loginQuery(false));
 
     if (!user) return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
 
@@ -318,6 +334,7 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
         name: user.displayName,
         organizationId: 'concost',
         roles,
+        departmentCode: PREVIEW_DEPARTMENTS.has(user.departmentCode ?? '') ? user.departmentCode : 'UNASSIGNED',
         previewMode: true
       },
       phase: 'CF04_AUTH'
@@ -676,6 +693,7 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
   if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
   const url = new URL(request.url);
   const accountSchemaAvailable = await env.DB.prepare('SELECT version FROM preview_users LIMIT 0').all().then(() => true).catch(() => false);
+  const departmentSchemaAvailable = await env.DB.prepare('SELECT department_code FROM preview_users LIMIT 0').all().then(() => true).catch(() => false);
 
   if (url.pathname === '/api/admin/registration-requests' && request.method === 'GET') {
     const rows=await env.DB.prepare('SELECT r.id,r.login_id AS loginId,r.display_name AS displayName,r.email,r.requested_role AS requestedRole,r.request_note AS requestNote,r.status,r.review_note AS reviewNote,r.reviewed_at AS reviewedAt,r.version,r.created_at AS createdAt,reviewer.display_name AS reviewedByName FROM preview_user_registration_requests r LEFT JOIN preview_users reviewer ON reviewer.id=r.reviewed_by ORDER BY CASE r.status WHEN \'PENDING\' THEN 0 ELSE 1 END,r.created_at DESC LIMIT 200').all<Record<string,unknown>>().catch(()=>({results:[]}));
@@ -708,11 +726,11 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
 
   if (request.method === 'GET') {
     const rows = await env.DB.prepare(
-      `SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson, u.is_active AS active, ${accountSchemaAvailable ? 'u.version' : '1'} AS version, ` +
+      `SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson, u.is_active AS active, ${accountSchemaAvailable ? 'u.version' : '1'} AS version, ${departmentSchemaAvailable ? 'u.department_code' : "'CLAIM_CENTER'"} AS departmentCode, ` +
       `(SELECT COUNT(*) FROM preview_case_assignments a WHERE a.user_id = u.id) AS assignedCaseCount ` +
       `FROM preview_users u ORDER BY u.is_active DESC, u.display_name COLLATE NOCASE`
-    ).all<{ id: string; loginId: string; displayName: string; email: string; rolesJson: string; active: number; version: number; assignedCaseCount: number }>();
-    return json({ users: rows.results.map((entry) => ({ id: entry.id, loginId: entry.loginId, displayName: entry.displayName, email: entry.email, roles: parsePreviewRoles(entry.rolesJson), active: entry.active === 1, version: Number(entry.version), assignedCaseCount: Number(entry.assignedCaseCount ?? 0) })), phase: accountSchemaAvailable ? 'CF38_ADMIN_ACCOUNTS' : 'CF10_PRODUCT_EXPERIENCE' });
+    ).all<{ id: string; loginId: string; displayName: string; email: string; rolesJson: string; active: number; version: number; departmentCode: string; assignedCaseCount: number }>();
+    return json({ users: rows.results.map((entry) => ({ id: entry.id, loginId: entry.loginId, displayName: entry.displayName, email: entry.email, roles: parsePreviewRoles(entry.rolesJson), departmentCode: PREVIEW_DEPARTMENTS.has(entry.departmentCode) ? entry.departmentCode : 'UNASSIGNED', active: entry.active === 1, version: Number(entry.version), assignedCaseCount: Number(entry.assignedCaseCount ?? 0) })), phase: departmentSchemaAvailable ? 'CF85_DRIVE_DEPARTMENT_ACCESS' : accountSchemaAvailable ? 'CF38_ADMIN_ACCOUNTS' : 'CF10_PRODUCT_EXPERIENCE' });
   }
 
   if (!accountSchemaAvailable) return json({ error: 'Admin account migration is required', code: 'ADMIN_ACCOUNT_MIGRATION_REQUIRED' }, 503);
@@ -722,39 +740,43 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
 
   if (request.method === 'POST') {
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['loginId', 'displayName', 'email', 'password', 'roles']) || typeof body.loginId !== 'string' || typeof body.displayName !== 'string' || typeof body.email !== 'string' || typeof body.password !== 'string' || !Array.isArray(body.roles)) return json({ error: 'Account payload is invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
+    if (!body || !exactObjectKeys(body, ['loginId', 'displayName', 'email', 'password', 'roles', 'departmentCode']) || typeof body.loginId !== 'string' || typeof body.displayName !== 'string' || typeof body.email !== 'string' || typeof body.password !== 'string' || !Array.isArray(body.roles) || (body.departmentCode !== undefined && typeof body.departmentCode !== 'string')) return json({ error: 'Account payload is invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
     const loginId = body.loginId.trim();
     const displayName = body.displayName.trim();
     const email = body.email.trim().toLowerCase();
     const roles = [...new Set(body.roles.filter((role): role is string => typeof role === 'string' && PREVIEW_ROLES.has(role)))];
-    if (!emailPattern.test(loginId) || !emailPattern.test(email) || loginId.length > 100 || displayName.length < 1 || displayName.length > 100 || body.password.length < 4 || body.password.length > 128 || roles.length < 1 || roles.length !== body.roles.length) return json({ error: 'Account fields are invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
+    const departmentCode = typeof body.departmentCode === 'string' && PREVIEW_DEPARTMENTS.has(body.departmentCode) ? body.departmentCode : 'CLAIM_CENTER';
+    if (!emailPattern.test(loginId) || !emailPattern.test(email) || loginId.length > 100 || displayName.length < 1 || displayName.length > 100 || body.password.length < 4 || body.password.length > 128 || roles.length < 1 || roles.length !== body.roles.length || (body.departmentCode !== undefined && departmentCode !== body.departmentCode)) return json({ error: 'Account fields are invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
     const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
     const iterations = PREVIEW_PASSWORD_ITERATIONS;
     const passwordHash = await derivePreviewPassword(body.password, salt, iterations);
     if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
     const targetId = crypto.randomUUID();
     try {
+      const createAccount = departmentSchemaAvailable
+        ? env.DB.prepare('INSERT INTO preview_users (id, login_id, password_salt, password_hash, password_iterations, display_name, email, roles_json, department_code, is_active, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1)').bind(targetId, loginId, salt, passwordHash, iterations, displayName, email, JSON.stringify(roles), departmentCode, now)
+        : env.DB.prepare('INSERT INTO preview_users (id, login_id, password_salt, password_hash, password_iterations, display_name, email, roles_json, is_active, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1)').bind(targetId, loginId, salt, passwordHash, iterations, displayName, email, JSON.stringify(roles), now);
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_users (id, login_id, password_salt, password_hash, password_iterations, display_name, email, roles_json, is_active, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1)').bind(targetId, loginId, salt, passwordHash, iterations, displayName, email, JSON.stringify(roles), now),
-        env.DB.prepare('INSERT INTO preview_user_admin_events (id, actor_id, target_user_id, action, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), user.id, targetId, 'ACCOUNT_CREATED', JSON.stringify({ loginId, roles }), now)
+        createAccount,
+        env.DB.prepare('INSERT INTO preview_user_admin_events (id, actor_id, target_user_id, action, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), user.id, targetId, 'ACCOUNT_CREATED', JSON.stringify({ loginId, roles, departmentCode }), now)
       ]);
     } catch {
       return json({ error: 'Login ID is already registered or the account could not be created', code: 'ACCOUNT_CREATE_CONFLICT' }, 409);
     }
-    return json({ user: { id: targetId, loginId, displayName, email, roles, active: true, version: 1, assignedCaseCount: 0 }, phase: 'CF38_ADMIN_ACCOUNTS' }, 201);
+    return json({ user: { id: targetId, loginId, displayName, email, roles, departmentCode, active: true, version: 1, assignedCaseCount: 0 }, phase: departmentSchemaAvailable ? 'CF85_DRIVE_DEPARTMENT_ACCESS' : 'CF38_ADMIN_ACCOUNTS' }, 201);
   }
 
   const targetId = new URL(request.url).pathname.match(/^\/api\/admin\/users\/([0-9a-f-]{36})$/iu)?.[1] ?? '';
   if (request.method !== 'PUT' || !PREVIEW_DRAFT_KEY.test(targetId)) return json({ error: 'Method or account route was not found', code: 'METHOD_NOT_ALLOWED' }, 405);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body || !exactObjectKeys(body, ['action', 'expectedVersion', 'password']) || typeof body.action !== 'string' || !Number.isInteger(body.expectedVersion) || (body.password !== undefined && typeof body.password !== 'string')) return json({ error: 'Account action is invalid', code: 'INVALID_ACCOUNT_ACTION' }, 400);
+  if (!body || !exactObjectKeys(body, ['action', 'expectedVersion', 'password', 'departmentCode']) || typeof body.action !== 'string' || !Number.isInteger(body.expectedVersion) || (body.password !== undefined && typeof body.password !== 'string') || (body.departmentCode !== undefined && typeof body.departmentCode !== 'string')) return json({ error: 'Account action is invalid', code: 'INVALID_ACCOUNT_ACTION' }, 400);
   const target = await env.DB.prepare('SELECT id, login_id AS loginId, roles_json AS rolesJson, is_active AS active, version FROM preview_users WHERE id=?').bind(targetId).first<{ id: string; loginId: string; rolesJson: string; active: number; version: number }>();
   if (!target) return json({ error: 'Account was not found', code: 'ACCOUNT_NOT_FOUND' }, 404);
   const expectedVersion = Number(body.expectedVersion);
   if (expectedVersion !== Number(target.version)) return json({ error: 'Account changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(target.version) }, 409);
   if (body.action === 'DEACTIVATE' && targetId === user.id) return json({ error: 'You cannot deactivate the account currently in use', code: 'CANNOT_DEACTIVATE_SELF' }, 409);
 
-  let action: 'ACCOUNT_ACTIVATED' | 'ACCOUNT_DEACTIVATED' | 'PASSWORD_RESET';
+  let action: 'ACCOUNT_ACTIVATED' | 'ACCOUNT_DEACTIVATED' | 'PASSWORD_RESET' | 'DEPARTMENT_CHANGED';
   let update;
   if (body.action === 'ACTIVATE' || body.action === 'DEACTIVATE') {
     const active = body.action === 'ACTIVATE' ? 1 : 0;
@@ -768,21 +790,29 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
     if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
     action = 'PASSWORD_RESET';
     update = env.DB.prepare('UPDATE preview_users SET password_salt=?, password_hash=?, password_iterations=?, version=version+1 WHERE id=? AND version=?').bind(salt, passwordHash, iterations, targetId, expectedVersion);
+  } else if (body.action === 'SET_DEPARTMENT') {
+    if (!departmentSchemaAvailable) return json({ error: 'Department access migration is required', code: 'DRIVE_DEPARTMENT_MIGRATION_REQUIRED' }, 503);
+    if (typeof body.departmentCode !== 'string' || !PREVIEW_DEPARTMENTS.has(body.departmentCode)) return json({ error: 'Department is invalid', code: 'INVALID_DEPARTMENT' }, 400);
+    action = 'DEPARTMENT_CHANGED';
+    update = env.DB.prepare('UPDATE preview_users SET department_code=?, version=version+1 WHERE id=? AND version=?').bind(body.departmentCode, targetId, expectedVersion);
   } else {
     return json({ error: 'Account action is not supported', code: 'INVALID_ACCOUNT_ACTION' }, 400);
   }
 
   try {
+    const revokeSessions = body.action === 'SET_DEPARTMENT'
+      ? env.DB.prepare('DELETE FROM preview_sessions WHERE user_id=? AND 1=0').bind(targetId)
+      : env.DB.prepare('DELETE FROM preview_sessions WHERE user_id=?').bind(targetId);
     const results = await env.DB.batch([
       update,
-      env.DB.prepare('DELETE FROM preview_sessions WHERE user_id=?').bind(targetId),
-      env.DB.prepare('INSERT INTO preview_user_admin_events (id, actor_id, target_user_id, action, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_users WHERE id=? AND version=?)').bind(crypto.randomUUID(), user.id, targetId, action, JSON.stringify({ loginId: target.loginId }), now, targetId, expectedVersion + 1)
+      revokeSessions,
+      env.DB.prepare('INSERT INTO preview_user_admin_events (id, actor_id, target_user_id, action, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_users WHERE id=? AND version=?)').bind(crypto.randomUUID(), user.id, targetId, action, JSON.stringify({ loginId: target.loginId, ...(body.action === 'SET_DEPARTMENT' ? { departmentCode: body.departmentCode } : {}) }), now, targetId, expectedVersion + 1)
     ]) as Array<{ meta?: { changes?: number } }>;
     if (results[0]?.meta?.changes !== 1) return json({ error: 'Account changed in another session', code: 'VERSION_CONFLICT' }, 409);
   } catch {
     return json({ error: 'The last active Admin account cannot be deactivated', code: 'LAST_ADMIN_REQUIRED' }, 409);
   }
-  return json({ ok: true, version: expectedVersion + 1, active: body.action === 'ACTIVATE' ? true : body.action === 'DEACTIVATE' ? false : target.active === 1, phase: 'CF38_ADMIN_ACCOUNTS' });
+  return json({ ok: true, version: expectedVersion + 1, active: body.action === 'ACTIVATE' ? true : body.action === 'DEACTIVATE' ? false : target.active === 1, departmentCode: body.action === 'SET_DEPARTMENT' ? body.departmentCode : undefined, phase: body.action === 'SET_DEPARTMENT' ? 'CF85_DRIVE_DEPARTMENT_ACCESS' : 'CF38_ADMIN_ACCOUNTS' });
 }
 
 async function handlePreviewPasswordChange(request: Request, env: CloudflareEnv): Promise<Response> {
@@ -7036,6 +7066,14 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
     return json({ connected, status: connected ? 'CONNECTED' : 'DISCONNECTED', configured: Boolean(config), accountEmail, allowedDomain: isAdmin ? config?.allowedDomain ?? null : null, storageProvider: 'GOOGLE_DRIVE', r2SkippedByUser: true, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
   }
 
+  if (url.pathname === '/api/google/folders/repair' && request.method === 'POST') {
+    if (!isAdmin) return json({ error: 'Admin role is required to repair the Google Drive folder structure', code: 'FORBIDDEN' }, 403);
+    try {
+      const roots = await ensureClaimCenterDepartmentRoot(googleFetch(env), await accessToken(env));
+      return json({ repaired: true, organizationRoot: { id: roots.organizationRootId, name: CONCOST_DRIVE_ROOT_NAME }, departmentRoot: { id: roots.departmentRootId, name: CLAIM_CENTER_DEPARTMENT_FOLDER_NAME }, phase: 'CF85_DRIVE_FOLDER_RECOVERY' });
+    } catch (reason) { return googleFailure(reason); }
+  }
+
   if (!isAdmin) return json({ error: 'Admin role is required to manage Google Drive', code: 'FORBIDDEN' }, 403);
   const config = await googleConfig(env);
   if (!config) return json({ error: 'Google OAuth secrets and exact redirect origin are not configured', code: 'GOOGLE_OAUTH_NOT_CONFIGURED' }, 503);
@@ -7300,6 +7338,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   if (!db) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (!canAccessClaimCenterDrive(user)) return json({ error: '클레임센터 Drive는 클레임센터·경영지원본부와 관리자만 이용할 수 있습니다.', code: 'DRIVE_DEPARTMENT_FORBIDDEN', allowedDepartments: ['CLAIM_CENTER','MANAGEMENT_SUPPORT'] }, 403);
 
   const downloadMatch = url.pathname.match(/^\/api\/cases\/evidence\/([0-9a-f-]{36})\/download$/iu);
   if (downloadMatch && request.method === 'GET') {
@@ -7371,7 +7410,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     const configured = Boolean(await googleConfig(env));
     const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
     const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 200);
-    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl: null, accessMode: 'STUDIO_SESSION_PROXY', storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF83_STUDIO_SCOPED_DRIVE_ACCESS' });
+    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl: null, accessMode: 'STUDIO_SESSION_PROXY', departmentAccess: user.roles.includes('admin') ? 'ADMIN_OVERRIDE' : user.departmentCode, allowedDepartments: ['CLAIM_CENTER','MANAGEMENT_SUPPORT'], storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF85_DRIVE_DEPARTMENT_ACCESS' });
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);
@@ -7443,7 +7482,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
           db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED_TO_GOOGLE_DRIVE', `${categoryName} 업로드`, `${file.name} · ${uploadDate} · ${user.displayName}`, uploadedAt)
         ]) as Array<{ meta?: { changes?: number } }>;
         if (results.some((result) => result.meta?.changes !== 1)) throw new GoogleDriveError('GOOGLE_METADATA_COMMIT_FAILED', 503, 'Google upload metadata did not commit atomically', true);
-        return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, googleFileId: uploaded.fileId, googleFolderId: datedFolder.id }), replay: false, folderPath: `${caseRow.caseNumber}/${datedFolderName}`, folderNaming: 'ATTRIBUTED_DAILY', phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }, 201);
+        return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, googleFileId: uploaded.fileId, googleFolderId: datedFolder.id }), replay: false, folderPath: `${CONCOST_DRIVE_ROOT_NAME}/${CLAIM_CENTER_DEPARTMENT_FOLDER_NAME}/${caseRow.caseNumber} ${caseRow.title}/${datedFolderName}`, folderNaming: 'PROJECT_ATTRIBUTED_DAILY', phase: 'CF85_DRIVE_FOLDER_RECOVERY' }, 201);
       } catch (reason) {
         const uncertain = reason instanceof GoogleDriveError && reason.uncertain;
         const failedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();

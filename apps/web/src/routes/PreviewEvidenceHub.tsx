@@ -21,7 +21,7 @@ export function PreviewEvidenceHub({ roles, onNavigate }: { userName: string; ro
   return <section className="route-view preview-evidence-hub" aria-labelledby="preview-evidence-title">
     <div className="workspace-hero preview-evidence-hero">
       <div><span className="workspace-eyebrow">PROJECT EVIDENCE LIBRARY · GOOGLE DRIVE</span><h2 id="preview-evidence-title">의뢰부터 최종 납품까지<br />모든 자료를 한곳에 모읍니다.</h2><p>발주처 제공자료, 회의록·녹음, 현장사진, 산출·내역, 법원자료와 최종 납품본을 프로젝트별로 분류합니다. 파일명·업로드 시간·사용자·무결성 확인 이력을 기록합니다.</p></div>
-      <div className="preview-drive-card"><span>COMPANY STORAGE · CLAIM CENTER ONLY</span><strong>클레임센터 전용 Google Drive</strong><small>CONCOST ERP 그룹웨어 / 02_클레임센터 / 프로젝트 / 업무단계별 자료 · 파일당 최대 10MB</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·계정 변경</button>}</div>
+      <div className="preview-drive-card"><span>COMPANY STORAGE · CLAIM CENTER ONLY</span><strong>클레임센터 전용 Google Drive</strong><small>CONCOST 자료실 / 20_클레임센터 / 프로젝트명 / 자료종류(업로더_날짜) · 파일당 최대 10MB</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·폴더 복구</button>}</div>
     </div>
     <Card title="프로젝트 자료실 선택">
       <div className="inline-form"><Select searchable searchPlaceholder="프로젝트 번호·이름 검색" label="프로젝트" value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />{selected && <span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div>
@@ -66,6 +66,7 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
   const [clientSecret, setClientSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showOAuthEditor, setShowOAuthEditor] = useState(false);
   const [copiedValue, setCopiedValue] = useState<'redirect' | 'scope' | null>(null);
   const load = useCallback(async () => {
@@ -127,8 +128,18 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
     finally { setBusy(false); }
   };
 
+  const repairFolders = async () => {
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ organizationRoot: { name: string }; departmentRoot: { name: string } }>('/api/google/folders/repair', { method: 'POST' });
+      setNotice(`${result.organizationRoot.name} / ${result.departmentRoot.name} 폴더 구조를 확인·복구했습니다.`);
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Google Drive 폴더 구조를 복구하지 못했습니다.'); }
+    finally { setBusy(false); }
+  };
+
   return <section className="route-view preview-drive-setup" aria-labelledby="preview-drive-title">
-    <div><span className="workspace-eyebrow">COMPANY GOOGLE DRIVE ACCOUNT</span><h2 id="preview-drive-title">회사 Google Drive 연결·계정 교체</h2><p>Admin이 클레임 전용 회사 계정을 연결합니다. 연결된 계정은 아래에서 확인하고 언제든 다른 회사 계정으로 교체하거나 연결을 해제할 수 있습니다.</p></div>
+    <div><span className="workspace-eyebrow">COMPANY GOOGLE DRIVE ACCOUNT</span><h2 id="preview-drive-title">회사 Google Drive 연결·폴더 복구</h2><p><b>concost.dt@gmail.com</b> 한 계정만 Drive에 연결하고, 직원은 스튜디오 로그인과 부서 권한으로만 자료를 업로드·다운로드합니다.</p></div>
     <div className="preview-drive-status" role="status"><span className={status?.connected ? 'is-connected' : ''}>{status?.connected ? 'CONNECTED' : 'DISCONNECTED'}</span><strong>{status?.connected ? `현재 회사 Drive 계정 · ${status.accountEmail ?? '계정 확인 필요'}` : status?.configured ? '준비 완료 · 아래 회사 Google 계정 연결 버튼을 누르세요' : 'Google OAuth 앱 최초 등록이 필요합니다'}</strong></div>
     {oauthApp && (!oauthApp.configured || showOAuthEditor) && <section className="preview-drive-config-card" aria-labelledby="google-oauth-app-title">
       <header><div><span>{oauthApp.configured ? 'CHANGE OAUTH CLIENT' : 'ONE-TIME SETUP'}</span><h3 id="google-oauth-app-title">{oauthApp.configured ? 'Google OAuth 앱 자체를 교체합니다' : 'Google OAuth 앱을 한 번만 등록하세요'}</h3><p>이 값은 Google Drive 저장 계정이 아니라 연결 버튼을 작동시키는 회사 OAuth 앱 정보입니다. 저장 계정만 바꿀 때는 이 값을 수정하지 마세요. Client Secret은 브라우저에 다시 표시하지 않고 AES-256-GCM으로 암호화해 D1에 저장합니다.</p></div><a href={GOOGLE_CONSOLE_LINKS.clients} target="_blank" rel="noreferrer">Google 인증 플랫폼 · 클라이언트 열기 ↗</a></header>
@@ -158,8 +169,9 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
       <aside className="preview-drive-guide-warning"><strong>계정 교체 전에 꼭 확인</strong><ul><li>새 계정이 테스트 앱 사용자라면 ‘대상 → 테스트 사용자’에 먼저 추가합니다. 테스트 모드의 Drive 권한은 보통 7일 뒤 만료되므로 미리보기 검증용으로만 사용하세요.</li><li>새 계정이 <b>@{oauthApp.allowedDomain}</b>가 아닌 일반 Gmail이면 클레임센터 배포 정책의 승인 계정도 함께 변경해야 합니다.</li><li>Google 화면의 ‘확인되지 않은 앱’은 테스트 상태 안내입니다. 등록한 테스트 계정이 맞을 때만 ‘계속’을 누르세요.</li></ul></aside>
       <details className="preview-drive-guide-errors"><summary>오류가 나올 때 바로 확인하기</summary><dl><div><dt>403 access_denied</dt><dd>‘대상’의 테스트 사용자에 지금 선택한 Google 계정이 없습니다.</dd></div><div><dt>redirect_uri_mismatch</dt><dd>OAuth 클라이언트의 승인된 리디렉션 URI가 위 파란색 주소와 한 글자라도 다릅니다.</dd></div><div><dt>GOOGLE_COMPANY_ACCOUNT_REQUIRED</dt><dd>선택한 계정이 허용 회사 도메인 또는 별도 승인 계정이 아닙니다.</dd></div><div><dt>invalid_client</dt><dd>Client ID와 Client Secret이 서로 다른 OAuth 클라이언트에서 발급됐거나 Secret을 잘못 입력했습니다.</dd></div></dl></details>
     </section>}
-    <div className="preview-drive-steps"><article><span>01</span><strong>회사 계정 연결</strong><p>관리자가 클레임 전용 회사 Google 계정을 연결합니다.</p></article><article><span>02</span><strong>프로젝트 폴더 자동 생성</strong><p>업로드 시 프로젝트/산출·내역/YYYY-MM 폴더를 자동 생성합니다.</p></article><article><span>03</span><strong>업로더·시간·무결성 기록</strong><p>D1에는 파일 ID, 사용자, 업로드 시각과 SHA-256 메타데이터만 기록합니다.</p></article></div>
+    <div className="preview-drive-steps"><article><span>01</span><strong>회사 계정 단일 연결</strong><p>직원 개인 Google 계정에는 Drive 폴더를 공유하지 않습니다.</p></article><article><span>02</span><strong>프로젝트 폴더 자동 생성</strong><p>CONCOST 자료실/20_클레임센터 아래에 프로젝트명과 자료종류(업로더_날짜) 폴더를 자동 생성합니다.</p></article><article><span>03</span><strong>스튜디오 부서 권한</strong><p>클레임센터·경영지원본부와 관리자만 스튜디오를 통해 업로드·다운로드할 수 있습니다.</p></article></div>
     {error && <p className="error-box" role="alert">{error}</p>}
-    <div className="preview-drive-actions"><div><button type="button" disabled={busy || !status?.configured} onClick={() => void connect()}>{busy ? '처리 중…' : status?.connected ? '연결 계정 변경' : '회사 Google 계정 연결'}</button>{status?.connected && <button type="button" disabled={busy} onClick={() => void disconnect()}>연결 해제</button>}<Button variant="secondary" onClick={() => onNavigate('/cases/files')}>현재 자료실 보기</Button></div><span>원본 저장소 · 회사 Google Drive · R2 미사용</span></div>
+    {notice && <p className="notice-box" role="status">{notice}</p>}
+    <div className="preview-drive-actions"><div><button type="button" disabled={busy || !status?.configured} onClick={() => void connect()}>{busy ? '처리 중…' : status?.connected ? '연결 계정 변경' : '회사 Google 계정 연결'}</button>{status?.connected && <button type="button" className="is-secondary" disabled={busy} onClick={() => void repairFolders()}>폴더 구조 확인·복구</button>}{status?.connected && <button type="button" disabled={busy} onClick={() => void disconnect()}>연결 해제</button>}<Button variant="secondary" onClick={() => onNavigate('/cases/files')}>현재 자료실 보기</Button></div><span>원본 저장소 · 회사 Google Drive · R2 미사용</span></div>
   </section>;
 }

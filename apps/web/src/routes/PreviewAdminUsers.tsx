@@ -9,6 +9,7 @@ interface WorkspaceUser {
   displayName: string;
   email: string;
   roles: string[];
+  departmentCode: string;
   active: boolean;
   version: number;
   assignedCaseCount: number;
@@ -20,6 +21,14 @@ interface RegistrationRequest {
 }
 
 const ACCOUNT_ROLES = ['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer'] as const;
+const DEPARTMENTS = [
+  ['CLAIM_CENTER', '클레임센터'],
+  ['MANAGEMENT_SUPPORT', '경영지원본부'],
+  ['TECHNICAL_HQ', '기술본부'],
+  ['DEVELOPMENT', '개발팀'],
+  ['UNASSIGNED', '미지정']
+] as const;
+const departmentLabel = (code: string): string => DEPARTMENTS.find(([value]) => value === code)?.[1] ?? '미지정';
 
 export function PreviewAdminUsers(): React.ReactElement {
   const [users, setUsers] = useState<WorkspaceUser[]>([]);
@@ -31,7 +40,7 @@ export function PreviewAdminUsers(): React.ReactElement {
   const [showCreate, setShowCreate] = useState(false);
   const [passwordTarget, setPasswordTarget] = useState<WorkspaceUser | null>(null);
   const [newPassword, setNewPassword] = useState('');
-  const [form, setForm] = useState({ loginId: '', displayName: '', email: '', password: '', roles: ['staff'] as string[] });
+  const [form, setForm] = useState({ loginId: '', displayName: '', email: '', password: '', roles: ['staff'] as string[], departmentCode: 'CLAIM_CENTER' });
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -59,21 +68,21 @@ export function PreviewAdminUsers(): React.ReactElement {
       await apiRequest('/api/admin/users', { method: 'POST', body: JSON.stringify(form) });
       setNotice(`${form.displayName} 계정을 승인·등록했습니다. 이제 다른 PC에서도 같은 아이디와 비밀번호로 로그인할 수 있습니다.`);
       setShowCreate(false);
-      setForm({ loginId: '', displayName: '', email: '', password: '', roles: ['staff'] });
+      setForm({ loginId: '', displayName: '', email: '', password: '', roles: ['staff'], departmentCode: 'CLAIM_CENTER' });
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
 
-  const changeAccount = async (target: WorkspaceUser, action: 'ACTIVATE' | 'DEACTIVATE' | 'RESET_PASSWORD', password?: string) => {
+  const changeAccount = async (target: WorkspaceUser, action: 'ACTIVATE' | 'DEACTIVATE' | 'RESET_PASSWORD' | 'SET_DEPARTMENT', password?: string, departmentCode?: string) => {
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
     try {
       await apiRequest(`/api/admin/users/${encodeURIComponent(target.id)}`, {
         method: 'PUT',
-        body: JSON.stringify({ action, expectedVersion: target.version, ...(password === undefined ? {} : { password }) })
+        body: JSON.stringify({ action, expectedVersion: target.version, ...(password === undefined ? {} : { password }), ...(departmentCode === undefined ? {} : { departmentCode }) })
       });
-      setNotice(action === 'ACTIVATE' ? `${target.displayName} 계정의 로그인을 다시 승인했습니다.` : action === 'DEACTIVATE' ? `${target.displayName} 계정의 접속을 차단했습니다. 기존 로그인 세션도 종료됩니다.` : `${target.displayName} 계정의 비밀번호를 변경했습니다. 기존 로그인 세션은 종료됩니다.`);
+      setNotice(action === 'ACTIVATE' ? `${target.displayName} 계정의 로그인을 다시 승인했습니다.` : action === 'DEACTIVATE' ? `${target.displayName} 계정의 접속을 차단했습니다. 기존 로그인 세션도 종료됩니다.` : action === 'SET_DEPARTMENT' ? `${target.displayName} 계정의 부서를 ${departmentLabel(departmentCode ?? '')}(으)로 변경했습니다.` : `${target.displayName} 계정의 비밀번호를 변경했습니다. 기존 로그인 세션은 종료됩니다.`);
       setPasswordTarget(null); setNewPassword('');
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -113,6 +122,7 @@ export function PreviewAdminUsers(): React.ReactElement {
               <span className="admin-user-avatar" aria-hidden="true">{user.displayName.slice(0, 1)}</span>
               <div><strong>{user.displayName}</strong><small>{user.loginId} · {user.email}</small></div>
               <div className="admin-role-list">{user.roles.map((role) => <span key={role}>{role.toUpperCase()}</span>)}</div>
+              <label className="admin-user-department"><span>Drive 부서 권한</span><select value={user.departmentCode} disabled={busy} onChange={(event) => void changeAccount(user, 'SET_DEPARTMENT', undefined, event.target.value)}>{DEPARTMENTS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
               <div className="admin-user-cases"><strong>{user.assignedCaseCount}</strong><small>배정 사건</small></div>
               <span className={user.active ? 'admin-user-status is-active' : 'admin-user-status'}>{user.active ? '로그인 승인' : '접속 차단'}</span>
               <div className="admin-user-actions"><Button variant="secondary" onClick={() => { setPasswordTarget(user); setNewPassword(''); }}>비밀번호 변경</Button><Button variant={user.active ? 'danger' : 'secondary'} onClick={() => void changeAccount(user, user.active ? 'DEACTIVATE' : 'ACTIVATE')} disabled={busy}>{user.active ? '계정 삭제·차단' : '다시 승인'}</Button></div>
@@ -128,8 +138,9 @@ export function PreviewAdminUsers(): React.ReactElement {
           <label>이름<input value={form.displayName} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="사용자 이름" /></label>
           <label>연락 이메일<input type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} placeholder="name@con-cost.com" /></label>
           <label>초기 비밀번호<input type="password" autoComplete="new-password" value={form.password} minLength={4} maxLength={128} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="4자 이상" /></label>
+          <label>소속 부서<select value={form.departmentCode} onChange={(event) => setForm((current) => ({ ...current, departmentCode: event.target.value }))}>{DEPARTMENTS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
           <fieldset><legend>허용 역할</legend><div>{ACCOUNT_ROLES.map((role) => <label key={role}><input type="checkbox" checked={form.roles.includes(role)} onChange={() => toggleRole(role)} />{role.toUpperCase()}</label>)}</div></fieldset>
-          <p>등록 즉시 로그인할 수 있습니다. 비밀번호 원문은 저장되지 않으므로 전달 후 사용자가 안전하게 보관해야 합니다.</p>
+          <p>클레임센터 Drive는 클레임센터·경영지원본부와 관리자만 이용할 수 있습니다. 비밀번호 원문은 저장되지 않습니다.</p>
           <div className="action-row"><Button variant="secondary" onClick={() => setShowCreate(false)} disabled={busy}>취소</Button><Button onClick={() => void createAccount()} disabled={busy || !form.loginId || !form.displayName || !form.email || form.password.length < 4 || form.roles.length === 0}>{busy ? '등록 중…' : '계정 승인·등록'}</Button></div>
         </div>
       </Dialog>
