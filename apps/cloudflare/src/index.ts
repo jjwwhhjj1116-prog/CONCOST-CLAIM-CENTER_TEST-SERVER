@@ -5555,6 +5555,22 @@ async function generatePreviewAiText(
   let response: Response;
   try {
     response = await providerFetch(endpoint, { method: 'POST', signal: controller.signal, headers, body: JSON.stringify(body) });
+    if (
+      provider === 'ANTHROPIC'
+      && response.status === 400
+      && /^claude-(?:fable|opus|sonnet)-5$/u.test(route.modelCode)
+      && normalizedAnthropicReasoningEffort(route.reasoningEffort) === 'high'
+      && ('thinking' in body || 'output_config' in body)
+    ) {
+      // Claude 5 defaults to adaptive thinking with high effort. Some API
+      // organizations reject the explicit controls even though the model's
+      // equivalent defaults are available, so retry once without changing
+      // the effective reasoning level.
+      const defaultHighBody = { ...body };
+      delete defaultHighBody.thinking;
+      delete defaultHighBody.output_config;
+      response = await providerFetch(endpoint, { method: 'POST', signal: controller.signal, headers, body: JSON.stringify(defaultHighBody) });
+    }
   } catch (reason) {
     clearTimeout(timeout);
     return { response: previewAiNetworkFailure(provider, reason) };

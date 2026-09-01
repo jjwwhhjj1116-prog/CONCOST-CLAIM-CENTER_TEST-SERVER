@@ -17,6 +17,9 @@ test('CF86 uses one bounded Gemini runtime and provider-specific reasoning contr
   assert.match(source, /value === 'max' \|\| value === 'xhigh' \|\| value === 'high' \|\| value === 'low'/u);
   assert.match(source, /ANTHROPIC_BILLING_REQUIRED/u);
   assert.match(source, /ANTHROPIC_REASONING_CONFIG_REJECTED/u);
+  assert.match(source, /normalizedAnthropicReasoningEffort\(route\.reasoningEffort\) === 'high'/u);
+  assert.match(source, /delete defaultHighBody\.thinking/u);
+  assert.match(source, /delete defaultHighBody\.output_config/u);
   assert.match(source, /const probeReasoningEffort = provider === 'ANTHROPIC' \? 'high' : 'low'/u);
   assert.match(source, /const probeOutputTokens = provider === 'ANTHROPIC' \? 1024 : 64/u);
   assert.match(source, /credential, 30_000, probeOutputTokens\)/u);
