@@ -50,7 +50,7 @@ export function PreviewDeliveryCenter({ onNavigate }:{ onNavigate:(path:string)=
 
   return <section className="route-view preview-delivery-center" aria-labelledby="delivery-center-title">
     <header className="quality-center-hero"><div><span>FINAL DELIVERY LOCATOR</span><h2 id="delivery-center-title">프로젝트별 최종 결과물과<br/>보관 위치를 바로 찾습니다.</h2><p>사람 승인을 거쳐 확정된 DOCX·PDF와 회사 Google Drive에 올린 최종 납품본을 한 프로젝트에서 확인합니다.</p></div><div><strong>{finalizations.length}</strong><span>확정 이력</span></div></header>
-    <Card title="납품 프로젝트 선택"><div className="inline-form"><Select label="프로젝트" value={selectedCaseId} onChange={(event)=>setSelectedCaseId(event.target.value)} options={cases.map((entry)=>({value:entry.id,label:`${entry.caseNumber} · ${entry.title}`}))}/>{selected&&<span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div></Card>
+    <Card title="납품 프로젝트 선택"><div className="inline-form"><Select searchable searchPlaceholder="프로젝트 번호·이름 검색" label="프로젝트" value={selectedCaseId} onChange={(event)=>setSelectedCaseId(event.target.value)} options={cases.map((entry)=>({value:entry.id,label:`${entry.caseNumber} · ${entry.title}`}))}/>{selected&&<span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div></Card>
     {loading&&<p className="quality-feedback">납품본 위치를 확인하는 중입니다.</p>}{error&&<p className="error-box" role="alert">{error}</p>}
     {!loading&&selected&&<div className="quality-center-grid">
       <article className="quality-center-card"><header><div><span>IMMUTABLE FINAL OUTPUT</span><h3>시스템 승인·확정본</h3></div><em>{selectedFinalizations.length}건</em></header>

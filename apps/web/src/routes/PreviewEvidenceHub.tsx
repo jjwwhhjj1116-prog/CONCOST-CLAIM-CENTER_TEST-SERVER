@@ -24,7 +24,7 @@ export function PreviewEvidenceHub({ roles, onNavigate }: { userName: string; ro
       <div className="preview-drive-card"><span>COMPANY STORAGE · CLAIM CENTER ONLY</span><strong>클레임센터 전용 Google Drive</strong><small>CONCOST ERP 그룹웨어 / 02_클레임센터 / 프로젝트 / 업무단계별 자료 · 파일당 최대 10MB</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·계정 변경</button>}</div>
     </div>
     <Card title="프로젝트 자료실 선택">
-      <div className="inline-form"><Select label="프로젝트" value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />{selected && <span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div>
+      <div className="inline-form"><Select searchable searchPlaceholder="프로젝트 번호·이름 검색" label="프로젝트" value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />{selected && <span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div>
       {error && <p className="error-box" role="alert">{error}</p>}
     </Card>
     {selectedCaseId ? <CaseEvidencePanel caseId={selectedCaseId} onNavigate={onNavigate} /> : <p className="empty-box">자료를 연결할 수행 프로젝트가 없습니다. 프로젝트 접수에서 수주 확정하여 프로젝트 워크로 전환해 주세요.</p>}

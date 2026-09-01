@@ -2,6 +2,7 @@
 .case-evidence-categories { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .case-evidence-categories button { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid rgba(148,163,184,.18); border-radius: 15px; background: rgba(8,14,31,.72); color: inherit; text-align: left; cursor: pointer; }
 .case-evidence-categories button.is-active { border-color: rgba(34,211,238,.55); background: linear-gradient(135deg,rgba(124,58,237,.18),rgba(34,211,238,.1)); box-shadow: 0 0 0 3px rgba(34,211,238,.06); }
+.case-evidence-categories button.is-drop-target { border-color:#38bdf8; background:rgba(37,99,235,.22); box-shadow:0 0 0 3px rgba(56,189,248,.2); }
 .case-evidence-categories button > b { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(135deg,#7c3aed,#0891b2); color: white; font: 800 1.05rem 'Space Grotesk',sans-serif; }
 .case-evidence-categories button > span { min-width: 0; display: grid; gap: 4px; }
 .case-evidence-categories button > span i { color:#38bdf8; font-size:.58rem; font-style:normal; font-weight:900; letter-spacing:.12em; text-transform:uppercase; }.case-evidence-categories strong { color: #f8fafc; }.case-evidence-categories small { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.case-evidence-categories em { color: #67e8f9; font-style: normal; font-weight: 800; }

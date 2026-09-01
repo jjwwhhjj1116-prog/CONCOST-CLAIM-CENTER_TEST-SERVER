@@ -372,10 +372,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [saveNow]);
 
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => { if (dirty || outlineDirty) event.preventDefault(); };
+    const warn = (event: BeforeUnloadEvent) => { if (dirty || outlineDirty || workspaceDirty) event.preventDefault(); };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty, outlineDirty]);
+  }, [dirty, outlineDirty, workspaceDirty]);
 
   const selectCase = (caseId: string) => {
     if (!caseId || caseId === selectedCaseId) return;
@@ -529,10 +529,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   useEffect(() => registerNavigationBlocker((navigation) => {
     const current = `${window.location.pathname}${window.location.search}`;
-    if (!editable || !selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current || (!dirty && !outlineDirty)) return false;
+    if (!editable || !selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current || (!dirty && !outlineDirty && !workspaceDirty)) return false;
     setPendingNavigation(navigation);
     return true;
-  }), [dirty, editable, loadedCaseId, outlineDirty, selectedCaseId]);
+  }), [dirty, editable, loadedCaseId, outlineDirty, selectedCaseId, workspaceDirty]);
 
   const continuePendingNavigation = () => {
     const navigation = pendingNavigation;
@@ -1015,7 +1015,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <Card title="" className="report-step-card report-step-card--1 report-stage-card">
         {renderStageHeader(1)}
         <div className="inline-form">
-          <Select required label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
+          <Select searchable searchPlaceholder="프로젝트 번호·이름 검색" required label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row report-autosave-status" aria-live="polite" aria-label="지금 저장 상태">
             <span className="preview-pill">{error ? '자동 저장 일시 중단' : saving ? '자동 저장 중' : dirty || workspaceDirty || outlineDirty ? '변경사항 감지 · 잠시 후 자동 저장' : version ? `자동 저장 완료 · ${savedAt ? new Date(savedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : `v${version}`}` : '첫 입력 후 자동 저장'}</span>
             {error && <Button className="report-action-danger" onClick={() => selectedCaseId && void loadDraft(selectedCaseId)}>최신본 다시 불러오기</Button>}

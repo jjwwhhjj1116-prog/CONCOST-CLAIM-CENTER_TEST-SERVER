@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Dialog } from '@claim-studio/ui';
 import { apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 import {
   WORKFLOW_STAGES,
   workflowStageFromRoute,
@@ -267,7 +268,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             <div className="schedule-toolbar">
               <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
               <div className="schedule-toolbar-actions">
-                <Button className="schedule-print-launch" size="sm" onClick={openSchedulePrint}>🖨 일정표 출력</Button>
+                <Button className="schedule-print-launch" size="sm" onClick={openSchedulePrint}>일정표 출력</Button>
                 <Button size="sm" variant={viewMode === '30days' ? 'primary' : 'secondary'} onClick={() => setViewMode('30days')}>30일</Button>
                 <Button size="sm" variant={viewMode === 'month' ? 'primary' : 'secondary'} onClick={() => setViewMode('month')}>월별 보기</Button>
                 <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹ 이전</Button>
@@ -300,7 +301,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
               <div className="schedule-project-row" role="row" key={project.id}>
                 <button className="schedule-project-info" role="cell" onClick={() => openProjectDialog(project)} aria-haspopup="dialog">
                   <span className={`award-dot award-${project.awardStatus.toLowerCase()}`} aria-hidden="true" />
-                  <span className="schedule-project-copy"><strong>{project.name}{project.deliveryStatus === 'DELIVERED' && <em className="schedule-delivered-badge">납품완료</em>}</strong><small>{project.code} · {project.claimType} · {project.deliveryStatus === 'DELIVERED' ? 'Drive 최종 납품본 보관' : awardLabel(project.awardStatus)} · {project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 미지정'}</small></span>
+                  <span className="schedule-project-copy"><strong>{project.name}{project.deliveryStatus === 'DELIVERED' && <em className="schedule-delivered-badge">납품완료</em>}</strong><small>{project.code} · {claimTypeLabel(project.claimType)} · {project.deliveryStatus === 'DELIVERED' ? 'Drive 최종 납품본 보관' : awardLabel(project.awardStatus)} · {project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 미지정'}</small></span>
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
                 </button>
                 <div className="schedule-track" role="cell" aria-label={`${project.name} ${project.start}부터 ${project.end}까지`}>
@@ -413,6 +414,11 @@ const ProjectDetail: React.FC<{
   onClose?: () => void;
   calendar: { year: number; monthIndex: number; days: number[]; todayDay?: number };
 }> = ({ project, focusedStageId, onNavigate, onAction, onReload, onClose, calendar }) => {
+  const openProjectPrint = () => {
+    const firstStageDate = project.stages.find((item)=>item.scheduleExplicit&&item.startDate)?.startDate?.slice(0,7);
+    const month = firstStageDate ?? `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+    window.open(`/print/projects/month-a4?month=${month}&lang=ko&colorMode=color&projectId=${encodeURIComponent(project.id)}`, '_blank', 'noopener,noreferrer');
+  };
   const selectedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
   const timeline = useMemo(() => buildProjectTimeline(project, calendar.year, calendar.monthIndex), [calendar.monthIndex, calendar.year, project]);
   const timelineWidth = timeline.days.length * 44;
@@ -570,7 +576,7 @@ const ProjectDetail: React.FC<{
     <>
       <div className="project-workflow-summary">
         <div><span>거래처</span><strong>{project.client}</strong></div>
-        <div><span>업무 유형</span><strong>{project.claimType}</strong></div>
+        <div><span>업무 유형</span><strong>{claimTypeLabel(project.claimType)}</strong></div>
         <div><span>수주·납품 상태</span><strong>{project.deliveryStatus === 'DELIVERED' ? '납품완료' : awardLabel(project.awardStatus)}</strong></div>
         <div><span>전체 공정률</span><strong>{project.progress}%</strong></div>
         <div><span>프로젝트 기간</span><strong>{project.start && project.end ? `${project.start} ~ ${project.end}` : '일정 입력 필요'}</strong></div>
@@ -595,7 +601,7 @@ const ProjectDetail: React.FC<{
         </div>
         {Boolean(project.pendingChangeRequests?.length) && <section className="pending-schedule-requests"><h4>담당 PM 승인 대기</h4>{project.pendingChangeRequests?.map((request) => <article key={request.id}><div><strong>{request.requestedByName} · {WORKFLOW_STAGES.find((stage) => stage.id === ({KICKOFF:3,SITE_SURVEY:4,TAKEOFF_COST:5,REPORT_WRITING:6} as Record<string,number>)[request.stageCode])?.name}</strong><span>{request.proposedStartDate} ~ {request.proposedEndDate}</span><p>{request.reasonText}</p></div>{project.canManageSchedule && <div><Button size="sm" onClick={() => void decideChange(request.id,'APPROVED')} disabled={scheduleBusy === `decision:${request.id}`}>승인·일정 반영</Button><Button size="sm" variant="secondary" onClick={() => void decideChange(request.id,'REJECTED')} disabled={scheduleBusy === `decision:${request.id}`}>반려</Button></div>}</article>)}</section>}
         {scheduleNotice && <p className="notice-box" role="status">{scheduleNotice}</p>}{scheduleError && <p className="error-box" role="alert">{scheduleError}</p>}
-        {project.canManageSchedule && <footer className="project-schedule-completion-actions">{project.canRemoveFromSchedule && <Button className="schedule-archive-button" variant="secondary" onClick={() => void openArchiveDialog()} disabled={Boolean(scheduleBusy)}>Drive 확인 후 일정표 보관</Button>}<Button variant="secondary" onClick={() => onReload()} disabled={Boolean(scheduleBusy)}>최신 일정 다시 불러오기</Button><Button className="schedule-complete-button" onClick={() => void saveAllStages()} disabled={!pmId || Boolean(scheduleBusy)}>{scheduleBusy === 'all' ? '전체 일정 저장 중…' : '전체 일정 저장 완료'}</Button>{onClose && <Button className="schedule-confirm-button" variant="secondary" onClick={onClose} disabled={Boolean(scheduleBusy)}>확인하고 닫기</Button>}</footer>}
+        {project.canManageSchedule && <footer className="project-schedule-completion-actions">{project.canRemoveFromSchedule && <Button className="schedule-archive-button" variant="secondary" onClick={() => void openArchiveDialog()} disabled={Boolean(scheduleBusy)}>Drive 확인 후 일정표 보관</Button>}<Button variant="secondary" onClick={openProjectPrint}>이 프로젝트 상세 일정 출력</Button><Button variant="secondary" onClick={() => onReload()} disabled={Boolean(scheduleBusy)}>최신 일정 다시 불러오기</Button><Button className="schedule-complete-button" onClick={() => void saveAllStages()} disabled={!pmId || Boolean(scheduleBusy)}>{scheduleBusy === 'all' ? '전체 일정 저장 중…' : '전체 일정 저장 완료'}</Button>{onClose && <Button className="schedule-confirm-button" variant="secondary" onClick={onClose} disabled={Boolean(scheduleBusy)}>확인하고 닫기</Button>}</footer>}
       </section>
 
       {selectedStage && (

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 import { scheduleDayInfo } from './schedule-holidays';
-import type { WorkflowProject } from './workflow-model';
+import { WORKFLOW_STAGES, type WorkflowProject } from './workflow-model';
 
 type PrintLanguage = 'ko' | 'vi';
 type PrintColorMode = 'color' | 'mono';
@@ -48,13 +49,15 @@ const scheduledRange = (project: WorkflowProject): { start?: string; end?: strin
   };
 };
 
-const replacePrintQuery = (month: string, lang: PrintLanguage, colorMode: PrintColorMode) => {
+const replacePrintQuery = (month: string, lang: PrintLanguage, colorMode: PrintColorMode, projectId: string) => {
   const query = new URLSearchParams({ month, lang, colorMode });
+  if (projectId) query.set('projectId', projectId);
   window.history.replaceState(null, '', `/print/projects/month-a4?${query.toString()}`);
 };
 
 export function ProjectSchedulePrint({ currentSearch, userName, onClose }: ProjectSchedulePrintProps): React.ReactElement {
   const initialQuery = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
+  const selectedProjectId = initialQuery.get('projectId') ?? '';
   const [month, setMonth] = useState(() => validMonth(initialQuery.get('month')));
   const [language, setLanguage] = useState<PrintLanguage>(() => initialQuery.get('lang') === 'vi' ? 'vi' : 'ko');
   const [colorMode, setColorMode] = useState<PrintColorMode>(() => initialQuery.get('colorMode') === 'mono' ? 'mono' : 'color');
@@ -80,7 +83,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
     apiRequest<{ projects: WorkflowProject[] }>('/api/project-workflow/schedule')
       .then((result) => {
         if (!active) return;
-        setProjects(result.projects);
+        setProjects(selectedProjectId ? result.projects.filter((project) => project.id === selectedProjectId) : result.projects);
         setError('');
       })
       .catch((reason) => {
@@ -89,22 +92,22 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [selectedProjectId]);
 
   const updateMonth = (nextMonth: string) => {
     const safeMonth = validMonth(nextMonth);
     setMonth(safeMonth);
-    replacePrintQuery(safeMonth, language, colorMode);
+    replacePrintQuery(safeMonth, language, colorMode, selectedProjectId);
   };
 
   const updateLanguage = (nextLanguage: PrintLanguage) => {
     setLanguage(nextLanguage);
-    replacePrintQuery(month, nextLanguage, colorMode);
+    replacePrintQuery(month, nextLanguage, colorMode, selectedProjectId);
   };
 
   const updateColorMode = (nextMode: PrintColorMode) => {
     setColorMode(nextMode);
-    replacePrintQuery(month, language, nextMode);
+    replacePrintQuery(month, language, nextMode, selectedProjectId);
   };
 
   const moveMonth = (offset: number) => {
@@ -155,7 +158,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
       {pages.map((pageProjects, pageIndex) => <article className="schedule-print-sheet" key={pageIndex}>
         <header className="schedule-print-sheet__header">
           <div className="schedule-print-brand"><span>CONCOST</span><b>CLAIM CENTER STUDIO</b></div>
-          <div><small>PROJECT DELIVERY · MONTHLY SCHEDULE</small><h1>{year}년 {monthNumber}월 프로젝트 통합 일정표</h1><p>수주 확정 프로젝트의 단계별 기준 일정 · 한국 본사 / VIETQS 휴일 통합</p></div>
+          <div><small>PROJECT DELIVERY · MONTHLY SCHEDULE</small><h1>{year}년 {monthNumber}월 {selectedProjectId ? '프로젝트 상세 일정표' : '프로젝트 통합 일정표'}</h1><p>{selectedProjectId && projects[0] ? `${projects[0].code} · ${projects[0].name} · PM ${projects[0].responsiblePm?.name ?? '미지정'}` : '수주 확정 프로젝트의 단계별 기준 일정 · 한국 본사 / VIETQS 휴일 통합'}</p></div>
           <dl><div><dt>출력 기준</dt><dd>{todayText}</dd></div><div><dt>출력자</dt><dd>{userName}</dd></div><div><dt>페이지</dt><dd>{pageIndex + 1} / {pages.length}</dd></div></dl>
         </header>
 
@@ -168,7 +171,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
 
         <div className="schedule-print-calendar" role="table">
           <div className="schedule-print-calendar__head" role="row">
-            <div role="columnheader">프로젝트 / PM</div>
+            <div role="columnheader">{selectedProjectId ? '단계 / 담당' : '프로젝트 / PM'}</div>
             <div className="schedule-print-calendar__days" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }} role="row">
               {days.map((day) => {
                 const info = scheduleDayInfo(year, monthIndex, day);
@@ -176,11 +179,21 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
               })}
             </div>
           </div>
-          {pageProjects.length ? pageProjects.map((project) => {
+          {selectedProjectId && pageProjects[0] ? pageProjects[0].stages.map((stage) => {
+            const stageInfo = WORKFLOW_STAGES.find((item) => item.id === stage.stageId);
+            const barStyle = stage.scheduleExplicit ? monthBarStyle(stage.startDate ?? undefined, stage.endDate ?? undefined, month, dayCount) : undefined;
+            return <div className="schedule-print-calendar__row" role="row" key={`${pageProjects[0].id}-${stage.stageId}`}>
+              <div className="schedule-print-project" role="cell"><strong>{stage.stageId}. {stageInfo?.name ?? stage.stageCode ?? '업무 단계'}</strong><span>{stage.owner}</span><small>{stage.scheduleStatus ?? stage.status} · {stage.scheduleNote || stage.detail}</small></div>
+              <div className="schedule-print-track" style={{ gridTemplateColumns:`repeat(${dayCount}, 1fr)` }} role="cell">
+                {days.map((day)=>{const info=scheduleDayInfo(year,monthIndex,day);return <span key={day} className={info.className}/>;})}
+                {barStyle ? <div className="schedule-print-range" style={barStyle}><span>{stageInfo?.name ?? stage.stageCode}</span><b>{stage.owner}</b></div> : <em>이 단계의 저장 일정 없음</em>}
+              </div>
+            </div>;
+          }) : pageProjects.length ? pageProjects.map((project) => {
             const range = scheduledRange(project);
             const barStyle = monthBarStyle(range.start, range.end, month, dayCount);
             return <div className="schedule-print-calendar__row" role="row" key={project.id}>
-              <div className="schedule-print-project" role="cell"><strong>{project.name}</strong><span>{project.code} · {project.claimType}</span><small>PM {project.responsiblePm?.name ?? '미지정'} · 공정률 {project.progress}%</small></div>
+              <div className="schedule-print-project" role="cell"><strong>{project.name}</strong><span>{project.code} · {claimTypeLabel(project.claimType)}</span><small>PM {project.responsiblePm?.name ?? '미지정'} · 공정률 {project.progress}%</small></div>
               <div className="schedule-print-track" style={{ gridTemplateColumns: `repeat(${dayCount}, 1fr)` }} role="cell">
                 {days.map((day) => {
                   const info = scheduleDayInfo(year, monthIndex, day);

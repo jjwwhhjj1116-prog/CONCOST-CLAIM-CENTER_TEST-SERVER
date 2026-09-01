@@ -958,6 +958,8 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .proposal-stage > header,
 .report-stage-header { border-left: 6px solid #2e86c8; background: linear-gradient(90deg, #eef8ff 0%, #f8fbff 64%, #fff 100%); }
 .proposal-step-validation { margin: 0 0 10px; padding: 12px 16px; border: 1px solid #e3a725; border-left: 6px solid #d97706; border-radius: 10px; background: #fff7df; color: #7a3b00; font-weight: 850; }
+.proposal-input-guidance { display:flex; gap:12px; align-items:flex-start; margin:0 20px 2px; padding:12px 14px; border:1px solid #b9d8f0; border-radius:10px; background:#f2f9ff; color:#27445f; line-height:1.55; }
+.proposal-input-guidance strong { flex:0 0 auto; color:#0b67a3; }
 @media (max-width: 760px) {
   .proposal-project-template-bar { grid-template-columns: 1fr !important; }
   .proposal-project-template-bar .proposal-representative-template,

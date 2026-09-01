@@ -432,6 +432,7 @@ interface PreviewCaseRow {
   categoryMinor: string;
   clientLegalPosition: string;
   clientPositionDetail: string | null;
+  clientName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -453,6 +454,7 @@ function previewCaseProjection(row: PreviewCaseRow): Record<string, unknown> {
     claimType: row.claimType,
     clientLegalPosition: row.clientLegalPosition,
     clientPositionDetail: row.clientPositionDetail,
+    clientName: row.clientName,
     status: row.status,
     version: row.version,
     category: { major: row.categoryMajor, middle: row.categoryMiddle, minor: row.categoryMinor },
@@ -489,17 +491,41 @@ async function previewCasePerspectiveSchemaAvailable(env: CloudflareEnv): Promis
   }
 }
 
+async function previewCaseClientNameSchemaAvailable(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT client_name FROM preview_cases LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function accessiblePreviewCase(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<PreviewCaseRow | null> {
   if (!env.DB) return null;
   const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
     ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail, '
     : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail, ";
+  const clientNameColumn = await previewCaseClientNameSchemaAvailable(env) ? 'c.client_name AS clientName, ' : 'NULL AS clientName, ';
   return env.DB.prepare(
     'SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, ' +
-    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
+    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}${clientNameColumn}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
     'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL ' +
     'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
+}
+
+async function organizationPreviewCase(env: CloudflareEnv, caseId: string): Promise<PreviewCaseRow | null> {
+  if (!env.DB) return null;
+  const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
+    ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail, '
+    : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail, ";
+  const clientNameColumn = await previewCaseClientNameSchemaAvailable(env) ? 'c.client_name AS clientName, ' : 'NULL AS clientName, ';
+  return env.DB.prepare(
+    'SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, ' +
+    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}${clientNameColumn}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
+    'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL'
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewCaseRow>();
 }
 
 async function accessiblePreviewIntakeCase(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<PreviewCaseRow | null> {
@@ -508,9 +534,10 @@ async function accessiblePreviewIntakeCase(env: CloudflareEnv, user: SessionUser
   const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
     ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail, '
     : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail, ";
+  const clientNameColumn = await previewCaseClientNameSchemaAvailable(env) ? 'c.client_name AS clientName, ' : 'NULL AS clientName, ';
   return env.DB.prepare(
     'SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, ' +
-    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
+    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}${clientNameColumn}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
     'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL ' +
     "AND (c.status IN ('INQUIRY','PROPOSAL','ESTIMATE') OR ? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))"
   ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
@@ -3776,28 +3803,32 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     const scope = url.searchParams.get('scope') ?? '';
     if (scope && !['project-work','proposal-authoring'].includes(scope)) return json({ error: 'scope is invalid', code: 'INVALID_CASE_SCOPE' }, 400);
     if (scope === 'project-work' && !await projectWorkGateSchemaAvailable(env)) return json({ error: '프로젝트 워크 연동 migration이 필요합니다.', code: 'D1_MIGRATION_REQUIRED' }, 503);
+    const requestedStage = (url.searchParams.get('stage') ?? '').trim();
+    if (requestedStage && (scope !== 'project-work' || !PROJECT_STAGE_CODES.has(requestedStage))) return json({ error: 'stage is invalid', code: 'INVALID_CASE_STAGE' }, 400);
     const limitRaw = Number(url.searchParams.get('limit') ?? 50);
     if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 100) return json({ error: 'limit must be between 1 and 100', code: 'INVALID_PAGINATION' }, 400);
     const admin = user.roles.includes('admin') ? 1 : 0;
     const assignedOnly = url.searchParams.get('assignedOnly') === 'true';
     const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
-    const visibility = scope === 'project-work' || assignedOnly
+    const visibility = assignedOnly
       ? '(? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
       : '1 = 1';
-    const visibilityBindings = scope === 'project-work' || assignedOnly ? [admin, user.id] : [];
+    const visibilityBindings = assignedOnly ? [admin, user.id] : [];
     const scopeFilter = scope === 'project-work'
-      ? ` AND ${ACTIVE_PROJECT_WORK_FILTER}`
+      ? ` AND ${ACTIVE_PROJECT_WORK_FILTER}${requestedStage ? ' AND EXISTS (SELECT 1 FROM preview_project_stage_schedules stage_filter WHERE stage_filter.case_id=c.id AND stage_filter.organization_id=c.organization_id AND stage_filter.stage_code=? AND stage_filter.start_date IS NOT NULL AND stage_filter.start_date<>\'\' AND stage_filter.end_date IS NOT NULL AND stage_filter.end_date<>\'\')' : ''}`
       : scope === 'proposal-authoring'
         ? ` AND ${PROPOSAL_AUTHORING_CASE_FILTER}`
         : '';
+    const scopeBindings = requestedStage ? [requestedStage] : [];
     const where = `c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')${scopeFilter}`;
     const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
       ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail,'
       : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail,";
+    const clientNameColumn = await previewCaseClientNameSchemaAvailable(env) ? 'c.client_name AS clientName,' : 'NULL AS clientName,';
     const rows = await env.DB.prepare(
-      `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns} c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC LIMIT ?`
-    ).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like, limitRaw).all<PreviewCaseRow>();
-    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like).first<{ total: number }>();
+      `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns} ${clientNameColumn} c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC LIMIT ?`
+    ).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like, ...scopeBindings, limitRaw).all<PreviewCaseRow>();
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like, ...scopeBindings).first<{ total: number }>();
     return json({ cases: rows.results.map(previewCaseProjection), total: Number(count?.total ?? 0), phase: 'CF06_D1_CASE_OPERATIONS' });
   }
 
@@ -3805,21 +3836,23 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     if (!canCollaboratePreviewIntake(user)) return json({ error: 'Role cannot create cases', code: 'FORBIDDEN' }, 403);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     const perspectiveSchema = await previewCasePerspectiveSchemaAvailable(env);
-    if (!body || !exactObjectKeys(body, ['title', 'claimType', 'description', 'clientLegalPosition', 'clientPositionDetail', 'category']) || (perspectiveSchema && (!Object.hasOwn(body, 'clientLegalPosition') || !Object.hasOwn(body, 'clientPositionDetail')))) return json({ error: 'Case payload is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
+    const clientNameSchema = await previewCaseClientNameSchemaAvailable(env);
+    if (!body || !exactObjectKeys(body, ['title', 'claimType', 'description', 'clientLegalPosition', 'clientPositionDetail', 'clientName', 'category']) || (perspectiveSchema && (!Object.hasOwn(body, 'clientLegalPosition') || !Object.hasOwn(body, 'clientPositionDetail'))) || (clientNameSchema && !Object.hasOwn(body, 'clientName'))) return json({ error: 'Case payload is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
     const category = body.category as Record<string, unknown> | null;
     const title = typeof body.title === 'string' ? body.title.trim() : '';
     const description = typeof body.description === 'string' ? body.description.trim() : '';
     const claimType = typeof body.claimType === 'string' ? body.claimType : '';
     const clientLegalPosition = typeof body.clientLegalPosition === 'string' ? body.clientLegalPosition : 'UNSPECIFIED';
     const clientPositionDetail = typeof body.clientPositionDetail === 'string' ? body.clientPositionDetail.trim() : '';
-    if (!title || title.length > 500 || description.length > 5000 || !PREVIEW_CLAIM_TYPES.has(claimType) || (perspectiveSchema && !['VICTIM','SUSPECT','OTHER'].includes(clientLegalPosition)) || clientPositionDetail.length > 2000 || (clientLegalPosition === 'OTHER' && !clientPositionDetail) || !category || !exactObjectKeys(category, ['major', 'middle', 'minor'])) return json({ error: 'Case title, type, client legal position, description, or category is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
+    const clientName = typeof body.clientName === 'string' ? body.clientName.trim() : '';
+    if (!title || title.length > 500 || description.length > 5000 || !PREVIEW_CLAIM_TYPES.has(claimType) || (perspectiveSchema && !['VICTIM','SUSPECT','OTHER'].includes(clientLegalPosition)) || clientPositionDetail.length > 2000 || (clientLegalPosition === 'OTHER' && !clientPositionDetail) || (clientNameSchema && (!clientName || clientName.length > 300)) || !category || !exactObjectKeys(category, ['major', 'middle', 'minor'])) return json({ error: 'Case title, client name, type, client legal position, description, or category is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
     const major = typeof category.major === 'string' ? category.major.trim() : '';
     const middle = typeof category.middle === 'string' ? category.middle.trim() : '';
     const minor = typeof category.minor === 'string' ? category.minor.trim() : '';
     if (![major, middle, minor].every((entry) => entry.length >= 1 && entry.length <= 100)) return json({ error: 'All three category levels are required', code: 'INVALID_CASE_CATEGORY' }, 400);
     const idempotencyKey = request.headers.get('Idempotency-Key');
     if (idempotencyKey && !PREVIEW_CASE_CREATE_KEY.test(idempotencyKey)) return json({ error: 'Idempotency-Key is invalid', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
-    const fingerprint = idempotencyKey ? await sha256Hex(JSON.stringify(perspectiveSchema ? { title, description, claimType, clientLegalPosition, clientPositionDetail, major, middle, minor } : { title, description, claimType, major, middle, minor })) : null;
+    const fingerprint = idempotencyKey ? await sha256Hex(JSON.stringify(perspectiveSchema ? { title, description, claimType, clientLegalPosition, clientPositionDetail, clientName, major, middle, minor } : { title, description, claimType, clientName, major, middle, minor })) : null;
     if (idempotencyKey) {
       const existing = await env.DB.prepare(
         'SELECT id, request_fingerprint AS requestFingerprint FROM preview_cases WHERE organization_id = ? AND idempotency_key = ?'
@@ -3835,9 +3868,11 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     try {
       await env.DB.batch([
-        perspectiveSchema
-          ? env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at, client_legal_position, client_position_detail) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now, clientLegalPosition, clientPositionDetail || null)
-          : env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now),
+        perspectiveSchema && clientNameSchema
+          ? env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at, client_legal_position, client_position_detail, client_name) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now, clientLegalPosition, clientPositionDetail || null, clientName)
+          : perspectiveSchema
+            ? env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at, client_legal_position, client_position_detail) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now, clientLegalPosition, clientPositionDetail || null)
+            : env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now),
         env.DB.prepare('INSERT INTO preview_case_assignments (case_id, user_id, assigned_by, assigned_at) VALUES (?, ?, ?, ?)').bind(caseId, user.id, user.id, now),
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'CASE_CREATED', '사건 등록', `${claimType} · ${caseNumber} · CLIENT_POSITION:${clientLegalPosition}`, now)
       ]);
@@ -7214,9 +7249,7 @@ function caseEvidenceProjection(row: CaseEvidenceRow): Record<string, unknown> {
     storageProvider: row.storageProvider,
     uploadedBy: row.uploadedBy,
     uploadedAt: row.uploadedAt,
-    googleFileId: row.googleFileId ?? null,
-    googleFolderId: row.googleFolderId ?? null,
-    driveUrl: row.googleFileId ? `https://drive.google.com/open?id=${encodeURIComponent(row.googleFileId)}` : null,
+    driveUrl: null,
     downloadUrl: `/api/cases/evidence/${row.id}/download`
   };
 }
@@ -7238,7 +7271,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       googleEvidence = null;
     }
     if (googleEvidence) {
-      if (!await accessiblePreviewCase(env, user, googleEvidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+      if (!await organizationPreviewCase(env, googleEvidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
       if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, googleEvidence.caseId)) {
         return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
       }
@@ -7251,7 +7284,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       'SELECT e.id,e.case_id AS caseId,e.original_name AS originalName,e.mime_type AS mimeType,e.byte_size AS byteSize,e.sha256,e.chunk_count AS chunkCount ' +
       'FROM preview_case_evidence e WHERE e.id=? AND e.organization_id=?'
     ).bind(downloadMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; originalName: string; mimeType: string; byteSize: number; sha256: string; chunkCount: number }>();
-    if (!evidence || !await accessiblePreviewCase(env, user, evidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+    if (!evidence || !await organizationPreviewCase(env, evidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
     if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, evidence.caseId)) {
       return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
     }
@@ -7272,7 +7305,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   const collectionMatch = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/evidence$/iu);
   if (!collectionMatch) return json({ error: 'Case evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
   const caseId = collectionMatch[1];
-  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  const caseRow = await organizationPreviewCase(env, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
   if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, caseId)) {
     return json({ error: '수주 확정 후 프로젝트 워크로 전환된 활성 프로젝트만 자료실에 연결할 수 있습니다.', code: 'PROJECT_WORK_REQUIRED' }, 404);
@@ -7297,13 +7330,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     const configured = Boolean(await googleConfig(env));
     const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
     const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 200);
-    const latestFolderId = googleRows.find((row) => typeof row.googleFolderId === 'string' && /^[A-Za-z0-9_-]{10,200}$/u.test(row.googleFolderId))?.googleFolderId;
-    const driveLibraryUrl = connected
-      ? latestFolderId
-        ? `https://drive.google.com/drive/folders/${encodeURIComponent(latestFolderId)}`
-        : 'https://drive.google.com/drive/my-drive'
-      : null;
-    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF39_INTEGRATED_PROJECT_EVIDENCE' });
+    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl: null, accessMode: 'STUDIO_SESSION_PROXY', storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF83_STUDIO_SCOPED_DRIVE_ACCESS' });
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);

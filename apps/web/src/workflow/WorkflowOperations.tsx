@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '@claim-studio/ui';
+import { Button, Select } from '@claim-studio/ui';
 import { ApiError, apiRequest } from '../api';
 import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
+import { meetingMinutesWorkbook } from '../proposals/proposal-excel';
 import { WORKFLOW_STAGES, WORKFORCE_UNITS } from './workflow-model';
 
 type WorkflowRouteId = 'WF-03' | 'WF-04' | 'WF-05';
@@ -173,7 +174,7 @@ export const WorkflowOperations: React.FC<{
     surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', rawNotes: '', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0
   });
   const [allocation, setAllocation] = useState({
-    unitKey: WORKFORCE_OPTIONS[0]?.key ?? '', scopeText: '', basisText: '설계도서·현장실측', startDate: kstToday(), endDate: kstToday()
+    unitKey: WORKFORCE_OPTIONS[0]?.key ?? '', memberName: WORKFORCE_OPTIONS[0]?.members?.[0] ?? '', scopeText: '', basisText: '설계도서·현장실측', startDate: kstToday(), endDate: kstToday()
   });
 
   const selectedUnit = useMemo(() => WORKFORCE_OPTIONS.find((unit) => unit.key === allocation.unitKey) ?? WORKFORCE_OPTIONS[0], [allocation.unitKey]);
@@ -238,11 +239,13 @@ export const WorkflowOperations: React.FC<{
 
   useEffect(() => {
     let active = true;
-    apiRequest<{ cases: CaseSummary[] }>('/api/cases?scope=project-work&limit=100').then((response) => {
+    const caseQuery = routeId === 'WF-04' ? '/api/cases?scope=project-work&stage=SITE_SURVEY&limit=100' : '/api/cases?scope=project-work&limit=100';
+    apiRequest<{ cases: CaseSummary[] }>(caseQuery).then((response) => {
       if (!active) return;
-      setCases(response.cases);
+      const eligibleCases = response.cases;
+      setCases(eligibleCases);
       const requested = selectedCaseRef.current;
-      const first = response.cases.find((entry) => entry.id === requested)?.id ?? response.cases[0]?.id ?? '';
+      const first = eligibleCases.find((entry) => entry.id === requested)?.id ?? eligibleCases[0]?.id ?? '';
       selectedCaseRef.current = first;
       setSelectedCaseId(first);
       if (first) void loadWorkflow(first);
@@ -411,7 +414,7 @@ export const WorkflowOperations: React.FC<{
   const saveAllocation = () => {
     if (!selectedUnit) return;
     const payload = {
-      unitKey: selectedUnit.key, unitLabel: selectedUnit.unit, office: selectedUnit.organization,
+      unitKey: selectedUnit.key, unitLabel: `${selectedUnit.unit} · ${allocation.memberName || '담당자 미지정'}`, office: selectedUnit.organization,
       schedulingMode: selectedUnit.schedulingMode, discipline: selectedUnit.disciplineCode,
       scopeText: allocation.scopeText, basisText: allocation.basisText, startDate: allocation.startDate, endDate: allocation.endDate
     };
@@ -438,10 +441,7 @@ export const WorkflowOperations: React.FC<{
       </nav>
 
       <div className="workflow-project-selector">
-        <label htmlFor="workflow-case">현재 프로젝트</label>
-        <select id="workflow-case" value={selectedCaseId} disabled={Boolean(busy)} onChange={(event) => selectCase(event.target.value)}>
-          {cases.map((entry) => <option key={entry.id} value={entry.id}>{entry.caseNumber} · {entry.title}</option>)}
-        </select>
+        <Select id="workflow-case" searchable searchPlaceholder="프로젝트 번호·이름 검색" label="현재 프로젝트" value={selectedCaseId} disabled={Boolean(busy)} onChange={(event) => selectCase(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />
         {data && <span>{data.case.claimType} · {data.case.status}</span>}
       </div>
 
@@ -660,6 +660,12 @@ const KickoffEditor: React.FC<{
   const meetingTitle = form.agenda.trim().split(/\r?\n/u)[0] || '미입력';
   const participantText = form.participantUnits.trim() || '미입력';
   const attachmentName = archivedFile?.originalName?.trim() || '미입력';
+  const downloadCurrentMinutes = () => {
+    const bytes = meetingMinutesWorkbook({ author:record?.updatedByName || '미입력', meetingDate, meetingTime, location:form.location.trim() || '미입력', participants:participantText, meetingTitle, attachmentName, summary:displayedSummary, followUps:displayedTimeline.map((item)=>`${item.order}. ${item.title} · ${item.detail}`).join('\n') || '미입력' });
+    const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const url = URL.createObjectURL(new Blob([payload], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const anchor = document.createElement('a'); anchor.href=url; anchor.download=`착수회의_회의록_${form.meetingAt.slice(0,10) || kstToday()}.xlsx`; anchor.click(); URL.revokeObjectURL(url);
+  };
   return (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
@@ -680,7 +686,7 @@ const KickoffEditor: React.FC<{
     <article className="workflow-editor-card is-output">
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문이 먼저 미리보기로 표시됩니다. 자동작성·정리 후에는 결정사항과 후속업무를 검수하고 최종 확정합니다.</p>
-      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
       {displayedSummary ? <>
         <div className="company-minutes-scroll" tabIndex={0} role="region" aria-label="회사 회의록 최종본 표">
           <table className="company-minutes-table">
@@ -706,6 +712,7 @@ const KickoffEditor: React.FC<{
             </tbody>
           </table>
         </div>
+        <Button className="workflow-template-button" variant="secondary" onClick={downloadCurrentMinutes}>현재 회의록 XLSX 내려받기</Button>
         {record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
       </> : <div className="workflow-empty"><strong>아직 정리된 회의록이 없습니다.</strong><p>회사 양식을 가져오거나 회의 메모를 저장한 뒤 Gemini 정리를 실행하세요.</p></div>}
     </article>
@@ -766,7 +773,7 @@ const SurveyEditor: React.FC<{
     <article className="workflow-editor-card is-output">
       <header><div><span>SITE NOTES · HUMAN REVIEW</span><h3>현장조사 최종본 · 관찰사항 · 후속확인</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문을 먼저 미리보기로 확인합니다. 자동작성·정리 후에는 관찰사항과 추가 확인업무를 원문과 대조하고 최종 확정합니다.</p>
-      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
       {displayedSummary ? <><pre className="workflow-summary-text">{displayedSummary}</pre><ol className="workflow-timeline">{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol>{record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}</> : <div className="workflow-empty"><strong>아직 정리된 현장조사 기록이 없습니다.</strong><p>현장 원본을 가져오거나 조사 메모를 저장한 뒤 자동작성·정리를 실행하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-survey-ledger-card">
@@ -784,8 +791,8 @@ const SurveyEditor: React.FC<{
 
 const AllocationEditor: React.FC<{
   caseId: string;
-  form: { unitKey: string; scopeText: string; basisText: string; startDate: string; endDate: string };
-  setForm: React.Dispatch<React.SetStateAction<{ unitKey: string; scopeText: string; basisText: string; startDate: string; endDate: string }>>;
+  form: { unitKey: string; memberName: string; scopeText: string; basisText: string; startDate: string; endDate: string };
+  setForm: React.Dispatch<React.SetStateAction<{ unitKey: string; memberName: string; scopeText: string; basisText: string; startDate: string; endDate: string }>>;
   allocations: AllocationRecord[];
   disabled: boolean;
   busy: string;
@@ -796,13 +803,14 @@ const AllocationEditor: React.FC<{
     <article className="workflow-editor-card">
       <header><div><span>TAKEOFF & RESOURCE PLAN</span><h3>산출 범위·팀 투입 일정</h3></div><em>한국 개인 · 베트남 팀</em></header>
       <div className="workflow-form-grid">
-        <label className="is-wide">투입 조직<select value={form.unitKey} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, unitKey: event.target.value }))}>{WORKFORCE_OPTIONS.map((unit) => <option key={unit.key} value={unit.key}>{unit.organization} · {unit.unit} · {unit.size}명 · {unit.schedulingMode === 'TEAM' ? '팀 일정' : '인원 일정'}</option>)}</select></label>
+        <label className="is-wide">투입 조직<select value={form.unitKey} disabled={disabled} onChange={(event) => { const unit=WORKFORCE_OPTIONS.find((item)=>item.key===event.target.value);setForm((current) => ({ ...current, unitKey:event.target.value, memberName:unit?.members?.[0]??'' })); }}>{WORKFORCE_OPTIONS.map((unit) => <option key={unit.key} value={unit.key}>{unit.organization} · {unit.unit} · {unit.size}명 · {unit.schedulingMode === 'TEAM' ? '팀 일정' : '인원 일정'}</option>)}</select></label>
+        <label className="is-wide">실제 투입 담당자<select value={form.memberName} disabled={disabled} onChange={(event)=>setForm((current)=>({...current,memberName:event.target.value}))}><option value="">담당자 선택</option>{(WORKFORCE_OPTIONS.find((unit)=>unit.key===form.unitKey)?.members??[]).map((member)=><option key={member} value={member}>{member}</option>)}</select></label>
         <label className="is-wide">산출 범위<textarea value={form.scopeText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, scopeText: event.target.value }))} placeholder="도면·동·공종·산출 제외 범위를 구체적으로 입력" /></label>
         <label className="is-wide">산출 기준<textarea value={form.basisText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, basisText: event.target.value }))} placeholder="설계도서, 현장실측, 계약내역, 감정 기준" /></label>
         <label>시작일<input type="date" value={form.startDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} /></label>
         <label>종료일<input type="date" value={form.endDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} /></label>
       </div>
-      <Button className="workflow-form-save-button" disabled={disabled || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : '투입 일정 저장·프로젝트 일정표 반영'}</Button>
+      <Button className="workflow-form-save-button" disabled={disabled || !form.memberName || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : '담당자 투입 일정 저장·프로젝트 일정표 반영'}</Button>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>ALLOCATION LEDGER</span><h3>프로젝트 투입 현황</h3></div><em>{allocations.length}건</em></header>
