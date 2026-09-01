@@ -11,9 +11,10 @@ interface AiConfig { providers: AiProvider[]; routes: AiRoute[] }
 interface ChapterPrompt { id: string; chapterCode: string; title: string; agentCode: string; rolePrompt: string; instructionPrompt: string; ordinal: number; version: number; updatedAt: string; updatedBy: string; sourceCategoryCodes: string[]; sourceAnalysisNote: string; sourceAnalysisVersion: number }
 interface PromptSet { claimType: string; name: string; status: string; systemPrompt: string; chapters: ChapterPrompt[] }
 interface TypeGuideline { claimType: string; typeName: string; targetWork: string; tocBlueprint: string; stage1Prompt: string; stage2Prompt: string; sourceFileName: string; sourceSha256: string; status: string; version: number; updatedAt: string; updatedByName: string }
+interface GuidelinePackage { packageId: string; packageName: string; schemaVersion: string; effectiveFrom: string; sourceZipSha256: string; reportTemplateZipSha256: string; proposalTemplateZipSha256: string; typeCount: number; chapterCount: number; moduleCount: number; outputProfileCount: number; installedAt: string; installedByName: string }
 interface TemplateLibraryFile { id: string; originalName: string; fileExtension: string; byteSize: number; sha256: string; uploadedAt: string; uploadedByName: string; viewMode: 'INLINE' | 'DOWNLOAD'; contentUrl: string }
 interface TemplateLibraryCategory { id: string; categoryCode: string; displayName: string; primaryClaimType: string; secondaryClaimTypes: string[]; expectedSourceCount: number; uploadedSourceCount: number; analysisSummary: string; outline: string[]; analysisVersion: number; files: TemplateLibraryFile[] }
-interface AdminPromptPayload { aiConfig: AiConfig; promptSets: PromptSet[]; typeGuidelines: TypeGuideline[]; templateLibrary: TemplateLibraryCategory[] }
+interface AdminPromptPayload { aiConfig: AiConfig; promptSets: PromptSet[]; typeGuidelines: TypeGuideline[]; guidelinePackage?: GuidelinePackage | null; templateLibrary: TemplateLibraryCategory[] }
 
 const TASK_LABELS: Record<TaskKind, { title: string; detail: string }> = {
   OUTLINE_PLANNING: { title: '목차 기획', detail: '보고서 구조와 챕터별 계획을 설계합니다.' },
@@ -151,6 +152,7 @@ export function PreviewAiAdmin(): React.ReactElement {
       <div className="notice-box">현재 권장 구성: 목차는 ChatGPT, 본문은 Gemini로 먼저 검증하고 Claude API Key 연결 후 Claude Sonnet/Opus로 교체, 사실확인은 Gemini.</div>
     </Card>
     <Card title="보고서 유형별 작성 지침 · 관리자 전용">
+      {payload.guidelinePackage && <div className="notice-box" role="status"><strong>{payload.guidelinePackage.packageName} · v{payload.guidelinePackage.schemaVersion} 적용 완료</strong><br />주유형 {payload.guidelinePackage.typeCount}개 · 챕터 {payload.guidelinePackage.chapterCount}개 · 쟁점 모듈 {payload.guidelinePackage.moduleCount}개 · 출력 프로필 {payload.guidelinePackage.outputProfileCount}개 · SHA-256 {payload.guidelinePackage.sourceZipSha256.slice(0, 16)}…</div>}
       <div className="report-ai-admin__settings"><Select label="보고서 유형" value={selectedType} onChange={(event) => changeType(event.target.value)} options={payload.promptSets.map((entry) => ({ value: entry.claimType, label: `${entry.claimType} · ${entry.name}` }))} /></div>
       {typeGuideline ? <div className="form-stack report-ai-admin__type-guideline">
         <div className="report-ai-admin__guideline-meta"><div><span>APPROVED TWO-STAGE AUTHORING POLICY</span><strong>{typeGuideline.claimType} · {typeGuideline.typeName}</strong><small>지침 v{typeGuideline.version} · {typeGuideline.updatedByName} · {new Date(typeGuideline.updatedAt).toLocaleString('ko-KR')}</small></div><div><span>IMPORT SOURCE</span><strong>{typeGuideline.sourceFileName}</strong><small>SHA-256 {typeGuideline.sourceSha256.slice(0, 16)}…</small></div></div>

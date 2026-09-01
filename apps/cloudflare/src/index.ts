@@ -4457,6 +4457,22 @@ interface PreviewTypeGuidelineRow {
   updatedByName: string;
 }
 
+interface PreviewGuidelinePackageSummary {
+  packageId: string;
+  packageName: string;
+  schemaVersion: string;
+  effectiveFrom: string;
+  sourceZipSha256: string;
+  reportTemplateZipSha256: string;
+  proposalTemplateZipSha256: string;
+  typeCount: number;
+  chapterCount: number;
+  moduleCount: number;
+  outputProfileCount: number;
+  installedAt: string;
+  installedByName: string;
+}
+
 interface PreviewAiSettingsRow {
   providerKind: string;
   modelCode: string;
@@ -4812,6 +4828,24 @@ async function previewTypeGuidelines(env: CloudflareEnv, claimType = ''): Promis
   }
 }
 
+async function previewGuidelinePackageSummary(env: CloudflareEnv): Promise<PreviewGuidelinePackageSummary | null> {
+  if (!env.DB) return null;
+  try {
+    const row = await env.DB.prepare(
+      'SELECT p.id AS packageId,p.package_name AS packageName,p.schema_version AS schemaVersion,p.effective_from AS effectiveFrom,' +
+      'p.source_zip_sha256 AS sourceZipSha256,p.report_template_zip_sha256 AS reportTemplateZipSha256,p.proposal_template_zip_sha256 AS proposalTemplateZipSha256,' +
+      "json_array_length(json_extract(p.config_json,'$.claimTypes')) AS typeCount," +
+      "(SELECT SUM(json_array_length(json_extract(t.value,'$.chapters'))) FROM json_each(json_extract(p.config_json,'$.claimTypes')) t) AS chapterCount," +
+      "json_array_length(json_extract(p.config_json,'$.modules')) AS moduleCount,json_array_length(json_extract(p.config_json,'$.outputProfiles')) AS outputProfileCount," +
+      'p.installed_at AS installedAt,u.display_name AS installedByName ' +
+      'FROM preview_report_guideline_active a JOIN preview_report_guideline_packages p ON p.id=a.package_id JOIN preview_users u ON u.id=p.installed_by WHERE a.organization_id=?'
+    ).bind(PREVIEW_ORGANIZATION_ID).first<PreviewGuidelinePackageSummary>();
+    return row ? { ...row, typeCount: Number(row.typeCount), chapterCount: Number(row.chapterCount), moduleCount: Number(row.moduleCount), outputProfileCount: Number(row.outputProfileCount) } : null;
+  } catch {
+    return null;
+  }
+}
+
 interface PreviewTemplateLibraryFileRow {
   id: string;
   categoryId: string;
@@ -5010,7 +5044,7 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
   if (url.pathname === '/api/admin/report-prompts' && request.method === 'GET') {
     const routes = await previewAiRoutes(env);
     const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
-    const [rows, typeGuidelines] = await Promise.all([previewPromptRows(env), previewTypeGuidelines(env)]);
+    const [rows, typeGuidelines, guidelinePackage] = await Promise.all([previewPromptRows(env), previewTypeGuidelines(env), previewGuidelinePackageSummary(env)]);
     const typeMap = new Map<string, { claimType: string; name: string; status: string; systemPrompt: string; chapters: Array<Record<string, unknown>> }>();
     for (const row of rows) {
       if (!typeMap.has(row.claimType)) typeMap.set(row.claimType, { claimType: row.claimType, name: row.typeName, status: row.setStatus, systemPrompt: row.systemPrompt, chapters: [] });
@@ -5021,8 +5055,9 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
       aiConfig: await previewAiPublicConfiguration(env, routes),
       promptSets: [...typeMap.values()],
       typeGuidelines,
+      guidelinePackage,
       templateLibrary: await previewReportTemplateLibrary(env),
-      phase: 'CF33_TYPE_AUTHORING_GUIDELINES'
+      phase: guidelinePackage ? 'CF84_CLAIM_REPORT_GUIDELINE_PACKAGE' : 'CF33_TYPE_AUTHORING_GUIDELINES'
     });
   }
 
@@ -6146,11 +6181,11 @@ async function handlePreviewCaseLaw(request: Request, env: CloudflareEnv, url: U
   if (url.pathname === '/api/report-authoring/case-law/select' && request.method === 'POST') {
     if(!await canManagePreviewProjectReport(env,user,caseRow.id))return json({error:'담당 PM 또는 관리자만 판례 근거를 선택할 수 있습니다.',code:'RESPONSIBLE_PM_REQUIRED'},403);
     if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
-    if(!exactObjectKeys(body,['caseId','chapterId','precIds'])||!Array.isArray(body.precIds)||body.precIds.length<1||body.precIds.length>3||body.precIds.some((id)=>typeof id!=='string'||!PREVIEW_LAW_ID.test(id)))return json({error:'판례를 1~3건 선택해 주세요.',code:'INVALID_CASE_LAW_SELECTION'},400);
+    if(!exactObjectKeys(body,['caseId','chapterId','precIds'])||!Array.isArray(body.precIds)||body.precIds.length<1||body.precIds.length>3||body.precIds.some((id)=>typeof id!=='string'||!PREVIEW_LAW_ID.test(id))||new Set(body.precIds).size!==body.precIds.length)return json({error:'중복 없이 판례를 1~3건 선택해 주세요.',code:'INVALID_CASE_LAW_SELECTION'},400);
     try {
       const details=await Promise.all((body.precIds as string[]).map((id)=>fetchPreviewLawApi(env,'detail',id)));
       const now=new Date().toISOString();const statements:D1StatementLike[]=[env.DB.prepare("UPDATE preview_report_case_law_sources SET selection_status='EXCLUDED',excluded_by=?,excluded_at=? WHERE organization_id=? AND case_id=? AND chapter_id=? AND selection_status='ACTIVE'").bind(user.id,now,PREVIEW_ORGANIZATION_ID,caseRow.id,body.chapterId)];
-      for(let index=0;index<details.length;index+=1){const detail=details[index];const candidate=detail.candidates.find((row)=>row.precId===(body.precIds as string[])[index])??detail.candidates[0];if(!candidate)throw new Error('LAW_API_DETAIL_MISSING');const snapshot=JSON.stringify(detail.raw);if(snapshot.length>3_000_000)throw new Error('LAW_API_DETAIL_TOO_LARGE');statements.push(env.DB.prepare('INSERT INTO preview_report_case_law_sources (id,organization_id,case_id,chapter_id,chapter_code,prec_id,court_name,case_number,decision_date,case_name,holding_text,summary_text,snapshot_json,source_sha256,official_url,fetched_at,selection_status,selected_by,selected_at,excluded_by,excluded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\'ACTIVE\',?,?,NULL,NULL)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseRow.id,body.chapterId,prompt.chapterCode,candidate.precId,candidate.courtName,candidate.caseNumber,candidate.decisionDate,candidate.caseName,candidate.holdingText||'[판시사항 확인 필요]',candidate.summaryText||'[판결요지 확인 필요]',snapshot,await sha256Hex(snapshot),candidate.officialUrl,now,user.id,now));}
+      for(let index=0;index<details.length;index+=1){const detail=details[index];const requestedPrecId=(body.precIds as string[])[index];const candidate=detail.candidates.find((row)=>row.precId===requestedPrecId);if(!candidate)throw new Error('LAW_API_DETAIL_ID_MISMATCH');const snapshot=JSON.stringify(detail.raw);if(snapshot.length>3_000_000)throw new Error('LAW_API_DETAIL_TOO_LARGE');statements.push(env.DB.prepare('INSERT INTO preview_report_case_law_sources (id,organization_id,case_id,chapter_id,chapter_code,prec_id,court_name,case_number,decision_date,case_name,holding_text,summary_text,snapshot_json,source_sha256,official_url,fetched_at,selection_status,selected_by,selected_at,excluded_by,excluded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\'ACTIVE\',?,?,NULL,NULL)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseRow.id,body.chapterId,prompt.chapterCode,candidate.precId,candidate.courtName,candidate.caseNumber,candidate.decisionDate,candidate.caseName,candidate.holdingText||'[판시사항 확인 필요]',candidate.summaryText||'[판결요지 확인 필요]',snapshot,await sha256Hex(snapshot),candidate.officialUrl,now,user.id,now));}
       await env.DB.batch(statements);return json({...(await previewCaseLawPayload(env,caseRow.id,body.chapterId)),phase:'CF79_CASE_LAW_GROUNDING'},201);
     } catch(reason){const code=reason instanceof Error?reason.message:'LAW_API_FAILED';return json({error:code==='LAW_API_OC_REQUIRED'?'관리자가 테스트 서버에 국가법령정보 공동활용 OC를 설정해야 합니다.':'선택한 판례 원문을 보존하지 못했습니다.',code},code==='LAW_API_OC_REQUIRED'?503:502);}
   }
@@ -6173,10 +6208,11 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const outlineRoute = routes.find((route) => route.taskKind === 'OUTLINE_PLANNING') ?? writingRoute;
     const prompts = await previewPromptRows(env, caseRow.claimType);
     const unavailable = prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
-    const [outlinePlan, sourceGroups, typeGuideline] = await Promise.all([
+    const [outlinePlan, sourceGroups, typeGuideline, guidelinePackage] = await Promise.all([
       previewOutlinePlan(env, caseRow.id, prompts),
       previewReportSourceGroups(env, caseRow),
-      previewTypeGuidelines(env, caseRow.claimType).then((rows) => rows[0] ?? null)
+      previewTypeGuidelines(env, caseRow.claimType).then((rows) => rows[0] ?? null),
+      previewGuidelinePackageSummary(env)
     ]);
     let templates: Array<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }> = [];
     try {
@@ -6210,11 +6246,12 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       assistantModelLabel: assistantRoute.modelCode,
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
       typeGuideline: typeGuideline ? { claimType: typeGuideline.claimType, typeName: typeGuideline.typeName, targetWork: typeGuideline.targetWork, tocBlueprint: typeGuideline.tocBlueprint, version: Number(typeGuideline.version), sourceFileName: typeGuideline.sourceFileName, sourceSha256: typeGuideline.sourceSha256 } : null,
+      guidelinePackage,
       outlinePlan,
       sourceGroups,
       templates,
       templateLibrary: await previewReportTemplateLibrary(env, caseRow.claimType),
-      phase: 'CF33_TYPE_AUTHORING_GUIDELINES'
+      phase: guidelinePackage ? 'CF84_CLAIM_REPORT_GUIDELINE_PACKAGE' : 'CF33_TYPE_AUTHORING_GUIDELINES'
     });
   }
 
@@ -6347,6 +6384,10 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       const mentioned=[...content.matchAll(/\b\d{2,4}[가-힣]{1,4}\d+\b/gu)].map((match)=>match[0]);
       const unknown=[...new Set(mentioned.filter((number)=>!allowedNumbers.has(number)))];
       if(unknown.length)return json({error:`선택하지 않은 사건번호가 생성되어 초안을 차단했습니다: ${unknown.join(', ')}`,code:'CASE_LAW_CITATION_MISMATCH'},502);
+      const allowedSourceIds=new Set(caseLawSources.map((source)=>String(source.id)));
+      const markerIds=[...content.matchAll(/\[판례:([^\]\r\n]{1,100})\]/gu)].map((match)=>match[1].trim());
+      const unknownMarkers=[...new Set(markerIds.filter((id)=>!allowedSourceIds.has(id)))];
+      if(unknownMarkers.length)return json({error:`선택하지 않은 판례 ID 표지가 생성되어 초안을 차단했습니다: ${unknownMarkers.join(', ')}`,code:'CASE_LAW_SOURCE_MARKER_MISMATCH'},502);
     }
     const outputSha256 = await sha256Hex(content);
     const now = new Date().toISOString();
@@ -6374,7 +6415,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     }
     let caseLawCitations:Array<Record<string,unknown>>=[];
     if(caseLawSources.length){
-      const statements=caseLawSources.map((source)=>{const marker=`[판례:${String(source.id)}]`;const markerAt=content.indexOf(marker);const start=Math.max(0,markerAt-220);const citationText=markerAt>=0?content.slice(start,Math.min(content.length,markerAt+marker.length+40)).trim():'';const status=markerAt>=0?'VERIFIED':'INSUFFICIENT';const note=markerAt>=0?'선택 판례 ID와 생성 문장이 연결되었습니다. 담당자가 원문 취지를 최종 대조해 주세요.':'선택 판례가 초안 문장에 명시적으로 연결되지 않았습니다.';return env.DB!.prepare('INSERT INTO preview_report_case_law_citations (id,organization_id,case_id,chapter_id,source_id,generation_id,citation_text,validation_status,validation_note,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseRow.id,prompt.id,String(source.id),generationId,citationText,status,note,now);});
+      const statements=caseLawSources.map((source)=>{const marker=`[판례:${String(source.id)}]`;const markerAt=content.indexOf(marker);const start=Math.max(0,markerAt-220);const citationText=markerAt>=0?content.slice(start,Math.min(content.length,markerAt+marker.length+40)).trim():'';const status=markerAt>=0?'REVIEW_REQUIRED':'INSUFFICIENT';const note=markerAt>=0?'선택 판례 ID와 생성 문장의 연결만 확인했습니다. 담당자가 공식 원문의 판시 취지·유사점·차이점을 대조해야 합니다.':'선택 판례가 초안 문장에 명시적으로 연결되지 않았습니다.';return env.DB!.prepare('INSERT INTO preview_report_case_law_citations (id,organization_id,case_id,chapter_id,source_id,generation_id,citation_text,validation_status,validation_note,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseRow.id,prompt.id,String(source.id),generationId,citationText,status,note,now);});
       await env.DB.batch(statements).catch(()=>undefined);
       caseLawCitations=(await previewCaseLawPayload(env,caseRow.id,prompt.id)).citations as Array<Record<string,unknown>>;
     }

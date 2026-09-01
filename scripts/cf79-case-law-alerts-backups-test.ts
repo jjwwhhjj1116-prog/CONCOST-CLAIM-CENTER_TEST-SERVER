@@ -110,8 +110,26 @@ test('CF79 searches official case law and preserves selected source identity, so
   assert.throws(()=>sql.run('DELETE FROM preview_report_case_law_sources'),/case-law source snapshots cannot be deleted/u);sql.close();
 });
 
+test('CF84 rejects duplicate selections and a law detail response whose identity differs from the requested precedent',async()=>{
+  const{sql,env}=await setup();const caseId='79000000-0000-4000-8000-000000000041';insertCase(sql,caseId,'CC-2026-79041','CF84 판례 식별자 검증');
+  const prompt=sql.exec("SELECT id FROM preview_report_chapter_prompts WHERE chapter_code='CH-01' LIMIT 1")[0].values[0][0] as string;
+  const duplicate=await worker.fetch(req('/api/report-authoring/case-law/select',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId:prompt,precIds:['12345','12345']})}),env);
+  assert.equal(duplicate.status,400);assert.equal((await duplicate.json() as {code:string}).code,'INVALID_CASE_LAW_SELECTION');
+  env.LAW_API_TEST_FETCH=async()=>Response.json({PrecService:{판례일련번호:'99999',법원명:'대법원',사건번호:'2024다99999',선고일자:'2024. 5. 30.',사건명:'다른 판례',판시사항:'다른 판시사항',판결요지:'다른 판결요지'}});
+  const mismatch=await worker.fetch(req('/api/report-authoring/case-law/select',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId:prompt,precIds:['12345']})}),env);
+  assert.equal(mismatch.status,502);assert.equal((await mismatch.json() as {code:string}).code,'LAW_API_DETAIL_ID_MISMATCH');
+  assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_report_case_law_sources')[0].values[0][0]),0);sql.close();
+});
+
 test('CF79 report UI exposes case-law selection/review and removes the redundant project basics tile',()=>{
   const studio=readFileSync('apps/web/src/routes/PreviewReportStudio.tsx','utf8');const proposal=readFileSync('apps/web/src/proposals/ProposalView.tsx','utf8');const shell=readFileSync('apps/web/src/layout/AppShell.tsx','utf8');
   assert.match(studio,/판례 근거 추가/u);assert.match(studio,/판례 인용 검수/u);assert.doesNotMatch(studio,/프로젝트 기본정보/u);assert.match(studio,/복구용 백업은 1시간 단위/u);
   assert.match(proposal,/scope=proposal-authoring/u);assert.match(shell,/신규 프로젝트 수주/u);assert.match(shell,/투입 To-do/u);
+});
+
+test('CF84 treats generated citation markers as identity links pending human review',()=>{
+  const workerSource=readFileSync('apps/cloudflare/src/index.ts','utf8');
+  assert.match(workerSource,/CASE_LAW_SOURCE_MARKER_MISMATCH/u);
+  assert.match(workerSource,/status=markerAt>=0\?'REVIEW_REQUIRED':'INSUFFICIENT'/u);
+  assert.doesNotMatch(workerSource,/status=markerAt>=0\?'VERIFIED'/u);
 });

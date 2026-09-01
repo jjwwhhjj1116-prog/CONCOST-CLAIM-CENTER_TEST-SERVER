@@ -77,10 +77,10 @@ test('CF32 creates a private root/category Drive folder and accepts only signed 
     return new Response(JSON.stringify({ id: `private-folder-${created}00`, name: body.name, mimeType: 'application/vnd.google-apps.folder', trashed: false }), { headers: { 'Content-Type': 'application/json' } });
   };
   const folders = await ensureReportTemplateFolder(fetcher, { accessToken: 'server-token', categoryCode: 'REF-07', categoryName: '하자조사 보고서' });
-  assert.equal(folders.rootId, 'private-folder-100');
-  assert.equal(folders.categoryId, 'private-folder-200');
-  assert.equal(calls.length, 2);
-  assert.deepEqual((calls[1].body as { parents: string[] }).parents, ['private-folder-100']);
+  assert.equal(folders.rootId, 'private-folder-300');
+  assert.equal(folders.categoryId, 'private-folder-400');
+  assert.equal(calls.length, 4);
+  assert.deepEqual((calls[3].body as { parents: string[] }).parents, ['private-folder-300']);
   const pdf = new File([new TextEncoder().encode('%PDF-1.7\nsource')], 'template.pdf', { type: 'application/pdf' });
   assert.equal((await validateReportTemplateFile(pdf)).mimeType, 'application/pdf');
   await assert.rejects(validateReportTemplateFile(new File(['<html>'], 'template.pdf')), /does not match/u);
