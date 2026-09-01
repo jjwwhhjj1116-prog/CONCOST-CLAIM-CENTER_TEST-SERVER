@@ -14,6 +14,13 @@
   "placement": {
     "region": "gcp:asia-northeast3"
   },
+  "rules": [
+    {
+      "type": "Data",
+      "globs": ["**/*.jpg"],
+      "fallthrough": true
+    }
+  ],
   "vars": {
     "GOOGLE_ALLOWED_DOMAIN": "con-cost.com",
     "GOOGLE_ALLOWED_ACCOUNT": "concost.dt@gmail.com",

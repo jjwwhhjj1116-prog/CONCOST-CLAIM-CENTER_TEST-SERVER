@@ -38,7 +38,12 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.match(exporter, /loadFile\(hwp/u);
   assert.match(exporter, /완성된 HWP 재열기 검증/u);
   assert.match(exporter, /oleSignature/u);
-  assert.match(exporter, /clonedPage\.style\.width = '794px'/u);
+  assert.match(exporter, /A4_LANDSCAPE_WIDTH_PX = 1_123/u);
+  assert.match(exporter, /A4_LANDSCAPE_HEIGHT_PX = 794/u);
+  assert.match(exporter, /PageOrientation\.LANDSCAPE/u);
+  assert.match(exporter, /orientation: 'landscape'/u);
+  assert.match(exporter, /pdf\.addImage\(page\.bytes, 'JPEG', 0, 0, 297, 210/u);
+  assert.match(exporter, /landscape="WIDELY"/u);
   assert.match(exporter, /scale: 1\.5/u);
   assert.match(exporter, /imageTimeout: 15_000/u);
   assert.match(exporter, /removeContainer: true/u);
@@ -47,6 +52,9 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.doesNotMatch(exporter, /textWrap="BEHIND_TEXT"/u);
   assert.doesNotMatch(exporter, /dataUrl: string/u);
   assert.match(proposal, /onChange=\{\(next,json\)=>\{setChapters[\s\S]*?setDirty\(true\)/u);
+  assert.match(proposal, /data-export-document-kind="PROPOSAL"/u);
+  assert.match(proposal, /proposal-template-logo/u);
+  assert.match(report, /data-export-document-kind="REPORT"/u);
 });
 
 test('CF69 reception lists remain searchable scrollable and visibly selected', () => {

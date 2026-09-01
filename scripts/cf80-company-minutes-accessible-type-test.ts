@@ -31,9 +31,10 @@ test('CF81 restores normal workspace type and enlarges authoring fields only', (
   assert.match(theme, /\.sidebar \{ width: 352px; flex-basis: 352px; min-width: 300px; max-width: 480px/u);
   assert.match(shell, /window\.innerWidth <= 1024/u);
   assert.doesNotMatch(workflow, /font-size:\s*[0-9]+px/u);
-  assert.match(workflow, /\.workflow-form-grid label\s*\{[^}]*font-size:\s*1\.25rem/su);
-  assert.match(workflow, /\.workflow-form-grid textarea\s*\{[\s\S]*?font-size:\s*1\.5rem/su);
-  assert.match(workflow, /\.workflow-record-save-button,[\s\S]*?font-size:\s*1\.5rem\s*!important/su);
+  assert.match(workflow, /\.workflow-form-grid label\s*\{[^}]*font-size:\s*1rem/su);
+  assert.match(workflow, /\.workflow-form-grid textarea\s*\{[\s\S]*?font-size:\s*1\.25rem/su);
+  assert.match(workflow, /\.workflow-editor-card h3\s*\{[^}]*font-size:\s*1\.25rem/su);
+  assert.match(workflow, /\.workflow-record-save-button,[\s\S]*?font-size:\s*1rem\s*!important/su);
   assert.match(workflow, /@media \(max-width: 980px\)[^{]*\{[\s\S]*?\.workflow-form-grid \{ grid-template-columns: 1fr; \}/u);
   assert.match(workflow, /@media \(max-width: 1100px\)[^{]*\{[\s\S]*?\.workflow-editor-grid \{ grid-template-columns: 1fr; \}/u);
 });

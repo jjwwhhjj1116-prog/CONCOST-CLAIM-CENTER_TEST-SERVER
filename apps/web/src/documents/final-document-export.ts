@@ -1,7 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { AlignmentType, Document, ImageRun, Packer, Paragraph } from 'docx';
+import { AlignmentType, Document, ImageRun, Packer, PageOrientation, Paragraph } from 'docx';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 
 export type FinalDocumentFormat = 'docx' | 'pdf' | 'hwp';
@@ -19,9 +19,11 @@ export interface FinalDocumentExportResult {
   sha256: string;
 }
 
-const A4_RATIO = 297 / 210;
-const A4_WIDTH_HWPUNIT = 59_520;
-const A4_HEIGHT_HWPUNIT = 84_180;
+const A4_RATIO = 210 / 297;
+const A4_WIDTH_HWPUNIT = 84_180;
+const A4_HEIGHT_HWPUNIT = 59_520;
+const A4_LANDSCAPE_WIDTH_PX = 1_123;
+const A4_LANDSCAPE_HEIGHT_PX = 794;
 
 const xmlEscape = (value: string): string => value
   .replaceAll('&', '&amp;')
@@ -114,13 +116,13 @@ const capturePages = async (root: HTMLElement, onProgress?: (message: string) =>
       removeContainer: true,
       scale: 1.5,
       useCORS: true,
-      windowWidth: 1200,
+      windowWidth: 1400,
       onclone: (clonedDocument) => {
         const clonedPage = clonedDocument.querySelector<HTMLElement>(`[data-final-export-capture="${captureId}"]`);
         if (!clonedPage) return;
-        clonedPage.style.width = '794px';
+        clonedPage.style.width = `${A4_LANDSCAPE_WIDTH_PX}px`;
         clonedPage.style.maxWidth = 'none';
-        clonedPage.style.minHeight = '1123px';
+        clonedPage.style.minHeight = `${A4_LANDSCAPE_HEIGHT_PX}px`;
         clonedPage.style.margin = '0';
         clonedPage.style.boxSizing = 'border-box';
       },
@@ -146,7 +148,7 @@ const createDocx = async (pages: CapturedPage[]): Promise<Uint8Array> => {
     sections: [{
       properties: {
         page: {
-          size: { width: 11_906, height: 16_838 },
+          size: { width: 16_838, height: 11_906, orientation: PageOrientation.LANDSCAPE },
           margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 },
         },
       },
@@ -159,7 +161,7 @@ const createDocx = async (pages: CapturedPage[]): Promise<Uint8Array> => {
           data: page.bytes,
           // Keep a narrow safety area for Word's paragraph mark so it cannot overflow
           // onto an extra blank page, while preserving the A4 preview aspect ratio.
-          transformation: { width: 786, height: 1_111 },
+          transformation: { width: 1_110, height: 785 },
           altText: {
             title: `확정 문서 페이지 ${index + 1}`,
             description: `미리보기 ${index + 1}페이지`,
@@ -173,28 +175,39 @@ const createDocx = async (pages: CapturedPage[]): Promise<Uint8Array> => {
 };
 
 const createPdf = (pages: CapturedPage[]): Uint8Array => {
-  const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape', compress: true });
   pages.forEach((page, index) => {
-    if (index > 0) pdf.addPage('a4', 'portrait');
-    pdf.addImage(page.bytes, 'JPEG', 0, 0, 210, 297, `page-${index + 1}`, 'FAST');
+    if (index > 0) pdf.addPage('a4', 'landscape');
+    pdf.addImage(page.bytes, 'JPEG', 0, 0, 297, 210, `page-${index + 1}`, 'FAST');
   });
   return new Uint8Array(pdf.output('arraybuffer'));
 };
 
 const hwpxPicture = (index: number, page: CapturedPage): string => {
   const id = 910_000_000 + index;
-  return `<hp:run charPrIDRef="0"><hp:pic id="${id}" zOrder="${index}" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${id}" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:curSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="29760" centerY="42090" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="pageImage${index}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${A4_WIDTH_HWPUNIT}" y="0"/><hc:pt2 x="${A4_WIDTH_HWPUNIT}" y="${A4_HEIGHT_HWPUNIT}"/><hc:pt3 x="0" y="${A4_HEIGHT_HWPUNIT}"/></hp:imgRect><hp:imgClip left="0" right="${page.width}" top="0" bottom="${page.height}"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="${page.width}" dimheight="${page.height}"/><hp:effects/><hp:sz width="${A4_WIDTH_HWPUNIT}" widthRelTo="ABSOLUTE" height="${A4_HEIGHT_HWPUNIT}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="1" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="CENTER" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>확정 문서 페이지 ${index}</hp:shapeComment></hp:pic></hp:run>`;
+  return `<hp:run charPrIDRef="0"><hp:pic id="${id}" zOrder="${index}" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${id}" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:curSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="42090" centerY="29760" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="pageImage${index}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${A4_WIDTH_HWPUNIT}" y="0"/><hc:pt2 x="${A4_WIDTH_HWPUNIT}" y="${A4_HEIGHT_HWPUNIT}"/><hc:pt3 x="0" y="${A4_HEIGHT_HWPUNIT}"/></hp:imgRect><hp:imgClip left="0" right="${page.width}" top="0" bottom="${page.height}"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="${page.width}" dimheight="${page.height}"/><hp:effects/><hp:sz width="${A4_WIDTH_HWPUNIT}" widthRelTo="ABSOLUTE" height="${A4_HEIGHT_HWPUNIT}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="1" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="CENTER" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>확정 문서 페이지 ${index}</hp:shapeComment></hp:pic></hp:run>`;
 };
+
+const landscapeSection = (sectionProperties: string): string => sectionProperties.replace(/<hp:pagePr\b([^>]*)>/u, (_match, attributes: string) => {
+  let next = attributes
+    .replace(/\swidth="[^"]*"/u, ` width="${A4_WIDTH_HWPUNIT}"`)
+    .replace(/\sheight="[^"]*"/u, ` height="${A4_HEIGHT_HWPUNIT}"`);
+  next = /\slandscape="[^"]*"/u.test(next)
+    ? next.replace(/\slandscape="[^"]*"/u, ' landscape="WIDELY"')
+    : `${next} landscape="WIDELY"`;
+  return `<hp:pagePr${next}>`;
+});
 
 const createHwpx = (pages: CapturedPage[], title: string): Uint8Array => {
   const unpacked = unzipSync(decodeBase64(BLANK_HWPX_BASE64));
   const content = strFromU8(unpacked['Contents/content.hpf']);
   const section = strFromU8(unpacked['Contents/section0.xml']);
   const sectionOpen = section.match(/^<\?xml[^>]*>\s*<hs:sec[^>]*>/u)?.[0];
-  const sectionProperties = section.match(/<hp:run charPrIDRef="0"><hp:secPr[\s\S]*?<\/hp:run>/u)?.[0];
+  const rawSectionProperties = section.match(/<hp:run charPrIDRef="0"><hp:secPr[\s\S]*?<\/hp:run>/u)?.[0];
+  const sectionProperties = rawSectionProperties ? landscapeSection(rawSectionProperties) : undefined;
   if (!sectionOpen || !sectionProperties) throw new Error('HWPX 기본 문서 구조를 읽지 못했습니다.');
   const metadata = content.replace(/<opf:title\/>/u, `<opf:title>${xmlEscape(title)}</opf:title>`).replace('</opf:manifest>', `${pages.map((_, index) => `<opf:item id="pageImage${index + 1}" href="BinData/page-${String(index + 1).padStart(3, '0')}.jpg" media-type="image/jpeg" isEmbeded="1"/>`).join('')}</opf:manifest>`);
-  const paragraphs = pages.map((page, index) => `<hp:p id="${920_000_000 + index}" paraPrIDRef="0" styleIDRef="0" pageBreak="${index === 0 ? 0 : 1}" columnBreak="0" merged="0">${index === 0 ? sectionProperties : ''}${hwpxPicture(index + 1, page)}<hp:run charPrIDRef="0"><hp:t/></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="42520" flags="393216"/></hp:linesegarray></hp:p>`).join('');
+  const paragraphs = pages.map((page, index) => `<hp:p id="${920_000_000 + index}" paraPrIDRef="0" styleIDRef="0" pageBreak="${index === 0 ? 0 : 1}" columnBreak="0" merged="0">${index === 0 ? sectionProperties : ''}${hwpxPicture(index + 1, page)}<hp:run charPrIDRef="0"><hp:t/></hp:run><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="${A4_WIDTH_HWPUNIT}" flags="393216"/></hp:linesegarray></hp:p>`).join('');
   unpacked['Contents/content.hpf'] = strToU8(metadata);
   unpacked['Contents/section0.xml'] = strToU8(`${sectionOpen}${paragraphs}</hs:sec>`);
   pages.forEach((page, index) => { unpacked[`BinData/page-${String(index + 1).padStart(3, '0')}.jpg`] = Uint8Array.from(page.bytes); });
@@ -206,7 +219,7 @@ const createHwpx = (pages: CapturedPage[], title: string): Uint8Array => {
 const createHwp = async (pages: CapturedPage[], title: string, onProgress?: (message: string) => void): Promise<Uint8Array> => {
   onProgress?.('A4 확정본을 HWP 문서로 변환하고 있습니다.');
   const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;left:-12000px;top:0;width:900px;height:1200px;opacity:0;pointer-events:none;';
+  host.style.cssText = 'position:fixed;left:-12000px;top:0;width:1200px;height:900px;opacity:0;pointer-events:none;';
   document.body.append(host);
   const { createEditor } = await import('@rhwp/editor');
   const configuredStudioUrl = (window as Window & { __CLAIM_CENTER_RHWP_STUDIO_URL__?: string }).__CLAIM_CENTER_RHWP_STUDIO_URL__;

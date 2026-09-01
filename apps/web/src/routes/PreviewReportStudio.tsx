@@ -125,11 +125,11 @@ function reportPreviewHtml(content: string, editorJson: import('@tiptap/core').J
 
 function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, content, editorJson }: { caseNumber: string; caseTitle: string; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null }): React.ReactElement {
   const html = reportPreviewHtml(content, editorJson);
-  return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기">
-    <section className="report-final-cover" data-export-page>
-      <span>CONCOST CLAIM CENTER STUDIO</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p><strong>프로젝트 기술 보고서</strong>
+  return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기" data-export-document-title={title} data-export-document-kind="REPORT">
+    <section className="report-final-cover" data-export-page data-page-number="1">
+      <img className="proposal-template-logo" src="/api/proposal-studio/assets/BRAND_LOGO?v=1" alt="주식회사 컨코스트"/><span>CONCOST CLAIM CENTER STUDIO</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p><strong>프로젝트 기술 보고서</strong>
     </section>
-    <section className="report-final-body" data-export-page><header><span>FINAL REPORT</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p></header><article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: html }} /></section>
+    <section className="report-final-body" data-export-page data-page-number="2"><header><span>FINAL REPORT</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p></header><article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: html }} /></section>
   </article>;
 }
 

@@ -2412,6 +2412,26 @@ const FALLBACK_PROPOSAL_ASSETS: ProposalCompanyAssetMetadata[] = [
   {assetKey:'BRAND_LOGO',chapterNumber:4,displayOrder:99,title:'CONCOST 로고',altText:'주식회사 컨코스트 로고',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:false,version:0,updatedAt:null}
 ];
 
+interface BundledProposalAsset {
+  assetKey:string;
+  bytes:Uint8Array;
+  fileName:string;
+  height:number;
+  mimeType:'image/jpeg';
+  width:number;
+}
+
+async function bundledProposalAssets(env:CloudflareEnv):Promise<Map<string,BundledProposalAsset>>{
+  // Node-based contract tests do not load Worker data modules. The production
+  // and development Workers always have ASSETS, so only those bundles import
+  // the private HWP image data module.
+  if(!env.ASSETS)return new Map();
+  try{
+    const module=await import('./proposal-template-assets.js');
+    return new Map(module.BUNDLED_PROPOSAL_TEMPLATE_ASSETS.map((asset)=>[asset.assetKey,asset]));
+  }catch{return new Map();}
+}
+
 function sanitizeProposalCostData(source: string): { value: string; count: number } {
   let value = source;
   let count = 0;
@@ -2472,9 +2492,19 @@ async function proposalCompanyAssets(env: CloudflareEnv): Promise<ProposalCompan
   if (!env.DB) return FALLBACK_PROPOSAL_ASSETS;
   try {
     const rows=await env.DB.prepare('SELECT asset_key AS assetKey,chapter_number AS chapterNumber,display_order AS displayOrder,title,alt_text AS altText,mime_type AS mimeType,file_name AS fileName,file_sha256 AS sha256,width,height,(file_data IS NOT NULL) AS hasContent,is_active AS isActive,version,updated_at AS updatedAt FROM preview_proposal_company_assets WHERE organization_id=? ORDER BY chapter_number,display_order').bind(PREVIEW_ORGANIZATION_ID).all<Record<string,unknown>>();
-    return rows.results.map((row)=>({assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),displayOrder:Number(row.displayOrder),title:String(row.title),altText:String(row.altText),mimeType:row.mimeType?String(row.mimeType):null,fileName:row.fileName?String(row.fileName):null,sha256:row.sha256?String(row.sha256):null,width:row.width==null?null:Number(row.width),height:row.height==null?null:Number(row.height),hasContent:Boolean(row.hasContent),isActive:Boolean(row.isActive),version:Number(row.version),updatedAt:row.updatedAt?String(row.updatedAt):null}));
+    const bundled=await bundledProposalAssets(env);
+    const stored=rows.results.map((row)=>({assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),displayOrder:Number(row.displayOrder),title:String(row.title),altText:String(row.altText),mimeType:row.mimeType?String(row.mimeType):null,fileName:row.fileName?String(row.fileName):null,sha256:row.sha256?String(row.sha256):null,width:row.width==null?null:Number(row.width),height:row.height==null?null:Number(row.height),hasContent:Boolean(row.hasContent),isActive:Boolean(row.isActive),version:Number(row.version),updatedAt:row.updatedAt?String(row.updatedAt):null}));
+    const fallbackKeys=new Set(FALLBACK_PROPOSAL_ASSETS.map((asset)=>asset.assetKey));
+    const defaultSlots=FALLBACK_PROPOSAL_ASSETS.map((fallback)=>{
+      const current=stored.find((asset)=>asset.assetKey===fallback.assetKey)??fallback;
+      const bundledAsset=bundled.get(current.assetKey);
+      if(current.hasContent||!bundledAsset)return current;
+      return{...current,mimeType:bundledAsset.mimeType,fileName:bundledAsset.fileName,width:bundledAsset.width,height:bundledAsset.height,hasContent:true,version:Math.max(1,current.version),updatedAt:current.updatedAt??'HWP-260728'};
+    });
+    return[...defaultSlots,...stored.filter((asset)=>!fallbackKeys.has(asset.assetKey))].sort((a,b)=>a.chapterNumber-b.chapterNumber||a.displayOrder-b.displayOrder);
   } catch {
-    return FALLBACK_PROPOSAL_ASSETS;
+    const bundled=await bundledProposalAssets(env);
+    return FALLBACK_PROPOSAL_ASSETS.map((asset)=>{const source=bundled.get(asset.assetKey);return source?{...asset,mimeType:source.mimeType,fileName:source.fileName,width:source.width,height:source.height,hasContent:true,version:Math.max(1,asset.version),updatedAt:'HWP-260728'}:asset;});
   }
 }
 
@@ -2504,7 +2534,10 @@ async function proposalExportAssets(env:CloudflareEnv):Promise<ProposalExportAss
   if(!env.DB)return[];
   try{
     const rows=await env.DB.prepare("SELECT asset_key AS assetKey,chapter_number AS chapterNumber,title,alt_text AS altText,mime_type AS mimeType,file_name AS fileName,file_data AS fileData,width,height FROM preview_proposal_company_assets WHERE organization_id=? AND is_active=1 AND file_data IS NOT NULL AND mime_type='image/jpeg' ORDER BY chapter_number,display_order").bind(PREVIEW_ORGANIZATION_ID).all<Record<string,unknown>>();
-    return rows.results.flatMap((row)=>{const data=proposalAssetBytes(row.fileData);return data?[{assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),title:String(row.title),altText:String(row.altText),mimeType:'image/jpeg' as const,fileName:String(row.fileName??`${row.assetKey}.jpg`),width:Number(row.width),height:Number(row.height),data}]:[];});
+    const stored=rows.results.flatMap((row)=>{const data=proposalAssetBytes(row.fileData);return data?[{assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),title:String(row.title),altText:String(row.altText),mimeType:'image/jpeg' as const,fileName:String(row.fileName??`${row.assetKey}.jpg`),width:Number(row.width),height:Number(row.height),data}]:[];});
+    const storedKeys=new Set(stored.map((asset)=>asset.assetKey));const bundled=await bundledProposalAssets(env);
+    const defaults=FALLBACK_PROPOSAL_ASSETS.filter((asset)=>asset.isActive&&!storedKeys.has(asset.assetKey)).flatMap((metadata)=>{const source=bundled.get(metadata.assetKey);return source?[{assetKey:metadata.assetKey,chapterNumber:metadata.chapterNumber,title:metadata.title,altText:metadata.altText,mimeType:'image/jpeg' as const,fileName:source.fileName,width:source.width,height:source.height,data:source.bytes}]:[];});
+    return[...stored,...defaults].sort((a,b)=>a.chapterNumber-b.chapterNumber);
   }catch{return[];}
 }
 
@@ -2715,7 +2748,13 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
       const row=historical
         ? await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256,version FROM preview_proposal_company_asset_versions WHERE organization_id=? AND asset_key=? AND version=?').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1],requestedVersion).first<Record<string,unknown>>()
         : await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256,version FROM preview_proposal_company_assets WHERE organization_id=? AND asset_key=? AND is_active=1 AND file_data IS NOT NULL').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1]).first<Record<string,unknown>>();
-      const bytes=proposalAssetBytes(row?.fileData); if(!row||!bytes)return json({error:'Proposal company image was not found',code:'PROPOSAL_ASSET_NOT_FOUND'},404);
+      const bytes=proposalAssetBytes(row?.fileData);
+      if(!row||!bytes){
+        const fallback=(await bundledProposalAssets(env)).get(assetMatch[1]);
+        if(!fallback)return json({error:'Proposal company image was not found',code:'PROPOSAL_ASSET_NOT_FOUND'},404);
+        const fallbackSha=await sha256Hex(fallback.bytes);
+        return new Response(fallback.bytes.buffer.slice(fallback.bytes.byteOffset,fallback.bytes.byteOffset+fallback.bytes.byteLength) as ArrayBuffer,{headers:{'Content-Type':fallback.mimeType,'Content-Disposition':`inline; filename*=UTF-8''${encodeURIComponent(fallback.fileName)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Content-SHA256':fallbackSha,'X-Proposal-Asset-Version':'1','X-Proposal-Asset-Source':'HWP-260728'}});
+      }
       return new Response(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer,{headers:{'Content-Type':String(row.mimeType),'Content-Disposition':`inline; filename*=UTF-8''${encodeURIComponent(String(row.fileName))}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Content-SHA256':String(row.sha256),'X-Proposal-Asset-Version':String(row.version)}});
     }catch{return json({error:'Proposal company image store is not ready',code:'PROPOSAL_ASSET_STORE_NOT_READY'},503);}
   }

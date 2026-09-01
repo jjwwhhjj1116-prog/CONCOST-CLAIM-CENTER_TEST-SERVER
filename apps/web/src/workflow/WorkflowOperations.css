@@ -199,10 +199,10 @@
 .allocation-list p { margin: 8px 0 5px; color: #a9b6ca; font-size: .75rem; line-height: 1.5; }
 .allocation-list small { color: #76859c; font-size: .625rem; }
 
-/* 작성·선택 영역만 크게 읽히도록 한다. 제목·내비게이션·출력 패널의 기존 크기는 유지한다. */
+/* 입력값은 오른쪽 결과 제목(1.25rem)과 같은 크기로 맞추고, 라벨만 한 단계 낮춘다. */
 .shared-stage-schedule-fields label,
 .workflow-form-grid label {
-  font-size: 1.25rem;
+  font-size: 1rem;
   line-height: 1.4;
 }
 .shared-stage-schedule-fields input,
@@ -210,17 +210,17 @@
 .workflow-form-grid input,
 .workflow-form-grid select,
 .workflow-form-grid textarea {
-  min-height: 3.5rem;
-  font-size: 1.5rem;
+  min-height: 3.25rem;
+  font-size: 1.25rem;
   line-height: 1.55;
 }
-.workflow-form-grid textarea { min-height: 140px; padding: 15px 16px; }
-.workflow-form-grid textarea.is-tall { min-height: 220px; }
+.workflow-form-grid textarea { min-height: 124px; padding: 14px 15px; }
+.workflow-form-grid textarea.is-tall { min-height: 200px; }
 .shared-schedule-save-button,
 .workflow-record-save-button,
 .workflow-form-save-button {
-  min-height: 4rem !important;
-  font-size: 1.5rem !important;
+  min-height: 3.25rem !important;
+  font-size: 1rem !important;
   font-weight: 800 !important;
 }
 

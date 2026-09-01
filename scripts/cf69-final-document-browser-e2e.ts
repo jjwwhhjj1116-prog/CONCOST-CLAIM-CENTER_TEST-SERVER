@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import path from 'node:path';
-import { chromium, type Browser, type Download, type Page } from 'playwright-core';
+import { chromium, type Browser, type Download, type Page, type Route } from 'playwright-core';
 
 const root = path.resolve(__dirname, '..');
 const distRoot = path.join(root, 'apps', 'web', 'dist');
@@ -183,15 +183,23 @@ async function main(): Promise<void> {
     await page.route('**/api/settings/tutorial', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       tutorial: { completedTutorialVersion: 'CF79_V1', completedAt: '2026-08-31T00:00:00.000Z', completionAction: 'COMPLETED', version: 1, updatedAt: '2026-08-31T00:00:00.000Z' }, currentTutorialVersion: 'CF79_V1',
     }) }));
-    await page.route('**/api/cases', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [
+    const fulfillCases = (route: Route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [
       { id: 'case-1', caseNumber: 'CC-2026-00999', title: 'CF69 브라우저 검수 프로젝트', description: '확정 문서 출력 검수', claimType: 'TYPE-03', status: 'CONTRACT' },
-    ] }) }));
+    ] }) });
+    await page.route('http://127.0.0.1:3001/api/cases', fulfillCases);
+    await page.route('http://127.0.0.1:3001/api/cases?*', fulfillCases);
+    await page.route('**/api/member-alerts*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ awards: [], todos: [], today: '2026-08-28', available: true }) }));
     await page.route('**/api/proposal-studio/config', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       modules: chapterTitles.slice(3).map((title, index) => ({ code: `CH${String(index + 4).padStart(2, '0')}_MODULE`, chapterNumber: index + 4, title, category: 'COMPANY', bodyMarkdown: chapterBodies[index + 3], isActive: true, version: 2, updatedAt: '2026-08-28T00:00:00.000Z' })),
       sources: [{ id: 'source-1', sourceName: 'CF69 검수 대표 템플릿', sourceFormat: 'HWP', sourceDate: '2026-08-28', isDefault: true, analysisStatus: 'READY', chapterMapJson: '{}', version: 1 }],
       assets: [],
       templateTypes: [{ id: 'REDEVELOPMENT_FINANCE', label: '정비사업 금융·HUG 대응', description: 'CF69 검수 유형', representativeSourceId: 'source-1', representativeSourceName: 'CF69 검수 대표 템플릿', sourceCount: 1, promptReady: true }],
     }) }));
+    await page.route('**/api/proposal-studio/assets/BRAND_LOGO*', (route) => route.fulfill({
+      status: 200,
+      contentType: 'image/jpeg',
+      body: fs.readFileSync(path.join(root, 'apps', 'cloudflare', 'src', 'proposal-template-assets', 'BRAND_LOGO.jpg')),
+    }));
     await page.route('**/api/proposal-templates*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ templates: [
       { id: 'template-1', name: 'CF69 검수 템플릿', claimType: 'TYPE-03', description: '검수', bodyTemplate: '', placeholdersJson: '{}' },
     ] }) }));
@@ -226,7 +234,12 @@ async function main(): Promise<void> {
     });
 
     await page.goto(`${origin}/proposals/editor?caseId=case-1`, { waitUntil: 'domcontentloaded' });
-    await page.getByText('CF69 확정 제안서 · 4단계 제안서 스튜디오').waitFor({ state: 'visible', timeout: 15_000 });
+    try {
+      await page.getByText('CF69 확정 제안서 · 4단계 제안서 스튜디오').waitFor({ state: 'visible', timeout: 15_000 });
+    } catch (error) {
+      console.error('CF69 proposal-load diagnostics', { bodyText: (await page.locator('body').innerText()).slice(0, 4_000), consoleErrors });
+      throw error;
+    }
     await page.getByRole('button', { name: /04 전체 미리보기·확정/u }).click();
     await page.getByRole('article', { name: '확정 전 제안서 전체 합본 미리보기' }).waitFor({ state: 'visible' });
     const preview = page.getByRole('article', { name: '확정 전 제안서 전체 합본 미리보기' });
@@ -240,8 +253,8 @@ async function main(): Promise<void> {
     const docx = await verifyDownload(await clickFinalDownload(page, '확정 제안서 Word DOCX 내려받기'), 'docx', [0x50, 0x4b, 0x03, 0x04]);
     const docxDirectory = docx.bytes.toString('latin1');
     const docxMedia = new Set(docxDirectory.match(/word\/media\/[a-f0-9]{40}\.jpg/gu) ?? []);
-    assert.equal(docxMedia.size,14,'DOCX must contain all 14 rendered A4 pages');
-    console.log(`  2/4 browser downloaded valid DOCX (${docx.fileName}, ${docx.bytes.byteLength} bytes, 14 pages) PASS`);
+    assert.equal(docxMedia.size, 15, 'DOCX must contain all 14 rendered A4 pages plus the secured source-template logo');
+    console.log(`  2/4 browser downloaded valid DOCX (${docx.fileName}, ${docx.bytes.byteLength} bytes, 14 pages + template logo) PASS`);
 
     const unexpectedDialogs = await page.locator('.modal-backdrop').allInnerTexts();
     if (unexpectedDialogs.length) console.error('CF69 unexpected browser diagnostics', consoleErrors);
