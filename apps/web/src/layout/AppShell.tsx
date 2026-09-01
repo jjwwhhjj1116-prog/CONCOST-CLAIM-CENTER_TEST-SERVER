@@ -69,10 +69,9 @@ interface MemberAwardAlert { eventKey:string;caseId:string;caseNumber:string;pro
 interface MemberTodoAlert { eventKey:string;caseId:string;caseNumber:string;title:string;stageCode:string;stageLabel:string;startDate:string;endDate:string;status:string;noteText:string;message:string }
 interface MemberAlertsPayload { awards:MemberAwardAlert[];todos:MemberTodoAlert[];today:string;available:boolean }
 
-const ACCESSIBLE_DESKTOP_MIN_WIDTH = 1500;
-const SIDEBAR_MIN_WIDTH = 420;
-const SIDEBAR_MAX_WIDTH = 640;
-const SIDEBAR_DEFAULT_WIDTH = 520;
+const SIDEBAR_MIN_WIDTH = 300;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_DEFAULT_WIDTH = 352;
 const SIDEBAR_STORAGE_KEY = 'claim-center-sidebar-width-v3';
 
 const clampSidebarWidth = (value: number): number => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
@@ -81,7 +80,8 @@ const readInitialSidebarWidth = (): number => {
   const stored = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
   if (stored === null) return SIDEBAR_DEFAULT_WIDTH;
   const parsed = Number(stored);
-  return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : SIDEBAR_DEFAULT_WIDTH;
+  if (!Number.isFinite(parsed) || parsed < SIDEBAR_MIN_WIDTH || parsed > SIDEBAR_MAX_WIDTH) return SIDEBAR_DEFAULT_WIDTH;
+  return clampSidebarWidth(parsed);
 };
 
 const readInitialTheme = (): ThemeMode => {
@@ -104,7 +104,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const activeGroup = NAVIGATION_GROUPS.find((group) => navigationGroupRouteIds(group).includes(currentRouteId ?? ''));
   const activeSubgroup = activeGroup?.nestedGroups?.find((group) => group.routeIds.includes(currentRouteId ?? ''));
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isTablet, setIsTablet] = useState(() => window.innerWidth < ACCESSIBLE_DESKTOP_MIN_WIDTH);
+  const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => ({ [activeGroup?.icon ?? 'home']: true }));
@@ -140,7 +140,7 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   useEffect(() => {
     const handleResize = () => {
-      const tablet = window.innerWidth < ACCESSIBLE_DESKTOP_MIN_WIDTH;
+      const tablet = window.innerWidth <= 1024;
       setIsTablet(tablet);
       if (!tablet) setIsDrawerOpen(false);
     };

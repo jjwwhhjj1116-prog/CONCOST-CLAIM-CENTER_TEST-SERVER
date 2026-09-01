@@ -802,7 +802,7 @@ const AllocationEditor: React.FC<{
         <label>시작일<input type="date" value={form.startDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} /></label>
         <label>종료일<input type="date" value={form.endDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} /></label>
       </div>
-      <Button disabled={disabled || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : '투입 일정 저장·프로젝트 일정표 반영'}</Button>
+      <Button className="workflow-form-save-button" disabled={disabled || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : '투입 일정 저장·프로젝트 일정표 반영'}</Button>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>ALLOCATION LEDGER</span><h3>프로젝트 투입 현황</h3></div><em>{allocations.length}건</em></header>

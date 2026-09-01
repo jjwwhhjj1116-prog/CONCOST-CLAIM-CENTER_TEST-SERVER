@@ -116,9 +116,6 @@ const capturePages = async (root: HTMLElement, onProgress?: (message: string) =>
       useCORS: true,
       windowWidth: 1200,
       onclone: (clonedDocument) => {
-        // The workspace intentionally uses a 200% reading scale. Final A4 files must
-        // preserve the approved document template scale rather than the user's UI zoom.
-        clonedDocument.documentElement.style.fontSize = '100%';
         const clonedPage = clonedDocument.querySelector<HTMLElement>(`[data-final-export-capture="${captureId}"]`);
         if (!clonedPage) return;
         clonedPage.style.width = '794px';

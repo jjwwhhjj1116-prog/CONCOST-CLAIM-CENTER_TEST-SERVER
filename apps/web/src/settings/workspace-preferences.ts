@@ -26,7 +26,6 @@ export function applyWorkspacePreferences(preferences: WorkspacePreferences): vo
   root.dataset.reduceMotion = preferences.reduceMotion ? 'true' : 'false';
   root.style.colorScheme = preferences.theme.toLowerCase();
   root.style.setProperty('--user-font-scale', String(preferences.fontScale / 100));
-  root.style.fontSize = `${Math.max(100, preferences.fontScale) * 2}%`;
   window.localStorage.setItem('claim-center-theme', preferences.theme.toLowerCase());
   window.localStorage.setItem('claim-center-workspace-preferences', JSON.stringify(preferences));
 }

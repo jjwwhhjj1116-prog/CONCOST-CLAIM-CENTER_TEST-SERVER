@@ -21,17 +21,19 @@ test('CF80 kickoff final minutes follow the approved company table structure', (
   assert.match(css, /\.company-minutes-content\s*\{[^}]*vertical-align:\s*top/su);
 });
 
-test('CF80 makes the workspace text two times larger without changing A4 export typography', () => {
+test('CF81 restores normal workspace type and enlarges authoring fields only', () => {
   const theme = read('apps', 'web', 'src', 'theme-system.css');
   const shell = read('apps', 'web', 'src', 'layout', 'AppShell.tsx');
   const workflow = read('apps', 'web', 'src', 'workflow', 'WorkflowOperations.css');
-  const exporter = read('apps', 'web', 'src', 'documents', 'final-document-export.ts');
 
-  assert.match(theme, /:root\s*\{[^}]*font-size:\s*200%/su);
-  assert.match(theme, /:root body \{ font-size: 1rem; \}/u);
-  assert.match(theme, /button:not\(\.icon-button\):not\(\.sidebar-resize-handle\)[^}]*min-height:\s*2\.6rem/su);
-  assert.match(shell, /ACCESSIBLE_DESKTOP_MIN_WIDTH\s*=\s*1500/u);
+  assert.doesNotMatch(theme, /font-size:\s*200%/u);
+  assert.match(theme, /:root body \{ font-size: calc\(16px \* var\(--user-font-scale\)\); \}/u);
+  assert.match(theme, /\.sidebar \{ width: 352px; flex-basis: 352px; min-width: 300px; max-width: 480px/u);
+  assert.match(shell, /window\.innerWidth <= 1024/u);
   assert.doesNotMatch(workflow, /font-size:\s*[0-9]+px/u);
-  assert.match(workflow, /@media \(max-width: 1600px\)[^{]*\{[\s\S]*?\.workflow-editor-grid \{ grid-template-columns: 1fr; \}/u);
-  assert.match(exporter, /clonedDocument\.documentElement\.style\.fontSize\s*=\s*'100%'/u);
+  assert.match(workflow, /\.workflow-form-grid label\s*\{[^}]*font-size:\s*1\.25rem/su);
+  assert.match(workflow, /\.workflow-form-grid textarea\s*\{[\s\S]*?font-size:\s*1\.5rem/su);
+  assert.match(workflow, /\.workflow-record-save-button,[\s\S]*?font-size:\s*1\.5rem\s*!important/su);
+  assert.match(workflow, /@media \(max-width: 980px\)[^{]*\{[\s\S]*?\.workflow-form-grid \{ grid-template-columns: 1fr; \}/u);
+  assert.match(workflow, /@media \(max-width: 1100px\)[^{]*\{[\s\S]*?\.workflow-editor-grid \{ grid-template-columns: 1fr; \}/u);
 });
