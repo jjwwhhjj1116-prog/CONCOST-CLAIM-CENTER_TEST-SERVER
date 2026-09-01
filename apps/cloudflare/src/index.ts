@@ -5603,12 +5603,14 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
     }
     if (!credential) return json({ error: '저장된 API 키가 없습니다.', code: `${provider}_NOT_CONFIGURED` }, 409);
     const modelCode = hasModelCode ? String(body.modelCode) : PREVIEW_AI_MODELS[provider][0]?.code ?? '';
+    const probeReasoningEffort = provider === 'ANTHROPIC' ? 'high' : 'low';
+    const probeOutputTokens = provider === 'ANTHROPIC' ? 1024 : 64;
     const route = {
-      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: 'low',
+      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: probeReasoningEffort,
       secretName: previewProviderSecretName(provider), version: 1, updatedAt: new Date().toISOString(), updatedByName: user.displayName
     } as PreviewAiRouteRow;
     const startedAt = Date.now();
-    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential, 30_000, 64);
+    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential, 30_000, probeOutputTokens);
     const checkedAt = new Date().toISOString();
     const latencyMs = Date.now() - startedAt;
     if (tested.response) {
