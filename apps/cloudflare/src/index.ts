@@ -5484,11 +5484,13 @@ function safeNonGeminiProviderError(provider: 'OPENAI' | 'ANTHROPIC', payload: u
 async function generateGeminiContent(
   env: CloudflareEnv,
   request: GeminiContentRequest
-): Promise<{ content?: string; payload?: unknown; latencyMs: number; response?: Response }> {
+): Promise<{ content?: string; payload?: unknown; latencyMs: number; response?: Response; modelCode: string; fallbackUsed: boolean }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
   const startedAt = Date.now();
   let response: Response | undefined;
+  let resolvedModelCode = request.modelCode;
+  let fallbackUsed = false;
   try {
     const generationConfig: Record<string, unknown> = {
       maxOutputTokens: request.maxOutputTokens,
@@ -5496,7 +5498,7 @@ async function generateGeminiContent(
     };
     if (request.responseMimeType) generationConfig.responseMimeType = request.responseMimeType;
     if (request.responseSchema) generationConfig.responseSchema = request.responseSchema;
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(request.modelCode)}:generateContent`;
+    const endpointFor = (modelCode: string) => `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelCode)}:generateContent`;
     const init: RequestInit = {
       method: 'POST',
       signal: controller.signal,
@@ -5510,29 +5512,41 @@ async function generateGeminiContent(
     const providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
     const retryableStatuses = new Set([429, 500, 502, 503, 504]);
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      response = await providerFetch(endpoint, init);
+      response = await providerFetch(endpointFor(request.modelCode), init);
       if (response.ok || !retryableStatuses.has(response.status) || attempt === 2) break;
       await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 350 : 900));
+    }
+    const failoverStatuses = new Set([500, 502, 503, 504]);
+    if (request.modelCode === 'gemini-3.7-flash' && response && !response.ok && failoverStatuses.has(response.status)) {
+      resolvedModelCode = 'gemini-3.6-flash';
+      fallbackUsed = true;
+      response = await providerFetch(endpointFor(resolvedModelCode), init);
     }
   } catch (reason) {
     clearTimeout(timeout);
     return {
       latencyMs: Date.now() - startedAt,
-      response: previewAiNetworkFailure('GEMINI', reason, request.unavailableCode, request.unavailableLabel)
+      response: previewAiNetworkFailure('GEMINI', reason, request.unavailableCode, request.unavailableLabel),
+      modelCode: resolvedModelCode,
+      fallbackUsed
     };
   }
   clearTimeout(timeout);
   if (!response) {
     return {
       latencyMs: Date.now() - startedAt,
-      response: json({ error: 'Gemini 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.', code: 'GEMINI_EMPTY_RESPONSE' }, 502)
+      response: json({ error: 'Gemini 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.', code: 'GEMINI_EMPTY_RESPONSE' }, 502),
+      modelCode: resolvedModelCode,
+      fallbackUsed
     };
   }
   if (!response.ok) {
     const safe = safeGeminiProviderError(await response.json().catch(() => null), response.status);
     return {
       latencyMs: Date.now() - startedAt,
-      response: json({ ...safe, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502)
+      response: json({ ...safe, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502),
+      modelCode: resolvedModelCode,
+      fallbackUsed
     };
   }
   const payload = await response.json().catch(() => null);
@@ -5540,10 +5554,12 @@ async function generateGeminiContent(
   if (!content || content.length > 200_000) {
     return {
       latencyMs: Date.now() - startedAt,
-      response: json({ error: 'Gemini 응답 형식이 올바르지 않습니다.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502)
+      response: json({ error: 'Gemini 응답 형식이 올바르지 않습니다.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502),
+      modelCode: resolvedModelCode,
+      fallbackUsed
     };
   }
-  return { content, payload, latencyMs: Date.now() - startedAt };
+  return { content, payload, latencyMs: Date.now() - startedAt, modelCode: resolvedModelCode, fallbackUsed };
 }
 
 async function generatePreviewAiText(
@@ -5556,7 +5572,7 @@ async function generatePreviewAiText(
   timeoutMs = 90_000,
   maxOutputTokens = 16_000,
   includeProviderDiagnostic = false
-): Promise<{ content?: string; credentialSource?: PreviewAiCredentialSource; response?: Response }> {
+): Promise<{ content?: string; credentialSource?: PreviewAiCredentialSource; response?: Response; resolvedModelCode?: string; fallbackUsed?: boolean }> {
   const provider = route.providerKind as PreviewAiProvider;
   const credential = credentialOverride ?? await resolvePreviewAiCredential(env, actorId, provider);
   const apiKey = credential?.apiKey;
@@ -5572,8 +5588,8 @@ async function generatePreviewAiText(
       timeoutMs
     });
     return generated.response
-      ? { response: generated.response }
-      : { content: generated.content, credentialSource: credential.source };
+      ? { response: generated.response, resolvedModelCode: generated.modelCode, fallbackUsed: generated.fallbackUsed }
+      : { content: generated.content, credentialSource: credential.source, resolvedModelCode: generated.modelCode, fallbackUsed: generated.fallbackUsed };
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -5681,17 +5697,18 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
     const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential, 30_000, probeOutputTokens, true);
     const checkedAt = new Date().toISOString();
     const latencyMs = Date.now() - startedAt;
+    const checkedModelCode = tested.resolvedModelCode ?? modelCode;
     if (tested.response) {
       const failure = await tested.response.clone().json().catch(() => null) as Record<string,unknown> | null;
-      await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode,status:'FAILED',latencyMs,failureCode:typeof failure?.code==='string'?failure.code:'UNKNOWN_PROVIDER_FAILURE',providerStatus:typeof failure?.providerStatus==='number'?failure.providerStatus:null,checkedBy:user.id,checkedAt});
+      await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode:checkedModelCode,status:'FAILED',latencyMs,failureCode:typeof failure?.code==='string'?failure.code:'UNKNOWN_PROVIDER_FAILURE',providerStatus:typeof failure?.providerStatus==='number'?failure.providerStatus:null,checkedBy:user.id,checkedAt});
       return tested.response;
     }
     if (!/^OK\b/iu.test(tested.content?.trim() ?? '')) {
-      await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode,status:'FAILED',latencyMs,failureCode:`${provider}_CONNECTION_CHECK_MALFORMED`,providerStatus:502,checkedBy:user.id,checkedAt});
+      await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode:checkedModelCode,status:'FAILED',latencyMs,failureCode:`${provider}_CONNECTION_CHECK_MALFORMED`,providerStatus:502,checkedBy:user.id,checkedAt});
       return json({error:'AI 공급자가 연결 확인용 정상 응답을 반환하지 않았습니다. 선택 모델과 공급자 상태를 확인해 주세요.',code:`${provider}_CONNECTION_CHECK_MALFORMED`},502);
     }
-    await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode,status:'HEALTHY',latencyMs,failureCode:null,providerStatus:200,checkedBy:user.id,checkedAt});
-    return json({ ok: true, providerKind: provider, source: credential.source, checkedAt, latencyMs, phase: 'CF86_AI_RUNTIME_RELIABILITY' });
+    await writePreviewAiProviderHealth(env,{ownerScope,ownerId,providerKind:provider,modelCode:checkedModelCode,status:'HEALTHY',latencyMs,failureCode:null,providerStatus:200,checkedBy:user.id,checkedAt});
+    return json({ ok: true, providerKind: provider, source: credential.source, checkedAt, latencyMs, modelCode: checkedModelCode, fallbackUsed: Boolean(tested.fallbackUsed), phase: 'CF86_AI_RUNTIME_RELIABILITY' });
   }
 
   if (!['PUT', 'DELETE'].includes(request.method)) return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);

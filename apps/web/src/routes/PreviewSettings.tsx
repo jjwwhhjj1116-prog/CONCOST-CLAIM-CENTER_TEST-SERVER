@@ -86,7 +86,7 @@ const PROPOSAL_TEMPLATE_CATEGORY_LABELS:Record<ProposalTemplateCategory,string>=
 const MODEL_CHOICES: Record<ProviderKind, readonly string[]> = {
   OPENAI: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   ANTHROPIC: ['claude-sonnet-5', 'claude-opus-5'],
-  GEMINI: ['gemini-3.7-flash']
+  GEMINI: ['gemini-3.7-flash', 'gemini-3.6-flash']
 };
 const PRIMARY_TASK: Record<ProviderKind, { task: TaskKind; label: string; effort: string }> = {
   OPENAI: { task: 'OUTLINE_PLANNING', label: '목차·구조 기획', effort: 'high' },
