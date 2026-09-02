@@ -278,6 +278,18 @@ class DocumentTableView extends TableView {
     this.table.dataset.tableDensity = density;
     this.table.style.width = `${width}%`;
     this.table.style.minWidth = '0';
+    this.table.style.maxWidth = '100%';
+    this.table.style.tableLayout = 'fixed';
+    const columns = [...this.table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
+    if (columns.length) {
+      const storedWidths = columns.map((column) => Number.parseFloat(column.style.width || column.getAttribute('width') || '0'));
+      const total = storedWidths.reduce((sum, columnWidth) => sum + (Number.isFinite(columnWidth) && columnWidth > 0 ? columnWidth : 0), 0);
+      columns.forEach((column, index) => {
+        const proportional = total > 0 ? Math.max(0, storedWidths[index]) / total * 100 : 100 / columns.length;
+        column.style.width = `${Math.max(1, proportional).toFixed(4)}%`;
+        column.removeAttribute('width');
+      });
+    }
   }
 }
 
@@ -306,9 +318,10 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     const tableWidth = Math.min(100, Math.max(35, Number(next.attrs?.tableWidth) || 100));
     const availableWidth = Math.round(676 * tableWidth / 100);
     const normalizedWidths = rawWidths.map((width) => Math.max(20, Math.round(storedTotal > 0 ? width / storedTotal * availableWidth : availableWidth / columnCount)));
-    const wasLegacy = Number(next.attrs?.documentDefaultsVersion) < 2;
+    const requiresA4Migration = Number(next.attrs?.documentDefaultsVersion) < 2 || storedTotal > availableWidth * 1.05;
     const rightColumns = new Set(firstCells.flatMap((cell, index) => rightAlignedTableHeader.test(jsonText(cell)) ? [index] : []));
     rows.forEach((row, rowIndex) => {
+      if (requiresA4Migration) row.attrs = { ...row.attrs, rowHeightMm: null };
       let columnIndex = 0;
       row.content?.forEach((cell) => {
         const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
@@ -316,7 +329,7 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
         cell.attrs = {
           ...cell.attrs,
           colwidth: normalizedWidths.slice(columnIndex, columnIndex + span),
-          ...(wasLegacy ? {
+          ...(requiresA4Migration ? {
             verticalAlignment: 'middle',
             horizontalAlignment: rowIndex > 0 && (rightColumns.has(columnIndex) || rightAlignedTableValue.test(cellText)) ? 'right' : 'center'
           } : {})

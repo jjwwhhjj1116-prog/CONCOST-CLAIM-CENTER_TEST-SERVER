@@ -14,7 +14,9 @@
 
 /* HWP-style table defaults: readable 12px type, automatic row height and stable proportions. */
 .structured-editor .tiptap table,.structured-editor__preview table{table-layout:fixed;max-width:100%}
-.structured-editor .tiptap th,.structured-editor .tiptap td,.structured-editor__preview th,.structured-editor__preview td{box-sizing:border-box;height:auto;min-width:0;overflow-wrap:anywhere;word-break:keep-all;font-size:12px;line-height:1.55;text-align:center;vertical-align:middle}
+.structured-editor .tiptap th,.structured-editor .tiptap td,.structured-editor__preview th,.structured-editor__preview td{box-sizing:border-box;height:auto;min-width:0;overflow-wrap:anywhere;word-break:normal;font-size:12px;line-height:1.55;text-align:center;vertical-align:middle}
+.structured-editor.is-a4-portrait .tiptap .tableWrapper{box-sizing:border-box;width:100%;max-width:100%;overflow:visible}
+.structured-editor.is-a4-portrait .tiptap table{box-sizing:border-box;max-width:100%!important;min-width:0!important;table-layout:fixed!important}
 .structured-editor .tiptap td[data-cell-horizontal-align="left"],.structured-editor .tiptap th[data-cell-horizontal-align="left"],.structured-editor__preview td[data-cell-horizontal-align="left"],.structured-editor__preview th[data-cell-horizontal-align="left"]{text-align:left}
 .structured-editor .tiptap td[data-cell-horizontal-align="center"],.structured-editor .tiptap th[data-cell-horizontal-align="center"],.structured-editor__preview td[data-cell-horizontal-align="center"],.structured-editor__preview th[data-cell-horizontal-align="center"]{text-align:center}
 .structured-editor .tiptap td[data-cell-horizontal-align="right"],.structured-editor .tiptap th[data-cell-horizontal-align="right"],.structured-editor__preview td[data-cell-horizontal-align="right"],.structured-editor__preview th[data-cell-horizontal-align="right"]{text-align:right}
