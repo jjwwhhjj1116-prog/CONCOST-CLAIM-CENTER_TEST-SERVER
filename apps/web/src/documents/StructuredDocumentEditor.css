@@ -9,8 +9,12 @@
 
 /* Proposal review and final preview share this exact A4 portrait content box. */
 .structured-editor.is-a4-portrait .structured-editor__canvas{overflow:auto;padding:18px}
-.structured-editor.is-a4-portrait .tiptap,.structured-editor.is-a4-portrait .structured-editor__preview{box-sizing:border-box;width:794px;max-width:none;min-height:1123px;padding:68px 58px 72px;border-radius:1px;font-family:'휴먼명조','Noto Serif KR',Batang,serif;font-size:12px;line-height:1.7}
+.structured-editor.is-a4-portrait .tiptap,.structured-editor.is-a4-portrait .structured-editor__preview{box-sizing:border-box;width:794px;max-width:none;min-height:1123px;padding:68px 58px 72px;border-radius:1px;font-family:'휴먼명조','Noto Serif KR',Batang,serif;font-size:16px;line-height:1.8}
 .structured-editor.is-a4-portrait.is-fullscreen .tiptap,.structured-editor.is-a4-portrait.is-fullscreen .structured-editor__preview{margin-inline:auto}
+.structured-editor.is-a4-portrait .tiptap h2,.structured-editor.is-a4-portrait .tiptap h3,.structured-editor.is-a4-portrait .structured-editor__preview h2,.structured-editor.is-a4-portrait .structured-editor__preview h3{margin:30px 0 16px;border:0;padding:0;font-size:24px;line-height:1.4}
+.structured-editor.is-a4-portrait .tiptap h2:first-child,.structured-editor.is-a4-portrait .tiptap h3:first-child,.structured-editor.is-a4-portrait .structured-editor__preview h2:first-child,.structured-editor.is-a4-portrait .structured-editor__preview h3:first-child{margin-top:0}
+.structured-editor.is-a4-portrait .tiptap p,.structured-editor.is-a4-portrait .structured-editor__preview p{min-height:1.8em;margin:0 0 16px}
+.structured-editor.is-a4-portrait .tiptap li,.structured-editor.is-a4-portrait .structured-editor__preview li{margin-bottom:9px}
 
 /* HWP-style table defaults: readable 12px type, automatic row height and stable proportions. */
 .structured-editor .tiptap table,.structured-editor__preview table{table-layout:fixed;max-width:100%}
@@ -23,4 +27,5 @@
 .structured-editor .tiptap tr:not([data-row-height-mm]),.structured-editor__preview tr:not([data-row-height-mm]){height:auto!important}
 .structured-editor__selection-menu{flex-wrap:wrap;max-width:min(880px,calc(100vw - 24px))}
 .structured-editor__selection-menu button.is-active{background:#d9eaff;color:#075fc8}
+.structured-editor__selection-format,.structured-editor__selection-color{display:grid;gap:2px;color:#dce9f8;font-size:10px;font-weight:850}.structured-editor__selection-format select{box-sizing:border-box;width:126px;height:34px;border:0;border-radius:7px;background:#fff;color:#183250;font-family:inherit;font-size:12px;font-weight:750;line-height:1.2;padding:4px 24px 4px 7px}.structured-editor__selection-format.is-size select{width:74px}.structured-editor__selection-color input{box-sizing:border-box;width:40px;height:34px;border:2px solid #fff;border-radius:7px;background:#fff;padding:2px;cursor:pointer}.structured-editor__selection-format:focus-within select,.structured-editor__selection-color:focus-within input{outline:3px solid #73b2ff;outline-offset:2px}
 @media(max-width:860px){.structured-editor.is-a4-portrait .tiptap,.structured-editor.is-a4-portrait .structured-editor__preview{width:794px}.structured-editor.is-a4-portrait .structured-editor__canvas{overflow:auto}}

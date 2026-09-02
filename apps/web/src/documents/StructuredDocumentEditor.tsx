@@ -23,6 +23,7 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import * as Y from 'yjs';
 import { structuredDocumentContentSignature } from './structured-document-sync';
+import { inferredTableColumnWeight, normalizeColumnWidths } from './structured-document-layout';
 
 export interface StructuredSelection {
   from: number;
@@ -299,20 +300,6 @@ const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANU
 const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
-const normalizeColumnWidths = (widths: number[], targetTotal: number): { widths: number[]; repaired: boolean } => {
-  const positiveTotal = widths.reduce((sum, width) => sum + (Number.isFinite(width) && width > 0 ? width : 0), 0);
-  const average = positiveTotal > 0 ? positiveTotal / Math.max(1, widths.length) : 0;
-  const missing = widths.map((width) => !Number.isFinite(width) || width <= 0 || (average > 0 && width < average * 0.15));
-  const missingCount = missing.filter(Boolean).length;
-  const defaultWidth = targetTotal / Math.max(1, widths.length);
-  const remaining = Math.max(0, targetTotal - defaultWidth * missingCount);
-  const knownTotal = widths.reduce((sum, width, index) => sum + (missing[index] ? 0 : width), 0);
-  const normalized = widths.map((width, index) => missing[index]
-    ? defaultWidth
-    : (knownTotal > 0 ? width / knownTotal * remaining : defaultWidth));
-  return { widths: normalized, repaired: missingCount > 0 };
-};
-
 const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
 const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
@@ -328,10 +315,25 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
       const stored = Array.isArray(cell.attrs?.colwidth) ? cell.attrs?.colwidth as unknown[] : [];
       for (let index = 0; index < span; index += 1) rawWidths.push(Number(stored[index]) || 0);
     });
+    const headers = Array.from({ length: columnCount }, () => '');
+    const longestValues = Array.from({ length: columnCount }, () => 0);
+    rows.forEach((row, rowIndex) => {
+      let columnIndex = 0;
+      row.content?.forEach((cell) => {
+        const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
+        const text = jsonText(cell).trim();
+        for (let index = 0; index < span && columnIndex + index < columnCount; index += 1) {
+          if (rowIndex === 0) headers[columnIndex + index] = text;
+          else longestValues[columnIndex + index] = Math.max(longestValues[columnIndex + index], text.length);
+        }
+        columnIndex += span;
+      });
+    });
+    const inferredWeights = headers.map((header, index) => inferredTableColumnWeight(header, longestValues[index]));
     const storedTotal = rawWidths.reduce((sum, width) => sum + Math.max(0, width), 0);
     const tableWidth = Math.min(100, Math.max(35, Number(next.attrs?.tableWidth) || 100));
     const availableWidth = Math.round(676 * tableWidth / 100);
-    const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth);
+    const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth, inferredWeights);
     const normalizedWidths = normalizedColumns.widths.map((width) => Math.max(20, Math.round(width)));
     const requiresA4Migration = normalizedColumns.repaired || Number(next.attrs?.documentDefaultsVersion) < 2 || storedTotal > availableWidth * 1.05;
     const rightColumns = new Set(firstCells.flatMap((cell, index) => rightAlignedTableHeader.test(jsonText(cell)) ? [index] : []));
@@ -372,7 +374,21 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
     table.dataset.tableWidth = String(requestedWidth);
     table.style.width = `${requestedWidth}%`;
     table.style.tableLayout = 'fixed';
-    const columns = [...table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
+    let columns = [...table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
+    if (!columns.length && table.rows[0]?.cells.length) {
+      const headerCells = [...table.rows[0].cells];
+      const longestValues = headerCells.map((_cell, columnIndex) => [...table.rows].slice(1).reduce((longest, row) => Math.max(longest, row.cells[columnIndex]?.textContent?.trim().length ?? 0), 0));
+      const inferredWeights = headerCells.map((cell, index) => inferredTableColumnWeight(cell.textContent ?? '', longestValues[index]));
+      const inferredWidths = normalizeColumnWidths(Array.from({ length: headerCells.length }, () => 0), 100, inferredWeights).widths;
+      const colgroup = parsed.createElement('colgroup');
+      inferredWidths.forEach((width) => {
+        const column = parsed.createElement('col');
+        column.style.width = `${Math.max(1, width).toFixed(4)}%`;
+        colgroup.append(column);
+      });
+      table.prepend(colgroup);
+      columns = [...colgroup.querySelectorAll<HTMLTableColElement>('col')];
+    }
     if (columns.length) {
       const widths = columns.map((column) => Number.parseFloat(column.style.width || column.getAttribute('width') || '0'));
       const normalized = normalizeColumnWidths(widths, 100).widths;
@@ -699,8 +715,16 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const nextSize = next.fontSize === undefined ? normalizeFontSize(current.fontSize) : normalizeFontSize(next.fontSize);
     const nextColor = next.color === undefined ? normalizeTextColor(current.color) : normalizeTextColor(next.color);
     const chain = editor.chain().focus();
+    const savedSelection = selectionRef.current;
+    if (savedSelection) chain.setTextSelection({ from: savedSelection.from, to: savedSelection.to });
     if (!nextFamily && !nextSize && !nextColor) chain.unsetMark('documentTextStyle').run();
     else chain.setMark('documentTextStyle', { fontFamily: nextFamily, fontSize: nextSize, color: nextColor }).run();
+  };
+
+  const insertBlankLine = () => {
+    if (!editor) return;
+    const position = editor.state.selection.to;
+    editor.chain().focus().setTextSelection(position).splitBlock().splitBlock().run();
   };
 
   const applyImageWidth = (percentage: number) => {
@@ -962,6 +986,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         }}>이미지 ↓</ToolbarButton>
         <ToolbarButton label="선택 이미지 삭제" disabled={!imageSelected} onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
         <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>구분선</ToolbarButton>
+        <ToolbarButton label="현재 위치에 빈 줄 삽입" onClick={insertBlankLine}>빈 줄</ToolbarButton>
         <ToolbarButton label="서식 지우기" onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}>서식 지우기</ToolbarButton>
       </div>
     </div>}
@@ -991,7 +1016,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           editor={editor}
           pluginKey={`structured-selection-assistant-${documentKey ?? label}`}
           updateDelay={80}
-          shouldShow={({ editor: activeEditor, from, to }) => !readOnly && activeEditor.isEditable && activeEditor.isFocused && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim())}
+          shouldShow={({ editor: activeEditor, from, to }) => {
+            const menuFocused = document.activeElement instanceof HTMLElement && Boolean(document.activeElement.closest('.structured-editor__selection-menu'));
+            return !readOnly && activeEditor.isEditable && (activeEditor.isFocused || menuFocused) && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim());
+          }}
           className="structured-editor__selection-menu"
           role="toolbar"
           aria-label="선택 문장 빠른 작업"
@@ -999,10 +1027,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           <button type="button" className="is-copy" onMouseDown={(event) => event.preventDefault()} onClick={() => void copySelectedText()} aria-label="선택 문장 복사">{copyStatus || '복사'}</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} disabled={!editor.can().undo()} onClick={()=>editor.chain().focus().undo().run()} aria-label="실행 취소">↶ 실행취소</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} disabled={!editor.can().redo()} onClick={()=>editor.chain().focus().redo().run()} aria-label="다시 실행">↷ 다시실행</button>
+          <label className="structured-editor__selection-format"><span>글꼴</span><select aria-label="선택 영역 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontFamily:event.target.value})}>{FONT_FAMILIES.map((font)=><option key={font.label} value={font.value} style={font.value?{fontFamily:font.value}:undefined}>{font.label}</option>)}</select></label>
+          <label className="structured-editor__selection-format is-size"><span>크기</span><select aria-label="선택 영역 글자 크기" value={fontSize} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontSize:event.target.value})}>{FONT_SIZES.map((size)=><option key={size||'default'} value={size}>{size?`${size}px`:'기본'}</option>)}</select></label>
+          <label className="structured-editor__selection-color"><span>색상</span><input aria-label="선택 영역 글자 색상" type="color" value={textColor} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({color:event.target.value})}/></label>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} className={editor.isActive('bold')?'is-active':''} onClick={()=>editor.chain().focus().toggleBold().run()} aria-label="굵게">굵게</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('left').run()}>왼쪽</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('center').run()}>가운데</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('right').run()}>오른쪽</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={insertBlankLine}>빈 줄</button>
           {tableActive&&<><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addRowAfter().run()}>행 +</button><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addColumnAfter().run()}>열 +</button></>}
           {selectionAssistant&&<>
           <span aria-hidden="true" />
