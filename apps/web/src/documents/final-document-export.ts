@@ -272,10 +272,15 @@ const renderedSvgHasInk = async (svg: string): Promise<boolean> => {
 
 const orientedSection = (sectionProperties: string, orientation: FinalDocumentOrientation): string => sectionProperties.replace(/<hp:pagePr\b([^>]*)>/u, (_match, attributes: string) => {
   const layout = pageLayout(orientation);
+  // HWPX keeps the base paper dimensions in portrait order and rotates the
+  // effective page with its historical enum. rhwp/Hancom use WIDELY for the
+  // normal portrait page and NARROWLY for the rotated landscape page.
+  const paperWidth = Math.min(layout.widthHwp, layout.heightHwp);
+  const paperHeight = Math.max(layout.widthHwp, layout.heightHwp);
   let next = attributes
-    .replace(/\swidth="[^"]*"/u, ` width="${layout.widthHwp}"`)
-    .replace(/\sheight="[^"]*"/u, ` height="${layout.heightHwp}"`);
-  const landscapeValue = orientation === 'portrait' ? 'NARROWLY' : 'WIDELY';
+    .replace(/\swidth="[^"]*"/u, ` width="${paperWidth}"`)
+    .replace(/\sheight="[^"]*"/u, ` height="${paperHeight}"`);
+  const landscapeValue = orientation === 'portrait' ? 'WIDELY' : 'NARROWLY';
   next = /\slandscape="[^"]*"/u.test(next)
     ? next.replace(/\slandscape="[^"]*"/u, ` landscape="${landscapeValue}"`)
     : `${next} landscape="${landscapeValue}"`;
@@ -290,7 +295,16 @@ const orientedSection = (sectionProperties: string, orientation: FinalDocumentOr
   return `<hp:margin${next}/>`;
 });
 
-const createHwpx = (pages: CapturedPage[], title: string, orientation: FinalDocumentOrientation): Uint8Array => {
+const svgOrientationMatches = (svg: string, orientation: FinalDocumentOrientation): boolean => {
+  const root = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement;
+  const viewBox = (root.getAttribute('viewBox') ?? '').trim().split(/[ ,]+/u).map(Number);
+  const width = viewBox.length === 4 && viewBox[2] > 0 ? viewBox[2] : Number.parseFloat(root.getAttribute('width') ?? '');
+  const height = viewBox.length === 4 && viewBox[3] > 0 ? viewBox[3] : Number.parseFloat(root.getAttribute('height') ?? '');
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return false;
+  return orientation === 'portrait' ? height > width * 1.2 : width > height * 1.2;
+};
+
+export const createHwpx = (pages: CapturedPage[], title: string, orientation: FinalDocumentOrientation): Uint8Array => {
   const layout = pageLayout(orientation);
   const unpacked = unzipSync(decodeBase64(BLANK_HWPX_BASE64));
   const content = strFromU8(unpacked['Contents/content.hpf']);
@@ -330,6 +344,7 @@ const createHwp = async (pages: CapturedPage[], title: string, orientation: Fina
     onProgress?.(`완성된 HWP ${pages.length}페이지의 본문 이미지를 검사하고 있습니다.`);
     for (let index = 0; index < pages.length; index += 1) {
       const svg = await editor.getPageSvg(index);
+      if (!svgOrientationMatches(svg, orientation)) throw new Error(`HWP ${index + 1}페이지 용지 방향이 A4 ${orientation === 'portrait' ? '세로' : '가로'}로 보존되지 않아 다운로드를 중단했습니다.`);
       if (svg.length < 1_024 || !await renderedSvgHasInk(svg)) throw new Error(`HWP ${index + 1}페이지가 백지로 변환되어 다운로드를 중단했습니다.`);
     }
     return hwp;

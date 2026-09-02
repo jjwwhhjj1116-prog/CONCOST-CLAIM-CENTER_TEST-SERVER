@@ -45,7 +45,9 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.match(exporter, /PageOrientation\.PORTRAIT/u);
   assert.match(exporter, /orientation \?\? 'landscape'/u);
   assert.match(exporter, /dimensions\.width, dimensions\.height/u);
-  assert.match(exporter, /orientation === 'portrait' \? 'NARROWLY' : 'WIDELY'/u);
+  assert.match(exporter, /orientation === 'portrait' \? 'WIDELY' : 'NARROWLY'/u);
+  assert.match(exporter, /const paperWidth = Math\.min\(layout\.widthHwp, layout\.heightHwp\)/u);
+  assert.match(exporter, /svgOrientationMatches\(svg, orientation\)/u);
   assert.match(exporter, /scale: 1\.25/u);
   assert.match(exporter, /imageTimeout: 15_000/u);
   assert.match(exporter, /removeContainer: true/u);

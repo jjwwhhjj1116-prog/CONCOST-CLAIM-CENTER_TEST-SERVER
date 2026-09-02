@@ -133,7 +133,13 @@ function repairDuplicatedCompanyModules(chapters:ProposalChapter[],modules:reado
     const bodySignature=signature(chapter.body);
     const isCorruptedDuplicate=chapter.number>=4&&chapter.number<=12&&Boolean(bodySignature)&&(counts.get(bodySignature)??0)>1;
     const isMissingFixedBody=chapter.number>=4&&chapter.number<=12&&(!bodySignature||chapter.body.trim()==='[작성 필요]');
-    if(module&&(isCorruptedDuplicate||isMissingFixedBody))source={...chapter,title:module.title,kind:'FIXED',moduleCode:module.code,body:module.bodyMarkdown,editorJson:null,excludedCompanyAssetKeys:[]};
+    const isLegacyStrengthDefault=chapter.number===5&&!chapter.editorJson&&(
+      chapter.body.includes('개별 금액은 보안 정책에 따라 [비공개 협의금액]')
+      || chapter.body.includes('주식회사 컨코스트는 1999년 설립 이후 공사비 산정·검증')
+      || (chapter.body.includes('김포현장에서 시공사의 평당 [비공개 협의금액] 요구를 [비공개 협의금액]으로 조정하였고')
+        && chapter.body.includes('청담현장은 평당 [비공개 협의금액] 요구를 [비공개 협의금액]으로 협상하는'))
+    );
+    if(module&&(isCorruptedDuplicate||isMissingFixedBody||isLegacyStrengthDefault))source={...chapter,title:module.title,kind:'FIXED',moduleCode:module.code,body:module.bodyMarkdown,editorJson:null,excludedCompanyAssetKeys:[]};
     return proposalChapterWithCompanyImages(source,assets);
   });
 }
@@ -172,22 +178,13 @@ const ProposalRichContent=React.memo(function ProposalRichContent({body,editorJs
 
 const PROPOSAL_PAGE_BODY_WIDTH=675;
 const PROPOSAL_PAGE_BODY_HEIGHT=863;
-const PROPOSAL_SINGLE_PAGE_MIN_SCALE=.65;
 
 function proposalPageFragments(source:HTMLElement,host:HTMLElement):{fragments:string[];scale:number}{
   const tester=source.cloneNode(false) as HTMLElement;
   tester.removeAttribute('aria-label');
   tester.style.cssText=`width:${PROPOSAL_PAGE_BODY_WIDTH}px;max-width:none;min-height:0;margin:0;padding:0;transform:none;`;
   host.append(tester);
-  const fits=(scale=1)=>tester.scrollHeight*scale<=PROPOSAL_PAGE_BODY_HEIGHT-6&&tester.scrollWidth*scale<=PROPOSAL_PAGE_BODY_WIDTH+1;
-  tester.innerHTML=source.innerHTML;
-  tester.style.width=`${100/PROPOSAL_SINGLE_PAGE_MIN_SCALE}%`;
-  if(fits(PROPOSAL_SINGLE_PAGE_MIN_SCALE)){
-    let low=PROPOSAL_SINGLE_PAGE_MIN_SCALE;let high=1;
-    for(let index=0;index<16;index+=1){const candidate=(low+high)/2;tester.style.width=`${100/candidate}%`;if(fits(candidate))low=candidate;else high=candidate;}
-    tester.remove();
-    return{fragments:[source.innerHTML],scale:low};
-  }
+  const fits=()=>tester.scrollHeight<=PROPOSAL_PAGE_BODY_HEIGHT-6&&tester.scrollWidth<=PROPOSAL_PAGE_BODY_WIDTH+1;
   tester.innerHTML='';tester.style.width='100%';
   const fragments:string[]=[];
   const commit=()=>{if(tester.childNodes.length){fragments.push(tester.innerHTML);tester.innerHTML='';}};
@@ -246,8 +243,8 @@ function ProposalFinalChapterPages({item,startPage,onPageCount}:{item:ProposalCh
     <div ref={sourceRef} className="proposal-final-pagination-source proposal-final-chapter" aria-hidden="true"><ProposalRichContent body={item.body} editorJson={item.editorJson}/></div>
     {layout.fragments.map((html,index)=><section className="proposal-final-chapter" data-export-page data-export-page-policy="fit" data-page-fit-overflow={layout.ready?'false':'true'} data-page-fit-scale={layout.scale.toFixed(3)} data-page-number={startPage+index} data-chapter-number={item.number} data-chapter-page-index={index+1} key={`${item.number}-${index}`}>
       <header><span>CHAPTER {String(item.number).padStart(2,'0')}{index>0?` · CONTINUED ${index+1}`:''}</span><h3>{item.number}. {item.title}</h3></header>
-      <div className="proposal-final-chapter__viewport"><div className="proposal-final-chapter__fit" style={{width:`${100/layout.scale}%`,transform:`scale(${layout.scale})`}}><article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/></div></div>
-      <span className="proposal-final-chapter__fit-status" data-html2canvas-ignore="true">{layout.ready?(layout.fragments.length>1?`A4 ${index+1}/${layout.fragments.length} · 표 행·문단 자동 나눔`:layout.scale<.995?`A4 1페이지 자동 맞춤 · ${Math.round(layout.scale*100)}%`:'A4 1페이지 맞춤'):'A4 페이지 계산 중'}</span>
+      <div className="proposal-final-chapter__viewport"><div className="proposal-final-chapter__fit"><article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/></div></div>
+      <span className="proposal-final-chapter__fit-status" data-html2canvas-ignore="true">{layout.ready?(layout.fragments.length>1?`A4 ${index+1}/${layout.fragments.length} · 담당자 검수 크기 100% · 표 행·문단 자동 나눔`:'A4 1페이지 · 담당자 검수 크기 100%'):'A4 페이지 계산 중'}</span>
     </section>)}
   </>;
 }

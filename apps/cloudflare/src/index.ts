@@ -2483,12 +2483,28 @@ async function bundledProposalAssets(env:CloudflareEnv):Promise<Map<string,Bundl
 function sanitizeProposalCostData(source: string): { value: string; count: number } {
   let value = source;
   let count = 0;
+  const preserveApprovedStrengthFacts = value.includes('김포현장에서 시공사의 평당 700만원 요구를 599만원으로 조정하였고')
+    && value.includes('청담현장은 평당 750만원 요구를 615만원으로 협상하는');
+  if (preserveApprovedStrengthFacts) PROPOSAL_PUBLISHED_STRENGTH_FACTS.forEach(({literal,token})=>{value=value.replaceAll(literal,token);});
   const mask = () => { count += 1; return '[비공개 협의금액]'; };
   value = value.replace(/₩\s*\d[\d,]*(?:\.\d+)?/gu, mask);
   value = value.replace(/\bKRW\s*\d[\d,]*(?:\.\d+)?/giu, mask);
   value = value.replace(/\d[\d,]*(?:\.\d+)?\s*(?:억원|천만원|백만원|만원|원)/gu, mask);
   value = value.replace(/(계약금액|제안금액|견적금액|수주금액|용역대가)\s*[:：]?\s*\d[\d,]*(?:\.\d+)?/gu, (_all, label: string) => `${label}: ${mask()}`);
   return { value, count };
+}
+
+const PROPOSAL_PUBLISHED_STRENGTH_FACTS = [
+  { literal:'700만원', token:'[[PUBLIC_FACT_CH05_GIMPO_ASK]]' },
+  { literal:'599만원', token:'[[PUBLIC_FACT_CH05_GIMPO_RESULT]]' },
+  { literal:'750만원', token:'[[PUBLIC_FACT_CH05_CHEONGDAM_ASK]]' },
+  { literal:'615만원', token:'[[PUBLIC_FACT_CH05_CHEONGDAM_RESULT]]' }
+] as const;
+
+function hydrateProposalPublishedFacts(source:string):string{
+  let value=source;
+  for(const {literal,token} of PROPOSAL_PUBLISHED_STRENGTH_FACTS)value=value.replaceAll(token,literal);
+  return value;
 }
 
 function proposalStudioText(value: unknown, maxLength: number, fallback = ''): string {
@@ -2528,7 +2544,7 @@ async function proposalCompanyModules(env: CloudflareEnv): Promise<ProposalCompa
     const stored=rows.results.map((row) => {
       const canonical=row.code==='CH12_CLOSING'?PROPOSAL_STANDARD_CLOSING:PROPOSAL_COMPANY_MODULE_CONTENT[row.code];
       const bodyMarkdown=canonical&&row.bodyMarkdown.trim().length<canonical.length*.7?canonical:row.bodyMarkdown;
-      return { ...row, bodyMarkdown, chapterNumber:Number(row.chapterNumber), isActive:row.isActive===1, version:Number(row.version) };
+      return { ...row, bodyMarkdown:hydrateProposalPublishedFacts(bodyMarkdown), chapterNumber:Number(row.chapterNumber), isActive:row.isActive===1, version:Number(row.version) };
     });
     return FALLBACK_PROPOSAL_MODULES.map((fallback)=>stored.find((module)=>module.code===fallback.code)??fallback).sort((a,b)=>a.chapterNumber-b.chapterNumber);
   } catch {
@@ -2695,7 +2711,7 @@ async function previewDraftProposalDetail(env: CloudflareEnv, proposalId: string
     'SELECT r.id,r.action,r.comment,r.created_at AS createdAt,u.id AS reviewerId,u.display_name AS reviewerName FROM preview_proposal_reviews r JOIN preview_users u ON u.id=r.reviewer_id WHERE r.proposal_id=? ORDER BY r.created_at DESC'
   ).bind(proposalId).all<Record<string, unknown>>();
   const exports = await env.DB.prepare('SELECT id,version_id AS versionId,export_format AS format,file_name AS fileName,content_sha256 AS sha256,sanitization_count AS sanitizationCount,created_at AS createdAt FROM preview_proposal_exports WHERE proposal_id=? ORDER BY created_at DESC LIMIT 100').bind(proposalId).all<Record<string,unknown>>().then((result)=>result.results).catch(()=>[]);
-  return json({ proposal: { ...previewProposalProjection(row), versions: versions.results.map((item) => ({ ...item, bodyText:sanitizeProposalCostData(String(item.bodyText ?? '')).value, structuredInputsJson:sanitizeProposalCostData(String(item.structuredInputsJson ?? '{}')).value, isApproved: Boolean(item.isApproved), createdBy: { id: item.createdById, name: item.createdByName } })), reviews: reviews.results.map((item) => ({ id: item.id, action: item.action, comment: item.comment, createdAt: item.createdAt, reviewer: { id: item.reviewerId, name: item.reviewerName } })), exports }, phase: 'CF42_PROPOSAL_STUDIO' });
+  return json({ proposal: { ...previewProposalProjection(row), versions: versions.results.map((item) => ({ ...item, bodyText:hydrateProposalPublishedFacts(sanitizeProposalCostData(String(item.bodyText ?? '')).value), structuredInputsJson:hydrateProposalPublishedFacts(sanitizeProposalCostData(String(item.structuredInputsJson ?? '{}')).value), isApproved: Boolean(item.isApproved), createdBy: { id: item.createdById, name: item.createdByName } })), reviews: reviews.results.map((item) => ({ id: item.id, action: item.action, comment: item.comment, createdAt: item.createdAt, reviewer: { id: item.reviewerId, name: item.reviewerName } })), exports }, phase: 'CF42_PROPOSAL_STUDIO' });
 }
 
 async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -3079,9 +3095,9 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     if(current.status!=='APPROVED'||body.versionId!==current.currentVersionId||body.versionId!==await env.DB.prepare('SELECT approved_version_id FROM preview_proposals WHERE id=?').bind(proposalId).first<{approved_version_id:string}>().then((row)=>row?.approved_version_id??null)||Number(body.version)!==Number(current.version))return json({error:'Only the current approved proposal version can be exported',code:'PROPOSAL_NOT_APPROVED'},409);
     const version=await env.DB.prepare('SELECT v.id,v.version_number AS versionNumber,v.structured_inputs_json AS structuredInputsJson,v.sha256,u.display_name AS preparedBy FROM preview_proposal_versions v JOIN preview_users u ON u.id=v.created_by WHERE v.id=? AND v.proposal_id=? AND v.case_id=?').bind(body.versionId,proposalId,caseId).first<{id:string;versionNumber:number;structuredInputsJson:string;sha256:string;preparedBy:string}>();
     if(!version)return json({error:'Approved proposal version was not found',code:'PROPOSAL_VERSION_NOT_FOUND'},404);
-    const modules=await proposalCompanyModules(env); const fallback=defaultProposalChapters(caseRow,modules); const inputs=parseProposalInputs(version.structuredInputsJson,fallback);
+    const modules=await proposalCompanyModules(env); const fallback=defaultProposalChapters(caseRow,modules); const inputs=parseProposalInputs(hydrateProposalPublishedFacts(version.structuredInputsJson),fallback);
     let sanitizationCount=Number(inputs.sanitizationCount||0);
-    const chapters:ProposalExportChapter[]=inputs.chapters.sort((a,b)=>a.number-b.number).map((chapter)=>{const safe=sanitizeProposalCostData(chapter.body);sanitizationCount+=safe.count;return{number:chapter.number,title:chapter.title,body:safe.value};});
+    const chapters:ProposalExportChapter[]=inputs.chapters.sort((a,b)=>a.number-b.number).map((chapter)=>{const safe=sanitizeProposalCostData(chapter.body);sanitizationCount+=safe.count;return{number:chapter.number,title:chapter.title,body:hydrateProposalPublishedFacts(safe.value)};});
     const excludedCompanyAssetKeys=new Set(inputs.chapters.flatMap((chapter)=>chapter.excludedCompanyAssetKeys??[]));
     const companyAssets=(await proposalExportAssets(env)).filter((asset)=>!excludedCompanyAssetKeys.has(asset.assetKey));const projectAssets=await proposalProjectExportAssets(env,proposalId,caseId);
     const assets=[...companyAssets,...projectAssets.filter((asset)=>chapters.some((chapter)=>chapter.body.includes(`/assets/${asset.assetKey}`)||chapter.body.includes(`[PROPOSAL_ASSET:${asset.assetKey}]`)))];

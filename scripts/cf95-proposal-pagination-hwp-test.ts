@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { strFromU8, unzipSync } from '../apps/web/node_modules/fflate';
+import { createHwpx } from '../apps/web/src/documents/final-document-export';
 
 const read = (path: string): string => readFileSync(path, 'utf8');
 
@@ -16,8 +18,9 @@ test('CF95 keeps every reviewed proposal sheet inside one visible A4 page', () =
   assert.match(proposal, /proposal-final-chapter__fit/u);
   assert.match(proposal, /data-chapter-page-index=\{index\+1\}/u);
   assert.match(proposal, /data-export-page-policy="fit"/u);
-  assert.match(proposal, /A4 1페이지 자동 맞춤/u);
-  assert.match(proposal, /PROPOSAL_SINGLE_PAGE_MIN_SCALE=\.65/u);
+  assert.match(proposal, /담당자 검수 크기 100%/u);
+  assert.doesNotMatch(proposal, /PROPOSAL_SINGLE_PAGE_MIN_SCALE/u);
+  assert.doesNotMatch(proposal, /transform:`scale/u);
   assert.match(proposal, /splitTable/u);
   assert.match(proposal, /표 행·문단 자동 나눔/u);
   assert.match(proposal, /proposal-content-keep-together/u);
@@ -61,4 +64,18 @@ test('CF95 emits Hancom-compatible HWPX pictures and rejects blank reopened HWP 
   assert.match(exporter, /renderedSvgHasInk\(svg\)/u);
   assert.match(exporter, /HWP \$\{index \+ 1\}페이지가 백지로 변환/u);
   assert.doesNotMatch(exporter, /exportHwpVerify/u);
+});
+
+test('CF95 writes true portrait and landscape HWPX page shapes', () => {
+  const page = { bytes:new Uint8Array([0xff,0xd8,0xff,0xd9]), width:794, height:1123 };
+  const section = (orientation:'portrait'|'landscape') => {
+    const files=unzipSync(createHwpx([page],`CF95 ${orientation}`,orientation));
+    return strFromU8(files['Contents/section0.xml']);
+  };
+  const portrait=section('portrait');
+  const landscape=section('landscape');
+  assert.match(portrait,/<hp:pagePr[^>]*landscape="WIDELY"[^>]*width="59520"[^>]*height="84180"/u);
+  assert.match(landscape,/<hp:pagePr[^>]*landscape="NARROWLY"[^>]*width="59520"[^>]*height="84180"/u);
+  assert.match(portrait,/<hp:curSz width="\d+" height="82980"/u);
+  assert.match(landscape,/<hp:curSz width="\d+" height="58320"/u);
 });
