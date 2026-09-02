@@ -43,7 +43,7 @@ export interface StructuredDocumentEditorHandle {
   getJSON: () => JSONContent | null;
   getMarkdown: () => string;
   getSelection: () => StructuredSelection | null;
-  replaceRange: (from: number, to: number, replacement: string) => void;
+  replaceRange: (from: number, to: number, replacement: string, expectedText?: string) => boolean;
   insertTable: (rows?: number, columns?: number) => void;
   insertImage: (image: { src: string; alt: string; title?: string }) => void;
   deleteSelectedTable: () => boolean;
@@ -59,6 +59,7 @@ interface StructuredDocumentEditorProps {
   placeholder?: string;
   readOnly?: boolean;
   compact?: boolean;
+  pageMode?: 'standard' | 'a4-portrait';
   documentKey?: string;
   collaboration?: {
     documentId: string;
@@ -125,6 +126,7 @@ const DEFAULT_TEXT_COLOR = '#17253a';
 const IMAGE_ALIGNMENTS = new Set(['left', 'center', 'right']);
 const TABLE_DENSITIES = new Set(['compact', 'normal', 'comfortable']);
 const CELL_VERTICAL_ALIGNMENTS = new Set(['top', 'middle', 'bottom']);
+const CELL_HORIZONTAL_ALIGNMENTS = new Set(['left', 'center', 'right']);
 const clampMeasurement = (value: unknown, minimum: number, maximum: number, fallback: number): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, Math.round(parsed * 10) / 10)) : fallback;
@@ -217,9 +219,14 @@ const DocumentPresentationAttributes = Extension.create({
         types: ['tableCell', 'tableHeader'],
         attributes: {
           verticalAlignment: {
-            default: 'top',
-            parseHTML: (element) => CELL_VERTICAL_ALIGNMENTS.has(element.getAttribute('data-cell-vertical-align') ?? '') ? element.getAttribute('data-cell-vertical-align') : 'top',
-            renderHTML: (attributes) => ({ 'data-cell-vertical-align': CELL_VERTICAL_ALIGNMENTS.has(attributes.verticalAlignment) ? attributes.verticalAlignment : 'top' })
+            default: 'middle',
+            parseHTML: (element) => CELL_VERTICAL_ALIGNMENTS.has(element.getAttribute('data-cell-vertical-align') ?? '') ? element.getAttribute('data-cell-vertical-align') : 'middle',
+            renderHTML: (attributes) => ({ 'data-cell-vertical-align': CELL_VERTICAL_ALIGNMENTS.has(attributes.verticalAlignment) ? attributes.verticalAlignment : 'middle' })
+          },
+          horizontalAlignment: {
+            default: 'center',
+            parseHTML: (element) => CELL_HORIZONTAL_ALIGNMENTS.has(element.getAttribute('data-cell-horizontal-align') ?? '') ? element.getAttribute('data-cell-horizontal-align') : 'center',
+            renderHTML: (attributes) => ({ 'data-cell-horizontal-align': CELL_HORIZONTAL_ALIGNMENTS.has(attributes.horizontalAlignment) ? attributes.horizontalAlignment : 'center' })
           }
         }
       },
@@ -272,11 +279,49 @@ class DocumentTableView extends TableView {
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANUAL-WHOLE-DOCUMENT:(?:START|END)))\s*-->/gu;
 
+const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
+const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
+
+/**
+ * Make saved table measurements portable between the editor and the A4 preview.
+ * Tiptap stores resized columns as pixels; copying those pixels into a narrower
+ * preview made the last column collapse. Convert every colgroup to proportions
+ * and apply the same 12px/centre/middle defaults used by both surfaces.
+ */
+export const normalizeStructuredDocumentHtml = (html: string): string => {
+  if (!html.trim() || typeof DOMParser === 'undefined') return html;
+  const parsed = new DOMParser().parseFromString(`<main>${html}</main>`, 'text/html');
+  parsed.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+    const requestedWidth = Math.min(100, Math.max(35, Number(table.dataset.tableWidth) || Number.parseFloat(table.style.width) || 100));
+    table.dataset.tableWidth = String(requestedWidth);
+    table.style.width = `${requestedWidth}%`;
+    table.style.tableLayout = 'fixed';
+    const columns = [...table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
+    if (columns.length) {
+      const widths = columns.map((column) => Number.parseFloat(column.style.width || column.getAttribute('width') || '0'));
+      const total = widths.reduce((sum, width) => sum + (Number.isFinite(width) && width > 0 ? width : 0), 0);
+      columns.forEach((column, index) => {
+        const proportional = total > 0 ? (Math.max(0, widths[index]) / total) * 100 : 100 / columns.length;
+        column.style.width = `${Math.max(1, proportional).toFixed(4)}%`;
+        column.removeAttribute('width');
+      });
+    }
+    const headerCells = [...(table.rows[0]?.cells ?? [])];
+    const rightColumns = new Set(headerCells.flatMap((cell, index) => rightAlignedTableHeader.test(cell.textContent ?? '') ? [index] : []));
+    [...table.rows].forEach((row, rowIndex) => [...row.cells].forEach((cell, cellIndex) => {
+      cell.dataset.cellVerticalAlign ||= 'middle';
+      const shouldRightAlign = rowIndex > 0 && (rightColumns.has(cellIndex) || rightAlignedTableValue.test(cell.textContent ?? ''));
+      cell.dataset.cellHorizontalAlign ||= shouldRightAlign ? 'right' : 'center';
+    }));
+  });
+  return parsed.querySelector('main')?.innerHTML ?? html;
+};
+
 const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
-  return DOMPurify.sanitize(typeof rendered === 'string' ? rendered : '', {
-    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+  return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
+    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -328,7 +373,7 @@ const createTurndown = () => {
   service.addRule('adjustableTable', {
     filter: 'table',
     replacement: (_content, node) => node instanceof HTMLTableElement
-      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style'] })}\n\n`
+      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style'] })}\n\n`
       : ''
   });
   return service;
@@ -349,8 +394,8 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent): string =>
       DocumentTextStyle,
       DocumentPresentationAttributes
     ]);
-    return DOMPurify.sanitize(html, {
-      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
+      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -395,6 +440,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   placeholder = '내용을 입력하세요.',
   readOnly = false,
   compact = false,
+  pageMode = 'standard',
   documentKey,
   collaborationSession = null,
   collaborationStatus = WebSocketStatus.Disconnected,
@@ -420,9 +466,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [tableWidthPercent, setTableWidthPercent] = useState(100);
   const [tableAlignment, setTableAlignment] = useState<'left' | 'center' | 'right'>('center');
   const [tableDensity, setTableDensity] = useState<'compact' | 'normal' | 'comfortable'>('normal');
-  const [cellVerticalAlignment, setCellVerticalAlignment] = useState<'top' | 'middle' | 'bottom'>('top');
+  const [cellVerticalAlignment, setCellVerticalAlignment] = useState<'top' | 'middle' | 'bottom'>('middle');
   const [columnWidthMm, setColumnWidthMm] = useState('35');
-  const [rowHeightMm, setRowHeightMm] = useState('12');
+  const [rowHeightMm, setRowHeightMm] = useState('');
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState('');
   const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
@@ -465,14 +511,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       setTableAlignment(IMAGE_ALIGNMENTS.has(attributes.tableAlignment) ? attributes.tableAlignment as 'left' | 'center' | 'right' : 'center');
       setTableDensity(TABLE_DENSITIES.has(attributes.tableDensity) ? attributes.tableDensity as 'compact' | 'normal' | 'comfortable' : 'normal');
       const cellAttributes = activeEditor.isActive('tableHeader') ? activeEditor.getAttributes('tableHeader') : activeEditor.getAttributes('tableCell');
-      setCellVerticalAlignment(CELL_VERTICAL_ALIGNMENTS.has(cellAttributes.verticalAlignment) ? cellAttributes.verticalAlignment as 'top' | 'middle' | 'bottom' : 'top');
+      setCellVerticalAlignment(CELL_VERTICAL_ALIGNMENTS.has(cellAttributes.verticalAlignment) ? cellAttributes.verticalAlignment as 'top' | 'middle' | 'bottom' : 'middle');
       const activeElement = document.activeElement;
       const editingMeasurements = activeElement instanceof HTMLElement && Boolean(activeElement.closest('.structured-editor__table-measurements'));
       if (!editingMeasurements) {
         const cellWidths = Array.isArray(cellAttributes.colwidth) ? cellAttributes.colwidth : [];
         if (Number(cellWidths[0]) > 0) setColumnWidthMm(String(clampMeasurement(Number(cellWidths[0]) * 25.4 / 96, 10, 180, 35)));
         const rowAttributes = activeEditor.getAttributes('tableRow');
-        setRowHeightMm(String(clampMeasurement(rowAttributes.rowHeightMm, 6, 100, 12)));
+        setRowHeightMm(rowAttributes.rowHeightMm === null || rowAttributes.rowHeightMm === undefined ? '' : String(clampMeasurement(rowAttributes.rowHeightMm, 6, 100, 12)));
       }
     }
     const textAttributes = activeEditor.getAttributes('documentTextStyle');
@@ -633,7 +679,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     if (!editor?.isActive('table')) return;
     const rect = selectedRect(editor.state);
     const widthPx = Math.round(clampMeasurement(columnWidthMm, 10, 180, 35) * 96 / 25.4);
-    const normalizedRowHeight = clampMeasurement(rowHeightMm, 6, 100, 12);
+    const normalizedRowHeight = rowHeightMm.trim() ? clampMeasurement(rowHeightMm, 6, 100, 12) : null;
     let transaction = editor.state.tr;
     for (const relativePosition of rect.map.cellsInRect({ left: rect.left, right: rect.right, top: 0, bottom: rect.map.height })) {
       const position = rect.tableStart + relativePosition;
@@ -651,7 +697,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     editor.view.dispatch(transaction.scrollIntoView());
     editor.commands.focus();
     setColumnWidthMm(String(clampMeasurement(columnWidthMm, 10, 180, 35)));
-    setRowHeightMm(String(normalizedRowHeight));
+    setRowHeightMm(normalizedRowHeight === null ? '' : String(normalizedRowHeight));
   };
 
   useImperativeHandle(ref, () => ({
@@ -659,9 +705,11 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     getJSON: () => editor?.getJSON() ?? null,
     getMarkdown: () => editor ? editorHtmlToMarkdown(editor.getHTML()) : value,
     getSelection: () => selectionRef.current,
-    replaceRange: (from, to, next) => {
-      if (!editor) return;
-      editor.chain().focus().insertContentAt({ from, to }, markdownToEditorHtml(next)).run();
+    replaceRange: (from, to, next, expectedText) => {
+      if (!editor) return false;
+      if (expectedText !== undefined && editor.state.doc.textBetween(from, to, '\n') !== expectedText) return false;
+      editor.chain().focus().insertContentAt({ from, to }, next).run();
+      return true;
     },
     insertTable: (rows, columns) => {
       if (rows === undefined || columns === undefined) {
@@ -773,7 +821,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   return <>
     {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{editor?.chain().focus().insertTable({rows:tableRows,cols:tableColumns,withHeaderRow:true}).run();setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
-    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label}>
+    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${pageMode === 'a4-portrait' ? ' is-a4-portrait' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label}>
     <header className="structured-editor__header">
       <div><strong>{label}</strong><span>{readOnly ? '읽기 전용' : collaborationSession ? '실시간 공동 편집 + 자동 저장' : '자동 저장 호환 편집기'}</span></div>
       {collaborationSession && <div className="structured-editor__collaboration" data-status={collaborationStatus}>
@@ -857,32 +905,41 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <div><span>정렬</span>{(['left', 'center', 'right'] as const).map((alignment) => <ToolbarButton key={alignment} label={`표 ${alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'} 정렬`} active={tableAlignment === alignment} onClick={() => applyTablePresentation({ tableAlignment: alignment })}>{alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'}</ToolbarButton>)}</div>
       <div><span>셀 상하</span>{(['top', 'middle', 'bottom'] as const).map((alignment) => <ToolbarButton key={alignment} label={`선택 셀 ${alignment === 'top' ? '위' : alignment === 'middle' ? '가운데' : '아래'} 정렬`} active={cellVerticalAlignment === alignment} onClick={() => applyCellVerticalAlignment(alignment)}>{alignment === 'top' ? '위' : alignment === 'middle' ? '가운데' : '아래'}</ToolbarButton>)}</div>
       <div><span>셀 간격</span>{(['compact', 'normal', 'comfortable'] as const).map((density) => <ToolbarButton key={density} label={`표 ${density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}`} active={tableDensity === density} onClick={() => applyTablePresentation({ tableDensity: density })}>{density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}</ToolbarButton>)}</div>
-      <div className="structured-editor__table-measurements"><label><span>선택 열 너비</span><input aria-label="선택 열 너비 밀리미터" type="number" min="10" max="180" step="1" value={columnWidthMm} onChange={(event) => setColumnWidthMm(event.target.value)}/><output>mm</output></label><label><span>선택 행 높이</span><input aria-label="선택 행 높이 밀리미터" type="number" min="6" max="100" step="1" value={rowHeightMm} onChange={(event) => setRowHeightMm(event.target.value)}/><output>mm</output></label><ToolbarButton label="선택한 표 셀의 열 너비와 행 높이 적용" onClick={applySelectedTableMeasurements}>치수 적용</ToolbarButton></div>
+      <div className="structured-editor__table-measurements"><label><span>선택 열 너비</span><input aria-label="선택 열 너비 밀리미터" type="number" min="10" max="180" step="1" value={columnWidthMm} onChange={(event) => setColumnWidthMm(event.target.value)}/><output>mm</output></label><label><span>선택 행 높이</span><input aria-label="선택 행 높이 밀리미터" type="number" min="6" max="100" step="1" value={rowHeightMm} placeholder="자동" onChange={(event) => setRowHeightMm(event.target.value)}/><output>{rowHeightMm ? 'mm' : '자동'}</output></label><ToolbarButton label="선택 행 높이를 내용에 맞게 자동 조정" onClick={()=>setRowHeightMm('')}>행높이 자동</ToolbarButton><ToolbarButton label="선택한 표 셀의 열 너비와 행 높이 적용" onClick={applySelectedTableMeasurements}>치수 적용</ToolbarButton></div>
       <small>셀을 선택한 뒤 상하 정렬과 열·행 치수를 적용할 수 있습니다. 열 경계선 드래그도 그대로 지원합니다.</small>
       <ToolbarButton label="표 삭제" onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
     </div>}
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
     <div className="structured-editor__canvas">
       {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(editor?.getHTML() ?? '') }} /> : <>
-        {selectionAssistant && editor && <BubbleMenu
+        {editor && <BubbleMenu
           editor={editor}
           pluginKey={`structured-selection-assistant-${documentKey ?? label}`}
           updateDelay={80}
-          shouldShow={({ editor: activeEditor, from, to }) => !readOnly && !selectionAssistant.disabled && !selectionAssistant.busy && activeEditor.isEditable && activeEditor.isFocused && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim())}
+          shouldShow={({ editor: activeEditor, from, to }) => !readOnly && activeEditor.isEditable && activeEditor.isFocused && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim())}
           className="structured-editor__selection-menu"
           role="toolbar"
           aria-label="선택 문장 빠른 작업"
         >
           <button type="button" className="is-copy" onMouseDown={(event) => event.preventDefault()} onClick={() => void copySelectedText()} aria-label="선택 문장 복사">{copyStatus || '복사'}</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} disabled={!editor.can().undo()} onClick={()=>editor.chain().focus().undo().run()} aria-label="실행 취소">↶ 실행취소</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} disabled={!editor.can().redo()} onClick={()=>editor.chain().focus().redo().run()} aria-label="다시 실행">↷ 다시실행</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} className={editor.isActive('bold')?'is-active':''} onClick={()=>editor.chain().focus().toggleBold().run()} aria-label="굵게">굵게</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('left').run()}>왼쪽</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('center').run()}>가운데</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('right').run()}>오른쪽</button>
+          {tableActive&&<><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addRowAfter().run()}>행 +</button><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addColumnAfter().run()}>열 +</button></>}
+          {selectionAssistant&&<>
           <span aria-hidden="true" />
           <button type="button" className="is-ai" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('professional')}>✦ 전문적으로</button>
           <button type="button" className="is-ai" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('concise')}>✦ 간결하게</button>
           <button type="button" className="is-ai is-primary" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('custom')}>{selectionAssistant.busy ? '개선 중…' : '✦ Gemini 개선'}</button>
+          </>}
         </BubbleMenu>}
         <EditorContent editor={editor} />
       </>}
     </div>
-    <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : '자동 저장 편집기'}</span></footer>
+    <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
     </section>
   </>;
 });

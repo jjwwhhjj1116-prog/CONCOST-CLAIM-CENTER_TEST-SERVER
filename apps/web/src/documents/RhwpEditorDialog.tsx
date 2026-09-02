@@ -8,6 +8,7 @@ export interface RhwpEditorDialogProps {
   documentLabel: string;
   onClose: () => void;
   onApplyContent?: (content: string) => void | Promise<void>;
+  onApplyPages?: (pages: string[]) => void | Promise<void>;
   applyLabel?: string;
 }
 
@@ -44,7 +45,7 @@ const textFromSvg = (svg: string): string => {
   return (document.documentElement.textContent ?? '').replace(/\s+/gu, ' ').trim();
 };
 
-export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, applyLabel = '현재 HWP 내용을 선택 챕터에 적용' }: RhwpEditorDialogProps): React.ReactElement | null {
+export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, applyLabel = '현재 HWP 내용을 선택 챕터에 적용' }: RhwpEditorDialogProps): React.ReactElement | null {
   const editorHostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RhwpEditor | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -153,7 +154,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
 
   const applyCurrentDocument = async () => {
     const editor = editorRef.current;
-    if (!editor || !onApplyContent) return;
+    if (!editor || (!onApplyContent && !onApplyPages)) return;
     if (!hasImportedTemplate) {
       setError('적용할 HWP/HWPX 원본을 먼저 가져오세요.');
       return;
@@ -161,15 +162,19 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setBusy(true); setError(''); setStatus('현재 HWP 편집 내용을 읽고 있습니다…');
     try {
       const count = pageCount ?? await editor.pageCount();
-      const pages: string[] = [];
+      const pageSvgs: string[] = [];
       for (let page = 0; page < count; page += 1) {
-        const pageText = textFromSvg(await editor.getPageSvg(page)).trim();
-        if (pageText) pages.push(pageText);
+        pageSvgs.push(await editor.getPageSvg(page));
       }
-      const content = pages.join('\n\n').trim();
-      if (!content) throw new Error('HWP에서 편집 가능한 텍스트를 찾지 못했습니다. 이미지로만 된 문서는 원본 이미지 삽입 기능을 사용하세요.');
-      await onApplyContent(content);
-      setStatus(`${count}페이지의 현재 편집 내용을 보고서 작업본에 적용했습니다.`);
+      if(onApplyPages){
+        await onApplyPages(pageSvgs);
+        setStatus(`${count}페이지의 글꼴·표·이미지·여백이 보이는 모양을 작업본에 적용했습니다.`);
+      }else{
+        const content=pageSvgs.map(textFromSvg).map((page)=>page.trim()).filter(Boolean).join('\n\n').trim();
+        if (!content) throw new Error('HWP에서 편집 가능한 텍스트를 찾지 못했습니다.');
+        await onApplyContent?.(content);
+        setStatus(`${count}페이지의 텍스트를 보고서 작업본에 적용했습니다.`);
+      }
       setConfirmClose(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '현재 HWP 내용을 보고서 작업본에 적용하지 못했습니다.');
@@ -189,12 +194,12 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         <button type="button" className="rhwp-action-import" disabled={busy} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
         <button type="button" className="rhwp-action-hwp" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 내보내기</button>
         <button type="button" className="rhwp-action-hwpx" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 내보내기</button>
-        {onApplyContent && <button type="button" className="rhwp-action-apply" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
+        {(onApplyContent||onApplyPages) && <button type="button" className="rhwp-action-apply" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
         <div className="rhwp-dialog__status" role="status">{busy && <i aria-hidden="true" />}{status}</div>
       </nav>
       <aside className={`rhwp-dialog__format-note${hasImportedTemplate ? ' is-preserved' : ''}`}>
         <strong>{hasImportedTemplate ? '✓ 원본 HWP 서식 유지' : '회사 기본서식 적용 방법'}</strong>
-        <span>{hasImportedTemplate ? '가져온 템플릿의 글꼴·글자크기·머리글·쪽 여백·표·이미지 배치를 그대로 편집하고 내보냅니다.' : '이 편집기는 기존 HWP/HWPX의 서식을 유지하며 고치는 용도입니다. “HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열어야 편집·내보내기가 정상 작동합니다.'}</span>
+        <span>{hasImportedTemplate ? `가져온 템플릿의 글꼴·글자크기·머리글·쪽 여백·표·이미지 배치를 그대로 편집하고 내보냅니다.${onApplyPages?' 현재 장 적용 시에도 텍스트만 추출하지 않고 페이지 모양을 그대로 보존합니다.':''}` : '이 편집기는 기존 HWP/HWPX의 서식을 유지하며 고치는 용도입니다. “HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열어야 편집·내보내기가 정상 작동합니다.'}</span>
       </aside>
       <details className="rhwp-dialog__claude-guide">
         <summary>✦ Claude로 HWP를 직접 고칠 수 있나요?</summary>
