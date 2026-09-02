@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+
+const read = (path: string): string => readFileSync(path, 'utf8');
+
+test('CF95 keeps every reviewed proposal sheet inside one visible A4 page', () => {
+  const proposal = read('apps/web/src/proposals/ProposalView.tsx');
+  const theme = read('apps/web/src/theme-system.css');
+  const editor = read('apps/web/src/documents/StructuredDocumentEditor.tsx');
+  const editorCss = read('apps/web/src/documents/StructuredDocumentEditor.css');
+
+  assert.match(proposal, /ProposalFinalChapterPages/u);
+  assert.match(proposal, /proposalPageFragments/u);
+  assert.match(proposal, /proposal-final-chapter__viewport/u);
+  assert.match(proposal, /proposal-final-chapter__fit/u);
+  assert.match(proposal, /data-chapter-page-index=\{index\+1\}/u);
+  assert.match(proposal, /data-export-page-policy="fit"/u);
+  assert.match(proposal, /A4 1페이지 자동 맞춤/u);
+  assert.match(proposal, /PROPOSAL_SINGLE_PAGE_MIN_SCALE=\.65/u);
+  assert.match(proposal, /splitTable/u);
+  assert.match(proposal, /표 행·문단 자동 나눔/u);
+  assert.match(proposal, /proposal-content-keep-together/u);
+  assert.match(proposal, /data-export-document-revision/u);
+  assert.match(theme, /height:1123px;min-height:1123px[^}]*overflow:hidden/u);
+  assert.match(theme, /proposal-final-chapter__viewport[^}]*overflow:hidden/u);
+  assert.match(theme, /proposal-final-chapter__fit[^}]*transform:scale\(1\)/u);
+  assert.match(editor, /청록색 구분선마다 A4 1페이지/u);
+  assert.match(editorCss, /repeating-linear-gradient\(to bottom[^;]*1118px[^;]*1123px/u);
+});
+
+test('CF95 captures exactly one physical page for each fitted proposal sheet without clipping legacy report pages', () => {
+  const exporter = read('apps/web/src/documents/final-document-export.ts');
+  assert.match(exporter, /dataset\.exportPagePolicy === 'fit'/u);
+  assert.match(exporter, /One reviewed proposal sheet is one physical A4 page/u);
+  assert.match(exporter, /result\.push\(await canvasPage\(canvas, 0, canvas\.height, orientation\)\)/u);
+  assert.match(exporter, /for \(let top = 0; top < canvas\.height/u);
+  assert.match(exporter, /capturedPageCache/u);
+  assert.match(exporter, /data-export-document-revision/u);
+  assert.match(exporter, /다시 캡처하지 않고 재사용/u);
+  assert.match(exporter, /image\.complete\) throw new Error/u);
+  assert.match(exporter, /제안서 \$\{pageNumber\}페이지 내용이 A4 영역을 넘었습니다/u);
+});
+
+test('CF95 emits Hancom-compatible HWPX pictures and rejects blank reopened HWP pages', () => {
+  const exporter = read('apps/web/src/documents/final-document-export.ts');
+  const pictureStart = exporter.indexOf('return `<hp:run charPrIDRef="0"><hp:pic');
+  const pictureEnd = exporter.indexOf('</hp:pic></hp:run>`;', pictureStart);
+  assert.ok(pictureStart >= 0 && pictureEnd > pictureStart, 'HWPX picture template must exist');
+  const picture = exporter.slice(pictureStart, pictureEnd);
+  const rect = picture.indexOf('<hp:imgRect>');
+  const clip = picture.indexOf('<hp:imgClip');
+  const dimensions = picture.indexOf('<hp:imgDim');
+  const image = picture.indexOf('<hc:img');
+  assert.ok(rect >= 0 && rect < clip && clip < dimensions && dimensions < image, 'HWPX picture children must use canonical order');
+  assert.match(exporter, /page\.width \* 75/u);
+  assert.match(exporter, /transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/u);
+  assert.match(exporter, /scaMatrix e1="\$\{scaleX\}" e2="0" e3="0" e4="0" e5="\$\{scaleY\}" e6="0"/u);
+  assert.match(exporter, /return `<hp:margin\$\{next\}\/>`;/u);
+  assert.match(exporter, /getPageSvg\(index\)/u);
+  assert.match(exporter, /renderedSvgHasInk\(svg\)/u);
+  assert.match(exporter, /HWP \$\{index \+ 1\}페이지가 백지로 변환/u);
+  assert.doesNotMatch(exporter, /exportHwpVerify/u);
+});

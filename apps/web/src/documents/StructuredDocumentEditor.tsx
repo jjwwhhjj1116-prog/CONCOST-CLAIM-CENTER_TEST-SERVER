@@ -1046,7 +1046,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <EditorContent editor={editor} />
       </>}
     </div>
-    <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
+    <footer>{pageMode==='a4-portrait'&&<span className="structured-editor__a4-guide">청록색 구분선마다 A4 1페이지 · 최종 미리보기에서 자동 맞춤 확인</span>}{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
     </section>
   </>;
 });

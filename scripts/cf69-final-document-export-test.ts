@@ -34,9 +34,10 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.doesNotMatch(exporter, /docxDocumentXml/u);
   assert.match(exporter, /createPdf\(pages, orientation\)/u);
   assert.match(exporter, /createHwp\(pages/u);
-  assert.match(exporter, /exportHwpVerify/u);
+  assert.doesNotMatch(exporter, /exportHwpVerify/u);
   assert.match(exporter, /loadFile\(hwp/u);
   assert.match(exporter, /완성된 HWP 재열기 검증/u);
+  assert.match(exporter, /getPageSvg\(index\)/u);
   assert.match(exporter, /oleSignature/u);
   assert.match(exporter, /widthPx: 1_123, heightPx: 794/u);
   assert.match(exporter, /widthPx: 794, heightPx: 1_123/u);
@@ -45,7 +46,7 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.match(exporter, /orientation \?\? 'landscape'/u);
   assert.match(exporter, /dimensions\.width, dimensions\.height/u);
   assert.match(exporter, /orientation === 'portrait' \? 'NARROWLY' : 'WIDELY'/u);
-  assert.match(exporter, /scale: 1\.5/u);
+  assert.match(exporter, /scale: 1\.25/u);
   assert.match(exporter, /imageTimeout: 15_000/u);
   assert.match(exporter, /removeContainer: true/u);
   assert.match(exporter, /expectedSignature/u);

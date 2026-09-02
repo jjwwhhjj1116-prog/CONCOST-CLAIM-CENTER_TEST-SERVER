@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button, Card, Dialog, Input, Select, StatusBadge, type StatusType } from '@claim-studio/ui';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -161,18 +161,100 @@ const renderProposalBodyHtml=(body:string,assets:readonly CompanyAsset[],hydrate
     ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']
   });
 };
-function ProposalRichContent({body,editorJson,assets=[],hydrateCompanyAssets=true}:{body:string;editorJson?:import('@tiptap/core').JSONContent|null;assets?:CompanyAsset[];hydrateCompanyAssets?:boolean}):React.ReactElement{
+const ProposalRichContent=React.memo(function ProposalRichContent({body,editorJson,assets=[],hydrateCompanyAssets=true}:{body:string;editorJson?:import('@tiptap/core').JSONContent|null;assets?:CompanyAsset[];hydrateCompanyAssets?:boolean}):React.ReactElement{
   const visible=assets.filter((asset)=>asset.hasContent&&asset.isActive).sort((a,b)=>a.displayOrder-b.displayOrder);
   const structuredHtml=editorJson?renderStructuredDocumentHtml(editorJson,{pageMode:'a4-portrait'}):'';
   const html=structuredHtml
     ? DOMPurify.sanitize(deduplicateProposalImages(structuredHtml),{ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']})
     : renderProposalBodyHtml(body,visible,hydrateCompanyAssets);
   return <article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/>;
+});
+
+const PROPOSAL_PAGE_BODY_WIDTH=675;
+const PROPOSAL_PAGE_BODY_HEIGHT=863;
+const PROPOSAL_SINGLE_PAGE_MIN_SCALE=.65;
+
+function proposalPageFragments(source:HTMLElement,host:HTMLElement):{fragments:string[];scale:number}{
+  const tester=source.cloneNode(false) as HTMLElement;
+  tester.removeAttribute('aria-label');
+  tester.style.cssText=`width:${PROPOSAL_PAGE_BODY_WIDTH}px;max-width:none;min-height:0;margin:0;padding:0;transform:none;`;
+  host.append(tester);
+  const fits=(scale=1)=>tester.scrollHeight*scale<=PROPOSAL_PAGE_BODY_HEIGHT-6&&tester.scrollWidth*scale<=PROPOSAL_PAGE_BODY_WIDTH+1;
+  tester.innerHTML=source.innerHTML;
+  tester.style.width=`${100/PROPOSAL_SINGLE_PAGE_MIN_SCALE}%`;
+  if(fits(PROPOSAL_SINGLE_PAGE_MIN_SCALE)){
+    let low=PROPOSAL_SINGLE_PAGE_MIN_SCALE;let high=1;
+    for(let index=0;index<16;index+=1){const candidate=(low+high)/2;tester.style.width=`${100/candidate}%`;if(fits(candidate))low=candidate;else high=candidate;}
+    tester.remove();
+    return{fragments:[source.innerHTML],scale:low};
+  }
+  tester.innerHTML='';tester.style.width='100%';
+  const fragments:string[]=[];
+  const commit=()=>{if(tester.childNodes.length){fragments.push(tester.innerHTML);tester.innerHTML='';}};
+  const splitList=(list:HTMLElement)=>{
+    const shell=()=>{const next=list.cloneNode(false) as HTMLElement;tester.append(next);return next;};
+    let current=shell();
+    for(const child of [...list.children]){current.append(child.cloneNode(true));if(!fits()){current.lastElementChild?.remove();commit();current=shell();current.append(child.cloneNode(true));}}
+  };
+  const splitTable=(table:HTMLTableElement)=>{
+    const rows=[...table.querySelectorAll('tr')];
+    const headerRows=rows.filter((row,index)=>row.parentElement?.tagName==='THEAD'||(index===0&&row.querySelector('th')));
+    const bodyRows=rows.filter((row)=>!headerRows.includes(row));
+    const shell=()=>{const next=table.cloneNode(false) as HTMLTableElement;for(const child of [...table.children])if(child.tagName==='COLGROUP'||child.tagName==='CAPTION')next.append(child.cloneNode(true));const body=document.createElement('tbody');for(const row of headerRows)body.append(row.cloneNode(true));next.append(body);tester.append(next);return body;};
+    let body=shell();
+    if(!fits()&&tester.children.length>1){tester.lastElementChild?.remove();commit();body=shell();}
+    for(const row of bodyRows){body.append(row.cloneNode(true));if(!fits()){body.lastElementChild?.remove();commit();body=shell();body.append(row.cloneNode(true));}}
+  };
+  const sourceChildren=[...source.children] as HTMLElement[];
+  for(let childIndex=0;childIndex<sourceChildren.length;childIndex+=1){
+    const child=sourceChildren[childIndex];
+    const following=sourceChildren[childIndex+1];
+    if((child.tagName==='UL'||child.tagName==='OL')&&following?.querySelector('img')){
+      const group=document.createElement('div');group.className='proposal-content-keep-together';group.append(child.cloneNode(true),following.cloneNode(true));tester.append(group);
+      if(!fits()){group.remove();commit();tester.append(group);if(!fits())tester.dataset.unbreakableOverflow='true';}
+      childIndex+=1;continue;
+    }
+    const clone=child.cloneNode(true) as HTMLElement;
+    tester.append(clone);
+    if(fits())continue;
+    clone.remove();
+    if(child.tagName==='TABLE'){splitTable(child as HTMLTableElement);continue;}
+    if(child.tagName==='UL'||child.tagName==='OL'){splitList(child as HTMLElement);continue;}
+    commit();tester.append(clone);
+    if(!fits())tester.dataset.unbreakableOverflow='true';
+  }
+  commit();
+  const overflow=tester.dataset.unbreakableOverflow==='true';
+  tester.remove();
+  return{fragments:overflow?[]:fragments,scale:1};
+}
+
+function ProposalFinalChapterPages({item,startPage,onPageCount}:{item:ProposalChapter;startPage:number;onPageCount:(chapter:number,count:number)=>void}):React.ReactElement{
+  const sourceRef=useRef<HTMLDivElement>(null);
+  const [layout,setLayout]=useState<{fragments:string[];scale:number;ready:boolean}>({fragments:[''],scale:1,ready:false});
+  useLayoutEffect(()=>{
+    const host=sourceRef.current;const source=host?.querySelector<HTMLElement>('.proposal-rich-content');if(!host||!source)return;
+    let active=true;let frame=0;
+    const paginate=()=>{window.cancelAnimationFrame(frame);frame=window.requestAnimationFrame(()=>{const next=proposalPageFragments(source,host);if(active)setLayout({fragments:next.fragments.length?next.fragments:[''],scale:next.scale,ready:next.fragments.length>0});});};
+    const images=[...source.querySelectorAll('img')];
+    images.forEach((image)=>{image.addEventListener('load',paginate,{once:true});image.addEventListener('error',paginate,{once:true});});
+    window.addEventListener('resize',paginate);window.addEventListener('final-document:refit',paginate);void document.fonts?.ready.then(paginate);paginate();
+    return()=>{active=false;window.cancelAnimationFrame(frame);window.removeEventListener('resize',paginate);window.removeEventListener('final-document:refit',paginate);images.forEach((image)=>{image.removeEventListener('load',paginate);image.removeEventListener('error',paginate);});};
+  },[item.body,item.editorJson,item.number,item.title]);
+  useEffect(()=>onPageCount(item.number,layout.fragments.length),[item.number,layout.fragments.length,onPageCount]);
+  return <>
+    <div ref={sourceRef} className="proposal-final-pagination-source proposal-final-chapter" aria-hidden="true"><ProposalRichContent body={item.body} editorJson={item.editorJson}/></div>
+    {layout.fragments.map((html,index)=><section className="proposal-final-chapter" data-export-page data-export-page-policy="fit" data-page-fit-overflow={layout.ready?'false':'true'} data-page-fit-scale={layout.scale.toFixed(3)} data-page-number={startPage+index} data-chapter-number={item.number} data-chapter-page-index={index+1} key={`${item.number}-${index}`}>
+      <header><span>CHAPTER {String(item.number).padStart(2,'0')}{index>0?` · CONTINUED ${index+1}`:''}</span><h3>{item.number}. {item.title}</h3></header>
+      <div className="proposal-final-chapter__viewport"><div className="proposal-final-chapter__fit" style={{width:`${100/layout.scale}%`,transform:`scale(${layout.scale})`}}><article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/></div></div>
+      <span className="proposal-final-chapter__fit-status" data-html2canvas-ignore="true">{layout.ready?(layout.fragments.length>1?`A4 ${index+1}/${layout.fragments.length} · 표 행·문단 자동 나눔`:layout.scale<.995?`A4 1페이지 자동 맞춤 · ${Math.round(layout.scale*100)}%`:'A4 1페이지 맞춤'):'A4 페이지 계산 중'}</span>
+    </section>)}
+  </>;
 }
 
 function ProposalCoverPage({projectTitle,subtitle,clientName,submissionDate}:{projectTitle:string;subtitle:string;clientName:string;submissionDate:string}):React.ReactElement{
   const normalizedDate=submissionDate.replaceAll('-','. ');
-  return <section className="proposal-final-cover" data-export-page data-page-number="1">
+  return <section className="proposal-final-cover" data-export-page data-export-page-policy="fit" data-page-number="1">
     <div className="proposal-cover-frame" aria-hidden="true"/>
     <div className="proposal-cover-heading"><p>{projectTitle}</p><div><h2>{subtitle}</h2><strong>용역 제안서</strong></div></div>
     <time dateTime={submissionDate}>{normalizedDate}</time>
@@ -180,15 +262,19 @@ function ProposalCoverPage({projectTitle,subtitle,clientName,submissionDate}:{pr
   </section>;
 }
 
-function ProposalTableOfContentsPage({chapters}:{chapters:ProposalChapter[]}):React.ReactElement{
-  return <section className="proposal-final-toc" data-export-page data-page-number="2"><span>TABLE OF CONTENTS</span><h3>목 차</h3><ol>{chapters.map((item)=><li key={item.number}><b>{String(item.number).padStart(2,'0')}</b><span>{item.title}</span><i>{String(item.number+2).padStart(2,'0')}</i></li>)}</ol></section>;
+function ProposalTableOfContentsPage({chapters,pageCounts}:{chapters:ProposalChapter[];pageCounts:Record<number,number>}):React.ReactElement{
+  let precedingPages=0;
+  return <section className="proposal-final-toc" data-export-page data-export-page-policy="fit" data-page-number="2"><span>TABLE OF CONTENTS</span><h3>목 차</h3><ol>{chapters.map((item)=>{const page=3+precedingPages;precedingPages+=pageCounts[item.number]??1;return <li key={item.number}><b>{String(item.number).padStart(2,'0')}</b><span>{item.title}</span><i>{String(page).padStart(2,'0')}</i></li>;})}</ol></section>;
 }
 
-function ProposalFinalDocumentPreview({projectTitle,subtitle,clientName,submissionDate,chapters}:{projectTitle:string;subtitle:string;clientName:string;submissionDate:string;chapters:ProposalChapter[]}):React.ReactElement{
-  return <article className="proposal-final-document" aria-label="확정 전 제안서 전체 합본 미리보기" data-export-document-title={projectTitle} data-export-document-kind="PROPOSAL">
+function ProposalFinalDocumentPreview({projectTitle,subtitle,clientName,submissionDate,chapters,revision}:{projectTitle:string;subtitle:string;clientName:string;submissionDate:string;chapters:ProposalChapter[];revision:string}):React.ReactElement{
+  const [pageCounts,setPageCounts]=useState<Record<number,number>>({});
+  const updatePageCount=useCallback((chapter:number,count:number)=>setPageCounts((current)=>current[chapter]===count?current:{...current,[chapter]:count}),[]);
+  let precedingPages=0;
+  return <article className="proposal-final-document" aria-label="확정 전 제안서 전체 합본 미리보기" data-export-document-title={projectTitle} data-export-document-kind="PROPOSAL" data-export-document-revision={revision}>
     <ProposalCoverPage projectTitle={projectTitle} subtitle={subtitle} clientName={clientName} submissionDate={submissionDate}/>
-    <ProposalTableOfContentsPage chapters={chapters}/>
-    {chapters.map((item)=><section className="proposal-final-chapter" data-export-page data-page-number={item.number+2} data-chapter-number={item.number} key={item.number}><header><span>CHAPTER {String(item.number).padStart(2,'0')}</span><h3>{item.number}. {item.title}</h3></header><ProposalRichContent body={item.body} editorJson={item.editorJson}/></section>)}
+    <ProposalTableOfContentsPage chapters={chapters} pageCounts={pageCounts}/>
+    {chapters.map((item)=>{const startPage=3+precedingPages;precedingPages+=pageCounts[item.number]??1;return <ProposalFinalChapterPages item={item} startPage={startPage} onPageCount={updatePageCount} key={item.number}/>;})}
   </article>;
 }
 
@@ -361,7 +447,7 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
           </aside>
           <main className="proposal-chapter-editor">
             {reviewSurface==='cover'&&<section className="proposal-frontmatter-editor" aria-labelledby="proposal-cover-review-title"><div><span>HUMAN REVIEW & EDIT · COVER</span><h3 id="proposal-cover-review-title">갑지 제목과 제출 정보를 확인하세요.</h3></div><div className="proposal-frontmatter-fields"><Input required label="프로젝트 제목" value={projectTitle} onChange={(event)=>{setProjectTitle(event.target.value);setDirty(true);}}/><Input required label="제안서 제목" value={subtitle} onChange={(event)=>{setSubtitle(event.target.value);setDirty(true);}}/><Input required label="제출처" value={clientName} onChange={(event)=>{setClientName(event.target.value);setDirty(true);}}/><Input required label="제출일" type="date" value={submissionDate} onChange={(event)=>{setSubmissionDate(event.target.value);setDirty(true);}}/></div><div className="proposal-frontmatter-preview"><ProposalCoverPage projectTitle={projectTitle} subtitle={subtitle} clientName={clientName} submissionDate={submissionDate}/></div></section>}
-            {reviewSurface==='toc'&&<section className="proposal-frontmatter-editor" aria-labelledby="proposal-toc-review-title"><div><span>HUMAN REVIEW & EDIT · TABLE OF CONTENTS</span><h3 id="proposal-toc-review-title">목차 제목을 최종 확인·편집하세요.</h3></div><div className="proposal-toc-editor-list">{chapters.map((item)=><label key={item.number}><span>{String(item.number).padStart(2,'0')}</span><input value={item.title} maxLength={100} onChange={(event)=>{const title=event.target.value;setChapters((current)=>current.map((candidate)=>candidate.number===item.number?{...candidate,title}:candidate));setDirty(true);}}/></label>)}</div><div className="proposal-frontmatter-preview"><ProposalTableOfContentsPage chapters={chapters}/></div></section>}
+            {reviewSurface==='toc'&&<section className="proposal-frontmatter-editor" aria-labelledby="proposal-toc-review-title"><div><span>HUMAN REVIEW & EDIT · TABLE OF CONTENTS</span><h3 id="proposal-toc-review-title">목차 제목을 최종 확인·편집하세요.</h3></div><div className="proposal-toc-editor-list">{chapters.map((item)=><label key={item.number}><span>{String(item.number).padStart(2,'0')}</span><input value={item.title} maxLength={100} onChange={(event)=>{const title=event.target.value;setChapters((current)=>current.map((candidate)=>candidate.number===item.number?{...candidate,title}:candidate));setDirty(true);}}/></label>)}</div><div className="proposal-frontmatter-preview"><ProposalTableOfContentsPage chapters={chapters} pageCounts={{}}/></div></section>}
             {reviewSurface==='chapter'&&<><div><span>HUMAN REVIEW & EDIT · CHAPTER 01~12</span><h3>{chapter.number}. {chapter.title}</h3></div>
               <StructuredDocumentEditor key={`proposal-${activeProposal.id}-${chapter.number}`} ref={proposalEditorRef} pageMode="a4-portrait" documentKey={`proposal-${activeProposal.id}-${chapter.number}`} label={`${chapter.number}. ${chapter.title}`} value={chapter.body} editorJson={chapter.editorJson} readOnly={!canEdit} onSelectionChange={setProposalSelection} selectionAssistant={{busy,disabled:!canEdit,onImprove:(mode,selection)=>void improveProposalSelection(mode==='professional'?'문법과 맞춤법을 바로잡고 전문적인 건설 클레임 제안서 문체로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복을 줄이고 비전문가도 이해할 수 있게 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':proposalImproveInstruction,selection)}} onChange={(next,json)=>{setChapters((current)=>current.map((item)=>item.number===chapter.number?{...item,body:next,editorJson:json}:item));setDirty(true);}}/>
               <section className="proposal-chapter-insert-tools"><div><b>현재 {chapter.number}장에 자료 삽입</b><span>커서를 원하는 위치에 둔 뒤 표 또는 원본 이미지 파일을 넣으세요. 화면 캡처가 아니라 원본 해상도로 저장됩니다.</span></div><div className="action-row"><Button className="proposal-action-table" onClick={()=>proposalEditorRef.current?.insertTable()} disabled={!canEdit||busy}>▦ 표 삽입</Button><input ref={proposalImageInputRef} hidden type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" onChange={(event)=>void uploadProposalImage(event.target.files?.[0])}/><Button className="proposal-action-image" onClick={()=>{proposalEditorRef.current?.focus();proposalImageInputRef.current?.click();}} disabled={!canEdit||busy}>▧ 원본 이미지 삽입</Button></div></section>
@@ -379,7 +465,7 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
       {step===4&&<section className="proposal-finalization-workspace">
         <header><div><b>STEP 4 · 전체 합본 미리보기</b><h3>갑지부터 목차·맺음말까지 모두 확인하세요.</h3><p>아래 화면이 DOCX·PDF·HWP에 반영될 최종 순서입니다. 내용이 다르면 3단계로 돌아가 수정하고, 맞으면 제안서를 확정하세요.</p></div><StatusBadge status={activeProposal.status==='APPROVED'?'approved':'in_review'}/></header>
         <div className={`proposal-finalization-status is-${activeProposal.status.toLowerCase()}`}><b>{activeProposal.status==='APPROVED'?'✓ 제안서 확정·보관 완료':'확정 전 전체 내용 확인 중'}</b><span>{activeProposal.status==='APPROVED'?'아래 3종 내려받기 버튼이 활성화되었습니다. 확정본은 변경 이력과 함께 보관됩니다.':'갑지·목차·12개 챕터·이미지를 마지막으로 확인한 뒤 확정하세요.'}</span></div>
-        <div ref={finalPreviewRef} className="proposal-final-export-source"><ProposalFinalDocumentPreview projectTitle={projectTitle} subtitle={subtitle} clientName={clientName} submissionDate={submissionDate} chapters={chapters}/></div>
+        <div ref={finalPreviewRef} className="proposal-final-export-source"><ProposalFinalDocumentPreview projectTitle={projectTitle} subtitle={subtitle} clientName={clientName} submissionDate={submissionDate} chapters={chapters} revision={activeProposal.currentVersionId??`draft-${activeProposal.version}`}/></div>
         {activeProposal.status==='APPROVED'&&<section className="proposal-mail-preview" aria-labelledby="proposal-mail-title"><header><div><b>EMAIL DELIVERY · FRONTEND PREVIEW</b><h3 id="proposal-mail-title">제안서 이메일 발송 준비</h3><p>수신자와 본문을 미리 작성하는 화면입니다. 회사 메일 서버는 아직 연결하지 않아 실제 발송은 되지 않습니다.</p></div><span>메일 서버 연동 예정</span></header><div className="proposal-mail-grid"><label><span>보내는 사람</span><input value={userEmail||'현재 로그인 회사 계정'} readOnly/></label><label><span>받는 사람</span><input type="email" value={mailRecipient} onChange={(event)=>setMailRecipient(event.target.value)} placeholder="client@example.com"/></label><label className="wide"><span>제목</span><input value={mailSubject} onChange={(event)=>setMailSubject(event.target.value)}/></label><label className="wide"><span>메일 내용</span><textarea value={mailBody} onChange={(event)=>setMailBody(event.target.value)}/></label></div><div className="proposal-mail-attachment"><b>첨부 예정</b><span>{projectTitle} · 확정 DOCX/PDF/HWP</span><button type="button" disabled title="회사 메일 발송 백엔드 연결 후 활성화됩니다.">메일 서버 연결 후 발송 가능</button></div></section>}
         <div className="proposal-finalization-actions"><Button className="proposal-action-revise" onClick={()=>setStep(3)} disabled={busy}>← 수정 · 3단계로</Button>{activeProposal.status==='APPROVED'?<><Button className="final-export-button is-docx" aria-label="확정 제안서 Word DOCX 내려받기" title="미리보기와 동일한 DOCX 내려받기" onClick={()=>void download('docx')} disabled={busy}><FileFormatIcon format="docx"/><span>Word DOCX</span></Button><Button className="final-export-button is-pdf" aria-label="확정 제안서 PDF 내려받기" title="미리보기와 동일한 PDF 내려받기" onClick={()=>void download('pdf')} disabled={busy}><FileFormatIcon format="pdf"/><span>PDF</span></Button><Button className="final-export-button is-hwp" aria-label="확정 제안서 HWP 내려받기" title="편집기를 열지 않고 확정 HWP 내려받기" onClick={()=>void download('hwp')} disabled={busy}><FileFormatIcon format="hwp"/><span>HWP</span></Button><Button onClick={()=>onNavigate('/workflow/award?caseId='+encodeURIComponent(selectedCaseId))}>프로젝트 접수로 →</Button></>:<Button className="proposal-action-confirm" onClick={()=>setConfirmProposalOpen(true)} disabled={busy||!canEdit||activeProposal.status!=='DRAFT'}>제안서 확정</Button>}</div>
       </section>}

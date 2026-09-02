@@ -24,7 +24,7 @@ test('CF66 resynchronizes the editor when only the structured JSON source change
 test('CF66 final preview renders the exact reviewed chapter snapshot without live asset hydration', () => {
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const finalPreview = proposal.slice(
-    proposal.indexOf('function ProposalFinalDocumentPreview'),
+    proposal.indexOf('function ProposalFinalChapterPage'),
     proposal.indexOf('export const ProposalView'),
   );
   assert.match(finalPreview, /<ProposalRichContent body=\{item\.body\} editorJson=\{item\.editorJson\}\/>/u);

@@ -9,7 +9,8 @@
 
 /* Proposal review and final preview share this exact A4 portrait content box. */
 .structured-editor.is-a4-portrait .structured-editor__canvas{overflow:auto;padding:18px}
-.structured-editor.is-a4-portrait .tiptap,.structured-editor.is-a4-portrait .structured-editor__preview{box-sizing:border-box;width:794px;max-width:none;min-height:1123px;padding:68px 58px 72px;border-radius:1px;font-family:'휴먼명조','Noto Serif KR',Batang,serif;font-size:16px;line-height:1.8}
+.structured-editor.is-a4-portrait .tiptap,.structured-editor.is-a4-portrait .structured-editor__preview{box-sizing:border-box;width:794px;max-width:none;min-height:1123px;padding:68px 58px 72px;border-radius:1px;background-color:#fff;background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 1118px,rgba(14,165,233,.8) 1118px,rgba(14,165,233,.8) 1123px);font-family:'휴먼명조','Noto Serif KR',Batang,serif;font-size:16px;line-height:1.8}
+.structured-editor.is-a4-portrait footer .structured-editor__a4-guide{margin-right:auto;color:#08779a;font-weight:850}
 .structured-editor.is-a4-portrait.is-fullscreen .tiptap,.structured-editor.is-a4-portrait.is-fullscreen .structured-editor__preview{margin-inline:auto}
 .structured-editor.is-a4-portrait .tiptap h2,.structured-editor.is-a4-portrait .tiptap h3,.structured-editor.is-a4-portrait .structured-editor__preview h2,.structured-editor.is-a4-portrait .structured-editor__preview h3{margin:30px 0 16px;border:0;padding:0;font-size:24px;line-height:1.4}
 .structured-editor.is-a4-portrait .tiptap h2:first-child,.structured-editor.is-a4-portrait .tiptap h3:first-child,.structured-editor.is-a4-portrait .structured-editor__preview h2:first-child,.structured-editor.is-a4-portrait .structured-editor__preview h3:first-child{margin-top:0}
