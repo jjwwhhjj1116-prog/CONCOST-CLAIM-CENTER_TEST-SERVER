@@ -457,9 +457,9 @@ const createTurndown = () => {
 const editorHtmlToMarkdown = (html: string): string => createTurndown().turndown(html).replace(/\n{3,}/gu, '\n\n').trim();
 
 /** Render the same structured document used by the editor for final previews. */
-export const renderStructuredDocumentHtml = (editorJson: JSONContent): string => {
+export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: { pageMode?: 'standard' | 'a4-portrait' }): string => {
   try {
-    const html = generateHTML(editorJson, [
+    const html = generateHTML(options?.pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson, [
       StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),

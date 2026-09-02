@@ -163,7 +163,7 @@ const renderProposalBodyHtml=(body:string,assets:readonly CompanyAsset[],hydrate
 };
 function ProposalRichContent({body,editorJson,assets=[],hydrateCompanyAssets=true}:{body:string;editorJson?:import('@tiptap/core').JSONContent|null;assets?:CompanyAsset[];hydrateCompanyAssets?:boolean}):React.ReactElement{
   const visible=assets.filter((asset)=>asset.hasContent&&asset.isActive).sort((a,b)=>a.displayOrder-b.displayOrder);
-  const structuredHtml=editorJson?renderStructuredDocumentHtml(editorJson):'';
+  const structuredHtml=editorJson?renderStructuredDocumentHtml(editorJson,{pageMode:'a4-portrait'}):'';
   const html=structuredHtml
     ? DOMPurify.sanitize(deduplicateProposalImages(structuredHtml),{ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']})
     : renderProposalBodyHtml(body,visible,hydrateCompanyAssets);
