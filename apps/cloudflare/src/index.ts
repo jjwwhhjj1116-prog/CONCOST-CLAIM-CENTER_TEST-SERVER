@@ -2875,8 +2875,10 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID();
     const modules = await proposalCompanyModules(env);
     const chapters = defaultProposalChapters(caseRow,modules);
+    const linkedClientName=caseRow.clientName?.trim()||'[클라이언트명 입력]';
+    const initialMissingFields=caseRow.clientName?.trim()?['keyIssues']:['clientName','keyIssues'];
     const initialInputs: ProposalStudioInputs = {
-      clientName:'[클라이언트명 입력]',projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),
+      clientName:linkedClientName,projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),
       keyIssues:chapters[1].body,objective:chapters[0].body,planNotes:chapters[2].body,exclusions:'해당 없음',chapters,
       includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),templateSourceId:source.id,templateSourceName:source.sourceName,sanitizationCount:0
     };
@@ -2886,7 +2888,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     try {
       await env.DB.batch?.([
         env.DB.prepare('INSERT INTO preview_proposals (id,organization_id,case_id,template_id,template_name_snapshot,template_body_snapshot,title,status,current_version_id,approved_version_id,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'DRAFT\',?,NULL,1,?,?,?)').bind(id, PREVIEW_ORGANIZATION_ID, caseId, template.id, `${template.name} · ${source.sourceName}`, template.bodyTemplate, `${caseRow.title} 기술제안서`, versionId, user.id, now, now),
-        env.DB.prepare('INSERT INTO preview_proposal_versions (id,proposal_id,case_id,version_number,body_text,structured_inputs_json,generation_mode,provider_id,model_id,input_sha256,source_document_version_ids_json,missing_fields_json,sha256,is_approved,created_by,created_at) VALUES (?,?,?,1,?,?,\'MANUAL\',NULL,NULL,?,\'[]\',?, ?,0,?,?)').bind(versionId, id, caseId, initialBody, structured, inputSha, JSON.stringify(['clientName','keyIssues']), bodySha, user.id, now),
+        env.DB.prepare('INSERT INTO preview_proposal_versions (id,proposal_id,case_id,version_number,body_text,structured_inputs_json,generation_mode,provider_id,model_id,input_sha256,source_document_version_ids_json,missing_fields_json,sha256,is_approved,created_by,created_at) VALUES (?,?,?,1,?,?,\'MANUAL\',NULL,NULL,?,\'[]\',?, ?,0,?,?)').bind(versionId, id, caseId, initialBody, structured, inputSha, JSON.stringify(initialMissingFields), bodySha, user.id, now),
         env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'PROPOSAL_CREATED', '제안서 작성 시작', `${template.name} · ${source.sourceName}`, now)
       ]);
       const detail = await previewDraftProposalDetail(env, id, caseId); const detailBody = await detail.json() as Record<string, unknown>;
@@ -2952,7 +2954,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       chapters[0].body=`${sanitizeInput(body.background)}\n\n${sanitizeInput(body.objective)}`.trim();
       chapters[2].body=sanitizeInput(body.method);
       chapters[11].body=`${sanitizeInput(body.expectedOutcome)}\n\n제외사항: ${sanitizeInput(body.exclusions)}`;
-      inputs={clientName:'[클라이언트명 입력]',projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),keyIssues:chapters[1].body,objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.method),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
+      inputs={clientName:caseRow.clientName?.trim()||'[클라이언트명 입력]',projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),keyIssues:chapters[1].body,objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.method),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
     } else {
       const requestedModules=new Set((body.includedModuleCodes as unknown[]).filter((item):item is string=>typeof item==='string'&&moduleByCode.has(item)));
       const submitted=body.chapters as ProposalStudioChapter[];
@@ -3083,7 +3085,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     const excludedCompanyAssetKeys=new Set(inputs.chapters.flatMap((chapter)=>chapter.excludedCompanyAssetKeys??[]));
     const companyAssets=(await proposalExportAssets(env)).filter((asset)=>!excludedCompanyAssetKeys.has(asset.assetKey));const projectAssets=await proposalProjectExportAssets(env,proposalId,caseId);
     const assets=[...companyAssets,...projectAssets.filter((asset)=>chapters.some((chapter)=>chapter.body.includes(`/assets/${asset.assetKey}`)||chapter.body.includes(`[PROPOSAL_ASSET:${asset.assetKey}]`)))];
-    const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters,assets};
+    const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:caseRow.clientName?.trim()||inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters,assets};
     const format=String(body.format); const output=format==='docx'?generateProposalDocx(doc):format==='pdf'?generateProposalPdf(doc):new TextEncoder().encode(generateProposalMarkdown(doc)); const outputSha=await sha256Hex(output);
     const safeCase=caseRow.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu,'_'); const extension=format==='docx'?'docx':format==='pdf'?'pdf':'md'; const fileName=`${safeCase}_컨코스트_제안서_v${version.versionNumber}.${extension}`; const now=new Date().toISOString();
     const exportFormat=format==='docx'?'DOCX':format==='pdf'?'PDF':'MARKDOWN';
@@ -3103,6 +3105,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 interface IntakeAssistantDraft {
   title: string;
+  clientName: string;
   claimType: string;
   clientLegalPosition: 'VICTIM'|'SUSPECT'|'OTHER';
   clientPositionDetail: string;
@@ -3130,10 +3133,12 @@ function parseIntakeAssistantDraft(raw:string,current:Record<string,string>):Int
     const allowedPositions=new Set(['VICTIM','SUSPECT','OTHER']);
     const checklist=Array.isArray(value.reviewChecklist)?value.reviewChecklist.filter((item):item is string=>typeof item==='string'&&Boolean(item.trim())).slice(0,8).map((item)=>item.trim().slice(0,240)):[];
     const title=intakeDraftText(value.title,500,current.title||'사건명 확인 필요');
+    const clientName=intakeDraftText(value.clientName,300,current.clientName||'클라이언트명 확인 필요');
     const description=intakeDraftText(value.description,5000,current.description||'첨부 원문을 기준으로 사건 설명을 확인해 주세요.');
-    if(!title||!description)return null;
+    if(!title||!clientName||!description)return null;
     return{
       title,
+      clientName,
       claimType:allowedClaimTypes.has(String(value.claimType))?String(value.claimType):(allowedClaimTypes.has(current.claimType)?current.claimType:'TYPE-01'),
       clientLegalPosition:(allowedPositions.has(String(value.clientLegalPosition))?String(value.clientLegalPosition):(allowedPositions.has(current.clientLegalPosition)?current.clientLegalPosition:'OTHER')) as IntakeAssistantDraft['clientLegalPosition'],
       clientPositionDetail:intakeDraftText(value.clientPositionDetail,2000,current.clientPositionDetail||'원문에서 당사자 지위를 확인해 주세요.'),
@@ -3149,9 +3154,9 @@ async function generateIntakeAssistantDraft(env:CloudflareEnv,bytes:Uint8Array,f
   if(!credential)return{modelCode,response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
   const generated=await generateGeminiContent(env,{
     modelCode,apiKey:credential.apiKey,
-    system:'당신은 건설 클레임 프로젝트 의뢰 접수 보조자입니다. 첨부 원문에 명시된 사실만 사용하고 추측하지 마세요. 클라이언트와 상대방을 구분하고 불확실한 값은 반드시 확인 필요라고 표시하세요.',
-    parts:[{text:`첨부 자료 ${fileName} (${source.kind})를 읽고 프로젝트 의뢰 기본정보 초안을 만드세요. 현재 입력값은 참고만 하며 원문과 충돌하면 reviewChecklist에 적으세요.\n현재 사건명: ${current.title||'[없음]'}\n현재 유형: ${current.claimType||'[없음]'}\n현재 법적 지위: ${current.clientLegalPosition||'[없음]'}\n현재 입장 상세: ${current.clientPositionDetail||'[없음]'}\n현재 설명: ${current.description||'[없음]'}\n\nJSON 객체 하나만 반환하세요: {"title":"사건명","claimType":"TYPE-01~TYPE-06 중 하나","clientLegalPosition":"VICTIM|SUSPECT|OTHER","clientPositionDetail":"우리 클라이언트의 구체적 지위","description":"클라이언트 관점의 사건 설명. 시간순 사실·주장·상대방 주장·핵심 쟁점·확보자료·확인필요 사항 포함","reviewChecklist":["사람이 원문과 대조할 항목"]}`},intakeGeminiSourcePart(bytes,source)],
-    reasoningEffort:'low',maxOutputTokens:4096,timeoutMs:45_000,responseMimeType:'application/json',
+    system:'당신은 건설 클레임 프로젝트 의뢰 접수 보조자입니다. 첨부 원문에 명시된 사실만 사용하고 추측하지 마세요. 제안서를 받을 우리 클라이언트의 정확한 법인·조합·발주처 명칭을 상대방과 구분해 추출하고, 불확실한 값은 반드시 확인 필요라고 표시하세요.',
+    parts:[{text:`첨부 자료 ${fileName} (${source.kind})를 읽고 프로젝트 의뢰 기본정보 초안을 만드세요. 현재 입력값은 참고만 하며 원문과 충돌하면 reviewChecklist에 적으세요.\n현재 사건명: ${current.title||'[없음]'}\n현재 클라이언트명: ${current.clientName||'[없음]'}\n현재 유형: ${current.claimType||'[없음]'}\n현재 법적 지위: ${current.clientLegalPosition||'[없음]'}\n현재 입장 상세: ${current.clientPositionDetail||'[없음]'}\n현재 설명: ${current.description||'[없음]'}\n\nJSON 객체 하나만 반환하세요: {"title":"사건명","clientName":"제안서를 받을 우리 클라이언트의 정확한 법인·조합·발주처 명칭. 불명확하면 클라이언트명 확인 필요","claimType":"TYPE-01~TYPE-06 중 하나","clientLegalPosition":"VICTIM|SUSPECT|OTHER","clientPositionDetail":"우리 클라이언트의 구체적 지위","description":"클라이언트 관점의 사건 설명. 시간순 사실·주장·상대방 주장·핵심 쟁점·확보자료·확인필요 사항 포함","reviewChecklist":["사람이 원문과 대조할 항목"]}`},intakeGeminiSourcePart(bytes,source)],
+    reasoningEffort:'medium',maxOutputTokens:4096,timeoutMs:45_000,responseMimeType:'application/json',
     unavailableCode:'GEMINI_INTAKE_DRAFT_UNAVAILABLE',unavailableLabel:'Gemini 의뢰 초안 작성'
   });
   if(generated.response)return{modelCode,response:generated.response};
@@ -3167,7 +3172,7 @@ async function handlePreviewIntakeDraft(request:Request,env:CloudflareEnv,user:S
   if(!(file instanceof File)||file.size<1||file.size>10_000_000)return json({error:'녹음·TXT·CSV·Excel(.xlsx) 파일을 10MB 이하로 선택해 주세요.',code:'INVALID_INTAKE_SOURCE'},400);
   const bytes=new Uint8Array(await file.arrayBuffer()); let source:IntakeSource;
   try{source=await extractIntakeSource(file.name,file.type,bytes)}catch(reason){return reason instanceof IntakeSourceError?json({error:reason.message,code:reason.code},400):json({error:'의뢰 자료를 읽지 못했습니다.',code:'INVALID_INTAKE_SOURCE'},400)}
-  const current={title:String(form?.get('title')??'').slice(0,500),claimType:String(form?.get('claimType')??'').slice(0,20),clientLegalPosition:String(form?.get('clientLegalPosition')??'').slice(0,20),clientPositionDetail:String(form?.get('clientPositionDetail')??'').slice(0,2000),description:String(form?.get('description')??'').slice(0,5000)};
+  const current={title:String(form?.get('title')??'').slice(0,500),clientName:String(form?.get('clientName')??'').slice(0,300),claimType:String(form?.get('claimType')??'').slice(0,20),clientLegalPosition:String(form?.get('clientLegalPosition')??'').slice(0,20),clientPositionDetail:String(form?.get('clientPositionDetail')??'').slice(0,2000),description:String(form?.get('description')??'').slice(0,5000)};
   const generated=await generateIntakeAssistantDraft(env,bytes,file.name,source,current);
   if(generated.response)return generated.response;
   return json({draft:generated.draft,source:{fileName:file.name,kind:source.kind,mimeType:source.mimeType},modelCode:generated.modelCode,requiresHumanReview:true,phase:'CF48_INTAKE_AI_DRAFT'});

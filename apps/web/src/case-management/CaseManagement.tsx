@@ -17,6 +17,7 @@ interface Activity {
 }
 interface CaseRecord {
   id: string; caseNumber: string; title: string; description?: string | null; claimType: string;
+  clientName?: string | null;
   clientLegalPosition?: 'VICTIM' | 'SUSPECT' | 'OTHER' | 'UNSPECIFIED'; clientPositionDetail?: string | null;
   status: string; version: number; category?: CaseCategory | null; parties: Party[]; schedules: Schedule[];
   activityTimeline?: Activity[];
@@ -258,7 +259,7 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   const [clientLegalPosition, setClientLegalPosition] = useState<'VICTIM' | 'SUSPECT' | 'OTHER'>('VICTIM');
   const [clientPositionDetail, setClientPositionDetail] = useState('');
   const [intakeFile, setIntakeFile] = useState<File | null>(null);
-  const [intakeDraft, setIntakeDraft] = useState<{title:string;claimType:string;clientLegalPosition:'VICTIM'|'SUSPECT'|'OTHER';clientPositionDetail:string;description:string;reviewChecklist:string[]}|null>(null);
+  const [intakeDraft, setIntakeDraft] = useState<{title:string;clientName:string;claimType:string;clientLegalPosition:'VICTIM'|'SUSPECT'|'OTHER';clientPositionDetail:string;description:string;reviewChecklist:string[]}|null>(null);
   const [aiGeneration, setAiGeneration] = useState<{status:AiGenerationStatus;error?:string}|null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewConfirmed, setReviewConfirmed] = useState(false);
@@ -288,9 +289,9 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
     setError(''); setReviewConfirmed(false); setReviewOpen(false); setAiGeneration({status:'running'});
     try {
       const form = new FormData();
-      form.set('file', intakeFile); form.set('title', title); form.set('claimType', claimType); form.set('clientLegalPosition', clientLegalPosition); form.set('clientPositionDetail', clientPositionDetail); form.set('description', description);
-      const result = await apiRequest<{draft:{title:string;claimType:string;clientLegalPosition:'VICTIM'|'SUSPECT'|'OTHER';clientPositionDetail:string;description:string;reviewChecklist:string[]}}>('/api/cases/intake-source/draft', { method:'POST', body:form, timeoutMs:55_000 });
-      setIntakeDraft(result.draft); setTitle(result.draft.title); setClaimType(result.draft.claimType); setClientLegalPosition(result.draft.clientLegalPosition); setClientPositionDetail(result.draft.clientPositionDetail); setDescription(result.draft.description); setReviewChecks(Array.from({length:Math.max(3,result.draft.reviewChecklist.length)},()=>false)); setAiGeneration({status:'complete'});
+      form.set('file', intakeFile); form.set('title', title); form.set('clientName', clientName); form.set('claimType', claimType); form.set('clientLegalPosition', clientLegalPosition); form.set('clientPositionDetail', clientPositionDetail); form.set('description', description);
+      const result = await apiRequest<{draft:{title:string;clientName:string;claimType:string;clientLegalPosition:'VICTIM'|'SUSPECT'|'OTHER';clientPositionDetail:string;description:string;reviewChecklist:string[]}}>('/api/cases/intake-source/draft', { method:'POST', body:form, timeoutMs:55_000 });
+      setIntakeDraft(result.draft); setTitle(result.draft.title); setClientName(result.draft.clientName); setClaimType(result.draft.claimType); setClientLegalPosition(result.draft.clientLegalPosition); setClientPositionDetail(result.draft.clientPositionDetail); setDescription(result.draft.description); setReviewChecks(Array.from({length:Math.max(3,result.draft.reviewChecklist.length)},()=>false)); setAiGeneration({status:'complete'});
     } catch (reason) { setAiGeneration({status:'error',error:reason instanceof Error?reason.message:String(reason)}); }
   };
   const submit = async (event: React.FormEvent) => {

@@ -98,7 +98,8 @@
     "vietnam:env:encrypt": "tsx scripts/vietnam-env-package.ts encrypt",
     "vietnam:env:decrypt": "tsx scripts/vietnam-env-package.ts decrypt",
     "test:cf90": "tsx --test scripts/cf90-environment-parity-test.ts scripts/cf90-vietnam-env-package-test.ts",
-    "test:cf91": "tsx --test scripts/cf91-proposal-workflow-portrait-test.ts"
+    "test:cf91": "tsx --test scripts/cf91-proposal-workflow-portrait-test.ts",
+    "test:cf92": "tsx --test --test-name-pattern=CF92 scripts/cf47-intake-source-test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

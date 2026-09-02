@@ -12,8 +12,8 @@ const CASE_ID = '40000000-0000-4000-8000-000000000010';
 const PM_ID = '00000000-0000-4000-8000-000000000002';
 const SESSION_TOKEN = 'cf47-pm-session-token';
 const MASTER_KEY = 'a7'.repeat(32);
-const INTAKE_TEXT = '2026-08-01 발주처가 추가 공사를 지시했고 클라이언트는 공사비 검토를 요청했습니다.';
-const migrations = ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql','0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0010_cf10_product_experience.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0013_cf13_litigation_records.sql','0014_cf14_proposal_award_workflow.sql','0015_cf15_case_evidence_library.sql','0016_cf18_report_outline_evidence.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0019_cf27_proposal_authoring.sql','0020_cf28_workspace_settings.sql','0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql','0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0037_cf47_intake_source.sql'];
+const INTAKE_TEXT = '2026-08-01 발주처가 추가 공사를 지시했고 우리 클라이언트 세교1구역 재건축조합은 공사비 검토를 요청했습니다.';
+const migrations = ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql','0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0010_cf10_product_experience.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0013_cf13_litigation_records.sql','0014_cf14_proposal_award_workflow.sql','0015_cf15_case_evidence_library.sql','0016_cf18_report_outline_evidence.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0019_cf27_proposal_authoring.sql','0020_cf28_workspace_settings.sql','0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql','0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0037_cf47_intake_source.sql','0053_cf83_practitioner_review.sql'];
 
 class SqlStatement {
   private values: unknown[] = [];
@@ -21,7 +21,7 @@ class SqlStatement {
   bind(...values: unknown[]): SqlStatement { this.values = values; return this; }
   async first<T>(): Promise<T | null> { const statement = this.database.prepare(this.sql); try { statement.bind(this.values as any[]); return statement.step() ? statement.getAsObject() as T : null; } finally { statement.free(); } }
   async all<T>(): Promise<{ results: T[] }> { const statement = this.database.prepare(this.sql); const results: T[] = []; try { statement.bind(this.values as any[]); while (statement.step()) results.push(statement.getAsObject() as T); return { results }; } finally { statement.free(); } }
-  async run(): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }> { this.database.run(this.sql, this.values as any[]); return { success: true, meta: { changes: this.database.getRowsModified(), last_row_id: 0 } }; }
+  async run(): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }> { this.database.run(this.sql, this.values as any[]); const row=this.database.exec('SELECT last_insert_rowid() AS id')[0]?.values[0]?.[0]; return { success: true, meta: { changes: this.database.getRowsModified(), last_row_id: Number(row??0) } }; }
 }
 class SqlD1 {
   constructor(private readonly database: Database) {}
@@ -67,7 +67,12 @@ async function integrationSetup(): Promise<{ sql: Database; env: CloudflareEnv }
     const body = JSON.parse(String(init?.body)) as any;
     assert.equal('temperature' in body.generationConfig, false, 'Gemini document calls must omit deprecated sampling controls');
     assert.match(body.contents[0].parts[1].text, /발주처가 추가 공사를 지시/u);
-    if (body.contents[0].parts[0].text.includes('JSON 객체 하나만 반환')) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ title:'추가공사비 검토 의뢰', claimType:'TYPE-01', clientLegalPosition:'VICTIM', clientPositionDetail:'원고 조합', description:'2026-08-01 발주처의 추가 공사 지시에 대해 클라이언트가 공사비 검토를 요청했습니다.', reviewChecklist:['추가 공사 지시일 대조','클라이언트 법적 지위 확인'] }) }] } }] });
+    if (body.contents[0].parts[0].text.includes('JSON 객체 하나만 반환')) {
+      assert.match(body.contents[0].parts[0].text, /현재 클라이언트명: 기존 클라이언트/u);
+      assert.match(body.contents[0].parts[0].text, /"clientName"/u);
+      assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, 'medium');
+      return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ title:'추가공사비 검토 의뢰', clientName:'세교1구역 재건축조합', claimType:'TYPE-01', clientLegalPosition:'VICTIM', clientPositionDetail:'원고 조합', description:'2026-08-01 발주처의 추가 공사 지시에 대해 클라이언트가 공사비 검토를 요청했습니다.', reviewChecklist:['클라이언트 법인명 대조','추가 공사 지시일 대조','클라이언트 법적 지위 확인'] }) }] } }] });
+    }
     return Response.json({ candidates: [{ content: { parts: [{ text: '1) 시간순 타임라인\n- 2026-08-01 발주처 추가 공사 지시\n2) 의뢰 배경\n추가 공사비 검토 요청' }] } }] });
   };
   return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: 'AQ.CF47_SYNTHETIC_GEMINI_KEY', GEMINI_TEST_FETCH: geminiFetch, GOOGLE_CLIENT_ID: '123456789012-cf47.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'cf47-client-secret-value', GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: MASTER_KEY, GOOGLE_OAUTH_REDIRECT_ORIGIN: 'https://preview.example', GOOGLE_ALLOWED_DOMAIN: 'con-cost.com', ALLOW_TEST_GOOGLE_MODES: 'true', GOOGLE_TEST_FETCH: googleFetch } };
@@ -164,17 +169,50 @@ test('CF48 intake assistant drafts all case fields from TXT before case creation
   const { sql, env } = await integrationSetup();
   const form = new FormData();
   form.set('file', new File([new TextEncoder().encode(INTAKE_TEXT)], '의뢰정리.txt', { type:'text/plain' }));
-  form.set('title',''); form.set('claimType','TYPE-01'); form.set('clientLegalPosition','VICTIM'); form.set('clientPositionDetail',''); form.set('description','');
+  form.set('title',''); form.set('clientName','기존 클라이언트'); form.set('claimType','TYPE-01'); form.set('clientLegalPosition','VICTIM'); form.set('clientPositionDetail',''); form.set('description','');
   const response = await worker.fetch(new Request('https://preview.example/api/cases/intake-source/draft', { method:'POST', headers:{'X-Session-Token':SESSION_TOKEN}, body:form }), env);
   assert.equal(response.status,200,await response.clone().text());
   const body=await response.json() as any;
   assert.equal(body.phase,'CF48_INTAKE_AI_DRAFT');
   assert.equal(body.requiresHumanReview,true);
   assert.equal(body.draft.title,'추가공사비 검토 의뢰');
+  assert.equal(body.draft.clientName,'세교1구역 재건축조합');
   assert.equal(body.draft.clientLegalPosition,'VICTIM');
   assert.match(body.draft.description,/추가 공사 지시/u);
-  assert.deepEqual(body.draft.reviewChecklist,['추가 공사 지시일 대조','클라이언트 법적 지위 확인']);
+  assert.deepEqual(body.draft.reviewChecklist,['클라이언트 법인명 대조','추가 공사 지시일 대조','클라이언트 법적 지위 확인']);
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_intake_audio_evidence')[0].values[0][0],0,'draft preview must not persist or upload before review');
+  sql.close();
+});
+
+test('CF92 carries the reviewed AI client name through D1 into the first proposal version', async () => {
+  const { sql, env } = await integrationSetup();
+  const form = new FormData();
+  form.set('file', new File([new TextEncoder().encode(INTAKE_TEXT)], '의뢰정리.txt', { type:'text/plain' }));
+  form.set('title',''); form.set('clientName','기존 클라이언트'); form.set('claimType','TYPE-01'); form.set('clientLegalPosition','VICTIM'); form.set('clientPositionDetail',''); form.set('description','');
+  const draftResponse = await worker.fetch(new Request('https://preview.example/api/cases/intake-source/draft', { method:'POST', headers:{'X-Session-Token':SESSION_TOKEN}, body:form }), env);
+  assert.equal(draftResponse.status, 200, await draftResponse.clone().text());
+  const draft = (await draftResponse.json() as any).draft;
+  assert.equal(draft.clientName, '세교1구역 재건축조합');
+
+  const createResponse = await worker.fetch(new Request('https://preview.example/api/cases', {
+    method:'POST',
+    headers:{'X-Session-Token':SESSION_TOKEN,'Content-Type':'application/json','Idempotency-Key':'cf92-client-link-0001'},
+    body:JSON.stringify({title:draft.title,claimType:draft.claimType,description:draft.description,clientName:draft.clientName,clientLegalPosition:draft.clientLegalPosition,clientPositionDetail:draft.clientPositionDetail,category:{major:'건설 클레임',middle:draft.claimType,minor:'사건 업무'}})
+  }), env);
+  assert.equal(createResponse.status, 201, await createResponse.clone().text());
+  const createdCase = (await createResponse.json() as any).case;
+  assert.equal(createdCase.clientName, '세교1구역 재건축조합');
+  assert.equal(sql.exec('SELECT client_name FROM preview_cases WHERE id=?', [createdCase.id])[0].values[0][0], '세교1구역 재건축조합');
+
+  const proposalResponse = await worker.fetch(new Request(`https://preview.example/api/cases/${createdCase.id}/proposals`, {
+    method:'POST',
+    headers:{'X-Session-Token':SESSION_TOKEN,'Content-Type':'application/json'},
+    body:JSON.stringify({templateId:'CF27-TYPE-01'})
+  }), env);
+  assert.equal(proposalResponse.status, 201, await proposalResponse.clone().text());
+  const version = (await proposalResponse.json() as any).proposal.versions[0];
+  assert.equal(JSON.parse(version.structuredInputsJson).clientName, '세교1구역 재건축조합');
+  assert.deepEqual(JSON.parse(version.missingFieldsJson), ['keyIssues']);
   sql.close();
 });
 
@@ -211,6 +249,7 @@ test('CF47 UI and Worker connect the generic source route to Drive, D1, Gemini, 
   const worker = readFileSync('apps/cloudflare/src/index.ts', 'utf8');
   const ui = readFileSync('apps/web/src/case-management/CaseManagement.tsx', 'utf8');
   for (const marker of ['intake-source|intake-audio', 'extractIntakeSource', 'INTAKE_SOURCE_SUMMARIZED', '프로젝트 의뢰 원본', "SET description=?", 'latestIntakeSourceSummary']) assert.match(worker, new RegExp(marker));
-  for (const marker of ['/intake-source/draft', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '3단계 · 자동작성 결과 검수', '확인 항목 전체 체크 · 검수 완료', 'useReviewedCaseDescription', 'timeoutMs:55_000', 'timeoutHintSeconds={45}', 'intakeStorage=pending']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
+  assert.match(worker, /clientName:caseRow\.clientName\?\.trim\(\)\|\|inputs\.clientName/u, 'server render must prefer the linked case client name over legacy placeholders');
+  for (const marker of ['/intake-source/draft', "form.set('clientName', clientName)", 'setClientName(result.draft.clientName)', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '3단계 · 자동작성 결과 검수', '확인 항목 전체 체크 · 검수 완료', 'useReviewedCaseDescription', 'timeoutMs:55_000', 'timeoutHintSeconds={45}', 'intakeStorage=pending']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
   const api = readFileSync('apps/web/src/api.ts','utf8'); assert.match(api,/!\(init\.body instanceof FormData\)/u);
 });
