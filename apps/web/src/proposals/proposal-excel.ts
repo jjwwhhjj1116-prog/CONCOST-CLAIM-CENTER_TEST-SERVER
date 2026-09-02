@@ -83,9 +83,9 @@ const studioFields: Array<{ code: keyof ProposalStudioExcelValues; label: string
   { code:'projectTitle',label:'프로젝트 제목',guide:'갑지에 표시할 프로젝트 공식 명칭' },
   { code:'subtitle',label:'제안서 부제',guide:'예: 공사비 검증 및 협상 지원 용역' },
   { code:'submissionDate',label:'제출일',guide:'YYYY-MM-DD' },
-  { code:'keyIssues',label:'핵심 쟁점',guide:'독소조항, 기준일, 물가변동, 단가조정 등 확인된 쟁점' },
+  { code:'keyIssues',label:'당 현장의 핵심 쟁점 분석',guide:'독소조항, 기준일, 물가변동, 단가조정 등 확인된 쟁점' },
   { code:'objective',label:'제안 목적',guide:'클라이언트 관점의 목표와 권익 보호 방향' },
-  { code:'planNotes',label:'수행 계획 메모',guide:'Fact Finding, 법리·원가 검증, 협상, 총회·의결 지원 범위' },
+  { code:'planNotes',label:'업무 수행 내용',guide:'Fact Finding, 법리·원가 검증, 협상, 총회·의결 지원 범위' },
   { code:'exclusions',label:'제외·확인 사항',guide:'제안 범위에서 제외하거나 추가 확인할 내용' }
 ];
 const reportStudioFields: Array<{ code: keyof ReportStudioExcelValues; label: string; guide: string }> = [

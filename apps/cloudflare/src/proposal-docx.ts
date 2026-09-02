@@ -202,8 +202,8 @@ const proposalPdfHex = (value: string): string => Array.from(value)
 
 type ProposalPdfBlock = { kind:'text'; lines:string[] } | { kind:'image'; asset:ProposalExportAsset };
 
-const wrapProposalPdfLines = (lines: readonly string[]): string[] => lines.flatMap((line) => line.length > 68
-  ? Array.from({ length: Math.ceil(line.length / 68) }, (_, index) => line.slice(index * 68, (index + 1) * 68))
+const wrapProposalPdfLines = (lines: readonly string[]): string[] => lines.flatMap((line) => line.length > 46
+  ? Array.from({ length: Math.ceil(line.length / 46) }, (_, index) => line.slice(index * 46, (index + 1) * 46))
   : [line]);
 
 function proposalPdfBlocks(input: ProposalExportDocument): ProposalPdfBlock[] {
@@ -215,7 +215,9 @@ function proposalPdfBlocks(input: ProposalExportDocument): ProposalPdfBlock[] {
   };
   pushText([
     'CONCOST CLAIM CENTER · APPROVED PROPOSAL',input.projectTitle,input.subtitle,
-    `클라이언트 ${input.clientName} · 제출일 ${input.submissionDate}`,
+    `제출처 ${input.clientName} · 제출일 ${input.submissionDate}`,
+    '주식회사 컨코스트 / 하파트 공사비 연구소',
+    '(06616) 서울시 송파구 법원로4길 18, 5C. TOWER 5F',
     `프로젝트 ${input.caseNumber} · ${input.claimType} · v${input.versionNumber}`,'','목 차',
     ...input.chapters.map((chapter)=>`${chapter.number}. ${chapter.title}`)
   ]);
@@ -259,16 +261,16 @@ export function generateProposalPdf(input: ProposalExportDocument): Uint8Array {
   for(const page of pages){
     const {pageId,contentId}=page;
     if(page.kind==='text'){
-      const commands=['BT','/F1 11 Tf','45 547 Td','17 TL',...page.lines.flatMap((line,lineIndex)=>[`<${proposalPdfHex(line)}> Tj`,lineIndex===page.lines.length-1?'':'T*']).filter(Boolean),'ET'].join('\n');
-      objectText(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+      const commands=['BT','/F1 11 Tf','45 794 Td','17 TL',...page.lines.flatMap((line,lineIndex)=>[`<${proposalPdfHex(line)}> Tj`,lineIndex===page.lines.length-1?'':'T*']).filter(Boolean),'ET'].join('\n');
+      objectText(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
       objectText(contentId,`<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
       continue;
     }
     const {asset,imageId}=page;
-    const maxWidth=752; const maxHeight=505; const scale=Math.min(maxWidth/asset.width,maxHeight/asset.height);
-    const width=Math.max(1,asset.width*scale); const height=Math.max(1,asset.height*scale); const x=(842-width)/2; const y=(595-height)/2;
+    const maxWidth=505; const maxHeight=752; const scale=Math.min(maxWidth/asset.width,maxHeight/asset.height);
+    const width=Math.max(1,asset.width*scale); const height=Math.max(1,asset.height*scale); const x=(595-width)/2; const y=(842-height)/2;
     const commands=`q\n${width.toFixed(2)} 0 0 ${height.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im1 Do\nQ`;
-    objectText(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /XObject << /Im1 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objectText(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im1 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
     objectText(contentId,`<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
     objects.set(imageId,concat([encoder.encode(`<< /Type /XObject /Subtype /Image /Width ${asset.width} /Height ${asset.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${asset.data.byteLength} >>\nstream\n`),asset.data,encoder.encode('\nendstream')]));
   }
@@ -297,7 +299,9 @@ export function generateProposalDocx(input: ProposalExportDocument): Uint8Array 
     paragraph(input.subtitle, 'Subtitle'),
     paragraph(input.clientName, 'Subtitle', '<w:spacing w:before="240" w:after="120"/>', '<w:b/>'),
     paragraph(input.submissionDate, 'Subtitle'),
-    paragraph('주식회사 컨코스트 · 클레임센터', 'Subtitle', '<w:spacing w:before="1100" w:after="0"/>', '<w:b/><w:color w:val="17326D"/>'),
+    paragraph('주식회사 컨코스트 / 하파트 공사비 연구소', 'Subtitle', '<w:spacing w:before="1100" w:after="0"/>', '<w:b/><w:color w:val="17326D"/>'),
+    paragraph('(06616) 서울시 송파구 법원로4길 18, 5C. TOWER 5F · Tel. 02) 2203-1463, 1467 · Fax. 02) 2203-1464, 1468', 'Subtitle'),
+    paragraph('www.con-cost.com · E-mail. ceo@con-cost.com', 'Subtitle'),
     '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
   ].join('');
   const toc = [
@@ -312,7 +316,7 @@ export function generateProposalDocx(input: ProposalExportDocument): Uint8Array 
     return `${paragraph(`${chapter.number}. ${chapter.title}`, 'Heading1')}${markdownParagraphs(markedBody,imageXmlByKey)}`;
   }).join('');
   const metadata = paragraph(`문서 무결성 SHA-256 ${input.contentSha256} · 제안서 ${input.proposalId} · 버전 ${input.versionNumber}`, 'Normal', '<w:spacing w:before="360"/><w:jc w:val="center"/>', '<w:i/><w:color w:val="64748B"/><w:sz w:val="16"/>');
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${cover}${toc}${chapters}${metadata}<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="850" w:right="850" w:bottom="850" w:left="850" w:header="425" w:footer="425"/><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr></w:body></w:document>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${cover}${toc}${chapters}${metadata}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="850" w:right="850" w:bottom="850" w:left="850" w:header="425" w:footer="425"/><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr></w:body></w:document>`;
   const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
   const rootRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`;
   const documentRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>${imageRelationships.map((item)=>`<Relationship Id="${item.relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${item.target}"/>`).join('')}</Relationships>`;

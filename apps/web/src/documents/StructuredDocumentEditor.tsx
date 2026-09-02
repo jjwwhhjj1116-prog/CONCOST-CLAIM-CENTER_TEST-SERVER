@@ -12,6 +12,7 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
+import { selectedRect } from '@tiptap/pm/tables';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
@@ -123,6 +124,11 @@ const FONT_SIZES = ['', '9', '10', '11', '12', '14', '16', '18', '20', '24', '28
 const DEFAULT_TEXT_COLOR = '#17253a';
 const IMAGE_ALIGNMENTS = new Set(['left', 'center', 'right']);
 const TABLE_DENSITIES = new Set(['compact', 'normal', 'comfortable']);
+const CELL_VERTICAL_ALIGNMENTS = new Set(['top', 'middle', 'bottom']);
+const clampMeasurement = (value: unknown, minimum: number, maximum: number, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, Math.round(parsed * 10) / 10)) : fallback;
+};
 
 const normalizeFontFamily = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
@@ -206,6 +212,34 @@ const DocumentPresentationAttributes = Extension.create({
             renderHTML: (attributes) => ({ 'data-table-density': TABLE_DENSITIES.has(attributes.tableDensity) ? attributes.tableDensity : 'normal' })
           }
         }
+      },
+      {
+        types: ['tableCell', 'tableHeader'],
+        attributes: {
+          verticalAlignment: {
+            default: 'top',
+            parseHTML: (element) => CELL_VERTICAL_ALIGNMENTS.has(element.getAttribute('data-cell-vertical-align') ?? '') ? element.getAttribute('data-cell-vertical-align') : 'top',
+            renderHTML: (attributes) => ({ 'data-cell-vertical-align': CELL_VERTICAL_ALIGNMENTS.has(attributes.verticalAlignment) ? attributes.verticalAlignment : 'top' })
+          }
+        }
+      },
+      {
+        types: ['tableRow'],
+        attributes: {
+          rowHeightMm: {
+            default: null,
+            parseHTML: (element) => {
+              const raw = element.getAttribute('data-row-height-mm') ?? element.style.height.replace(/mm$/iu, '');
+              const parsed = Number(raw);
+              return Number.isFinite(parsed) ? clampMeasurement(parsed, 6, 100, 12) : null;
+            },
+            renderHTML: (attributes) => {
+              if (attributes.rowHeightMm === null || attributes.rowHeightMm === undefined) return {};
+              const height = clampMeasurement(attributes.rowHeightMm, 6, 100, 12);
+              return { 'data-row-height-mm': String(height), style: `height:${height}mm` };
+            }
+          }
+        }
       }
     ];
   }
@@ -242,7 +276,7 @@ const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(typeof rendered === 'string' ? rendered : '', {
-    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -294,7 +328,7 @@ const createTurndown = () => {
   service.addRule('adjustableTable', {
     filter: 'table',
     replacement: (_content, node) => node instanceof HTMLTableElement
-      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style'] })}\n\n`
+      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style'] })}\n\n`
       : ''
   });
   return service;
@@ -316,7 +350,7 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent): string =>
       DocumentPresentationAttributes
     ]);
     return DOMPurify.sanitize(html, {
-      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -386,6 +420,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [tableWidthPercent, setTableWidthPercent] = useState(100);
   const [tableAlignment, setTableAlignment] = useState<'left' | 'center' | 'right'>('center');
   const [tableDensity, setTableDensity] = useState<'compact' | 'normal' | 'comfortable'>('normal');
+  const [cellVerticalAlignment, setCellVerticalAlignment] = useState<'top' | 'middle' | 'bottom'>('top');
+  const [columnWidthMm, setColumnWidthMm] = useState('35');
+  const [rowHeightMm, setRowHeightMm] = useState('12');
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState('');
   const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
@@ -427,6 +464,16 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       setTableWidthPercent(Math.min(100, Math.max(35, Number(attributes.tableWidth) || 100)));
       setTableAlignment(IMAGE_ALIGNMENTS.has(attributes.tableAlignment) ? attributes.tableAlignment as 'left' | 'center' | 'right' : 'center');
       setTableDensity(TABLE_DENSITIES.has(attributes.tableDensity) ? attributes.tableDensity as 'compact' | 'normal' | 'comfortable' : 'normal');
+      const cellAttributes = activeEditor.isActive('tableHeader') ? activeEditor.getAttributes('tableHeader') : activeEditor.getAttributes('tableCell');
+      setCellVerticalAlignment(CELL_VERTICAL_ALIGNMENTS.has(cellAttributes.verticalAlignment) ? cellAttributes.verticalAlignment as 'top' | 'middle' | 'bottom' : 'top');
+      const activeElement = document.activeElement;
+      const editingMeasurements = activeElement instanceof HTMLElement && Boolean(activeElement.closest('.structured-editor__table-measurements'));
+      if (!editingMeasurements) {
+        const cellWidths = Array.isArray(cellAttributes.colwidth) ? cellAttributes.colwidth : [];
+        if (Number(cellWidths[0]) > 0) setColumnWidthMm(String(clampMeasurement(Number(cellWidths[0]) * 25.4 / 96, 10, 180, 35)));
+        const rowAttributes = activeEditor.getAttributes('tableRow');
+        setRowHeightMm(String(clampMeasurement(rowAttributes.rowHeightMm, 6, 100, 12)));
+      }
     }
     const textAttributes = activeEditor.getAttributes('documentTextStyle');
     setFontFamily(normalizeFontFamily(textAttributes.fontFamily) ?? '');
@@ -566,6 +613,45 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     if (attributes.tableAlignment) setTableAlignment(attributes.tableAlignment);
     if (attributes.tableDensity) setTableDensity(attributes.tableDensity);
     editor.chain().focus().updateAttributes('table', attributes).run();
+  };
+
+  const applyCellVerticalAlignment = (alignment: 'top' | 'middle' | 'bottom') => {
+    if (!editor?.isActive('table')) return;
+    const rect = selectedRect(editor.state);
+    let transaction = editor.state.tr;
+    for (const relativePosition of rect.map.cellsInRect({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })) {
+      const position = rect.tableStart + relativePosition;
+      const node = transaction.doc.nodeAt(position);
+      if (node && (node.type.name === 'tableCell' || node.type.name === 'tableHeader')) transaction = transaction.setNodeMarkup(position, undefined, { ...node.attrs, verticalAlignment: alignment });
+    }
+    editor.view.dispatch(transaction.scrollIntoView());
+    editor.commands.focus();
+    setCellVerticalAlignment(alignment);
+  };
+
+  const applySelectedTableMeasurements = () => {
+    if (!editor?.isActive('table')) return;
+    const rect = selectedRect(editor.state);
+    const widthPx = Math.round(clampMeasurement(columnWidthMm, 10, 180, 35) * 96 / 25.4);
+    const normalizedRowHeight = clampMeasurement(rowHeightMm, 6, 100, 12);
+    let transaction = editor.state.tr;
+    for (const relativePosition of rect.map.cellsInRect({ left: rect.left, right: rect.right, top: 0, bottom: rect.map.height })) {
+      const position = rect.tableStart + relativePosition;
+      const node = transaction.doc.nodeAt(position);
+      if (!node || (node.type.name !== 'tableCell' && node.type.name !== 'tableHeader')) continue;
+      const span = Math.max(1, Number(node.attrs.colspan) || 1);
+      transaction = transaction.setNodeMarkup(position, undefined, { ...node.attrs, colwidth: Array.from({ length: span }, () => widthPx) });
+    }
+    let rowPosition = rect.tableStart;
+    for (let rowIndex = 0; rowIndex < rect.table.childCount; rowIndex += 1) {
+      const row = rect.table.child(rowIndex);
+      if (rowIndex >= rect.top && rowIndex < rect.bottom) transaction = transaction.setNodeMarkup(rowPosition, undefined, { ...row.attrs, rowHeightMm: normalizedRowHeight });
+      rowPosition += row.nodeSize;
+    }
+    editor.view.dispatch(transaction.scrollIntoView());
+    editor.commands.focus();
+    setColumnWidthMm(String(clampMeasurement(columnWidthMm, 10, 180, 35)));
+    setRowHeightMm(String(normalizedRowHeight));
   };
 
   useImperativeHandle(ref, () => ({
@@ -769,8 +855,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <label><span>표 너비</span><input aria-label="표 너비 비율" type="range" min="35" max="100" step="5" value={tableWidthPercent} onChange={(event) => applyTablePresentation({ tableWidth: Number(event.target.value) })} /><output>{tableWidthPercent}%</output></label>
       <div className="structured-editor__quick-sizes">{[50, 65, 80, 100].map((size) => <ToolbarButton key={size} label={`표 너비 ${size}%`} active={tableWidthPercent === size} onClick={() => applyTablePresentation({ tableWidth: size })}>{size}%</ToolbarButton>)}</div>
       <div><span>정렬</span>{(['left', 'center', 'right'] as const).map((alignment) => <ToolbarButton key={alignment} label={`표 ${alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'} 정렬`} active={tableAlignment === alignment} onClick={() => applyTablePresentation({ tableAlignment: alignment })}>{alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'}</ToolbarButton>)}</div>
+      <div><span>셀 상하</span>{(['top', 'middle', 'bottom'] as const).map((alignment) => <ToolbarButton key={alignment} label={`선택 셀 ${alignment === 'top' ? '위' : alignment === 'middle' ? '가운데' : '아래'} 정렬`} active={cellVerticalAlignment === alignment} onClick={() => applyCellVerticalAlignment(alignment)}>{alignment === 'top' ? '위' : alignment === 'middle' ? '가운데' : '아래'}</ToolbarButton>)}</div>
       <div><span>셀 간격</span>{(['compact', 'normal', 'comfortable'] as const).map((density) => <ToolbarButton key={density} label={`표 ${density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}`} active={tableDensity === density} onClick={() => applyTablePresentation({ tableDensity: density })}>{density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}</ToolbarButton>)}</div>
-      <small>열 경계선을 드래그하면 열 너비도 개별 조정할 수 있습니다.</small>
+      <div className="structured-editor__table-measurements"><label><span>선택 열 너비</span><input aria-label="선택 열 너비 밀리미터" type="number" min="10" max="180" step="1" value={columnWidthMm} onChange={(event) => setColumnWidthMm(event.target.value)}/><output>mm</output></label><label><span>선택 행 높이</span><input aria-label="선택 행 높이 밀리미터" type="number" min="6" max="100" step="1" value={rowHeightMm} onChange={(event) => setRowHeightMm(event.target.value)}/><output>mm</output></label><ToolbarButton label="선택한 표 셀의 열 너비와 행 높이 적용" onClick={applySelectedTableMeasurements}>치수 적용</ToolbarButton></div>
+      <small>셀을 선택한 뒤 상하 정렬과 열·행 치수를 적용할 수 있습니다. 열 경계선 드래그도 그대로 지원합니다.</small>
       <ToolbarButton label="표 삭제" onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
     </div>}
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
