@@ -24,12 +24,21 @@ test('CF95 keeps every reviewed proposal sheet inside one visible A4 page', () =
   assert.match(proposal, /splitTable/u);
   assert.match(proposal, /표 행·문단 자동 나눔/u);
   assert.match(proposal, /proposal-content-keep-together/u);
+  assert.match(proposal, /PROPOSAL_PAGE_BODY_HEIGHT=913/u);
+  assert.match(proposal, /child\.hasAttribute\('data-document-page-break'\)\)\{commit\(\);continue;\}/u);
+  assert.match(proposal, /4단계와 동일한 현재 장 페이지/u);
+  assert.match(proposal, /<ProposalFinalChapterPages item=\{chapter\}/u);
   assert.match(proposal, /data-export-document-revision/u);
   assert.match(theme, /height:1123px;min-height:1123px[^}]*overflow:hidden/u);
+  assert.match(theme, /proposal-final-chapter\{[^}]*font-family:'휴먼명조','Noto Serif KR',Batang,serif/u);
   assert.match(theme, /proposal-final-chapter__viewport[^}]*overflow:hidden/u);
   assert.match(theme, /proposal-final-chapter__fit[^}]*transform:scale\(1\)/u);
-  assert.match(editor, /청록색 구분선마다 A4 1페이지/u);
-  assert.match(editorCss, /repeating-linear-gradient\(to bottom[^;]*1118px[^;]*1123px/u);
+  assert.match(editor, /DocumentPageBreak/u);
+  assert.match(editor, /runLength >= 3[^\n]*documentPageBreak/u);
+  assert.match(editor, /현재 위치에서 다음 A4 쪽 시작/u);
+  assert.match(editor, /청록색 ‘쪽 나누기’가 4단계에서도 같은 위치에 적용/u);
+  assert.match(editorCss, /structured-editor__page-break[^}]*border-top:2px solid #0ea5e9/u);
+  assert.doesNotMatch(editorCss, /repeating-linear-gradient\(to bottom[^;]*1118px/u);
 });
 
 test('CF95 captures exactly one physical page for each fitted proposal sheet without clipping legacy report pages', () => {

@@ -162,29 +162,30 @@ const deduplicateProposalImages=(body:string):string=>{
 };
 const renderProposalBodyHtml=(body:string,assets:readonly CompanyAsset[],hydrateCompanyAssets:boolean):string=>{
   const source=hydrateCompanyAssets?proposalChapterWithCompanyImages({number:assets[0]?.chapterNumber??0,title:'',kind:'FIXED',body},assets).body:body;
-  const rendered=marked.parse(deduplicateProposalImages(source),{async:false,gfm:true,breaks:true});
+  const rendered=marked.parse(deduplicateProposalImages(source).replace(/<!--\s*DOCUMENT-PAGE-BREAK\s*-->/gu,'<div data-document-page-break="true"></div>'),{async:false,gfm:true,breaks:true});
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered==='string'?rendered:''),{
-    ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']
+    ADD_ATTR:['data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']
   });
 };
 const ProposalRichContent=React.memo(function ProposalRichContent({body,editorJson,assets=[],hydrateCompanyAssets=true}:{body:string;editorJson?:import('@tiptap/core').JSONContent|null;assets?:CompanyAsset[];hydrateCompanyAssets?:boolean}):React.ReactElement{
   const visible=assets.filter((asset)=>asset.hasContent&&asset.isActive).sort((a,b)=>a.displayOrder-b.displayOrder);
   const structuredHtml=editorJson?renderStructuredDocumentHtml(editorJson,{pageMode:'a4-portrait'}):'';
   const html=structuredHtml
-    ? DOMPurify.sanitize(deduplicateProposalImages(structuredHtml),{ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']})
+    ? DOMPurify.sanitize(deduplicateProposalImages(structuredHtml),{ADD_ATTR:['data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']})
     : renderProposalBodyHtml(body,visible,hydrateCompanyAssets);
   return <article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/>;
 });
 
 const PROPOSAL_PAGE_BODY_WIDTH=675;
-const PROPOSAL_PAGE_BODY_HEIGHT=863;
+const PROPOSAL_PAGE_BODY_HEIGHT=913;
+const ignoreProposalPageCount=()=>undefined;
 
 function proposalPageFragments(source:HTMLElement,host:HTMLElement):{fragments:string[];scale:number}{
   const tester=source.cloneNode(false) as HTMLElement;
   tester.removeAttribute('aria-label');
   tester.style.cssText=`width:${PROPOSAL_PAGE_BODY_WIDTH}px;max-width:none;min-height:0;margin:0;padding:0;transform:none;`;
   host.append(tester);
-  const fits=()=>tester.scrollHeight<=PROPOSAL_PAGE_BODY_HEIGHT-6&&tester.scrollWidth<=PROPOSAL_PAGE_BODY_WIDTH+1;
+  const fits=()=>tester.scrollHeight<=PROPOSAL_PAGE_BODY_HEIGHT&&tester.scrollWidth<=PROPOSAL_PAGE_BODY_WIDTH+1;
   tester.innerHTML='';tester.style.width='100%';
   const fragments:string[]=[];
   const commit=()=>{if(tester.childNodes.length){fragments.push(tester.innerHTML);tester.innerHTML='';}};
@@ -206,6 +207,7 @@ function proposalPageFragments(source:HTMLElement,host:HTMLElement):{fragments:s
   for(let childIndex=0;childIndex<sourceChildren.length;childIndex+=1){
     const child=sourceChildren[childIndex];
     const following=sourceChildren[childIndex+1];
+    if(child.hasAttribute('data-document-page-break')){commit();continue;}
     if((child.tagName==='UL'||child.tagName==='OL')&&following?.querySelector('img')){
       const group=document.createElement('div');group.className='proposal-content-keep-together';group.append(child.cloneNode(true),following.cloneNode(true));tester.append(group);
       if(!fits()){group.remove();commit();tester.append(group);if(!fits())tester.dataset.unbreakableOverflow='true';}
@@ -447,6 +449,7 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
             {reviewSurface==='toc'&&<section className="proposal-frontmatter-editor" aria-labelledby="proposal-toc-review-title"><div><span>HUMAN REVIEW & EDIT · TABLE OF CONTENTS</span><h3 id="proposal-toc-review-title">목차 제목을 최종 확인·편집하세요.</h3></div><div className="proposal-toc-editor-list">{chapters.map((item)=><label key={item.number}><span>{String(item.number).padStart(2,'0')}</span><input value={item.title} maxLength={100} onChange={(event)=>{const title=event.target.value;setChapters((current)=>current.map((candidate)=>candidate.number===item.number?{...candidate,title}:candidate));setDirty(true);}}/></label>)}</div><div className="proposal-frontmatter-preview"><ProposalTableOfContentsPage chapters={chapters} pageCounts={{}}/></div></section>}
             {reviewSurface==='chapter'&&<><div><span>HUMAN REVIEW & EDIT · CHAPTER 01~12</span><h3>{chapter.number}. {chapter.title}</h3></div>
               <StructuredDocumentEditor key={`proposal-${activeProposal.id}-${chapter.number}`} ref={proposalEditorRef} pageMode="a4-portrait" documentKey={`proposal-${activeProposal.id}-${chapter.number}`} label={`${chapter.number}. ${chapter.title}`} value={chapter.body} editorJson={chapter.editorJson} readOnly={!canEdit} onSelectionChange={setProposalSelection} selectionAssistant={{busy,disabled:!canEdit,onImprove:(mode,selection)=>void improveProposalSelection(mode==='professional'?'문법과 맞춤법을 바로잡고 전문적인 건설 클레임 제안서 문체로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복을 줄이고 비전문가도 이해할 수 있게 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':proposalImproveInstruction,selection)}} onChange={(next,json)=>{setChapters((current)=>current.map((item)=>item.number===chapter.number?{...item,body:next,editorJson:json}:item));setDirty(true);}}/>
+              <section className="proposal-review-page-parity" aria-label={`${chapter.number}장 실시간 A4 페이지`}><header><div><b>4단계와 동일한 현재 장 페이지</b><span>아래 A4 묶음은 4단계 미리보기와 같은 렌더러입니다. 문단·표·쪽 나누기 위치가 그대로 저장됩니다.</span></div><strong>실시간 일치 검수</strong></header><div className="proposal-review-page-parity__pages"><ProposalFinalChapterPages item={chapter} startPage={3} onPageCount={ignoreProposalPageCount}/></div></section>
               <section className="proposal-chapter-insert-tools"><div><b>현재 {chapter.number}장에 자료 삽입</b><span>커서를 원하는 위치에 둔 뒤 표 또는 원본 이미지 파일을 넣으세요. 화면 캡처가 아니라 원본 해상도로 저장됩니다.</span></div><div className="action-row"><Button className="proposal-action-table" onClick={()=>proposalEditorRef.current?.insertTable()} disabled={!canEdit||busy}>▦ 표 삽입</Button><input ref={proposalImageInputRef} hidden type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" onChange={(event)=>void uploadProposalImage(event.target.files?.[0])}/><Button className="proposal-action-image" onClick={()=>{proposalEditorRef.current?.focus();proposalImageInputRef.current?.click();}} disabled={!canEdit||busy}>▧ 원본 이미지 삽입</Button></div></section>
               <section className="proposal-writing-assistant"><div><b>✦ Gemini 문장 개선</b><span>문장을 드래그한 뒤 개선안을 원문과 비교해서 적용합니다.</span></div><input value={proposalImproveInstruction} maxLength={2000} onChange={(event)=>setProposalImproveInstruction(event.target.value)} aria-label="제안서 문장 개선 요청"/><div className="action-row"><Button className="report-action-ai" disabled={!proposalSelection||busy} onClick={()=>void improveProposalSelection('문법과 맞춤법을 바로잡고 전문적인 건설 클레임 제안서 문체로 다듬어 주세요. 사실과 수치는 유지하세요.')}>✦ 전문적으로</Button><Button className="report-action-ai" disabled={!proposalSelection||busy} onClick={()=>void improveProposalSelection('중복을 줄이고 비전문가도 이해할 수 있게 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.')}>✦ 간결하게</Button><Button className="report-action-ai" disabled={!proposalSelection||busy||proposalImproveInstruction.trim().length<3} onClick={()=>void improveProposalSelection()}>✦ 맞춤 요청</Button></div></section>
               {chapter.number>=4&&<p className="proposal-copy-notice">이 장은 중앙 공통 모듈을 복사해 온 현재 제안서 전용 편집본입니다. 실적·자격·조직도·맺음말을 자유롭게 수정하고 표와 원본 이미지를 추가할 수 있습니다.</p>}</>}

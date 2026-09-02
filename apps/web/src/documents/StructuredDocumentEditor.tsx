@@ -105,6 +105,23 @@ const AiChapterMarker = Node.create({
   renderHTML({ HTMLAttributes }) { return ['div', mergeAttributes(HTMLAttributes, { class: 'structured-editor__marker' })]; }
 });
 
+const DocumentPageBreak = Node.create({
+  name: 'documentPageBreak',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  parseHTML() { return [{ tag: 'div[data-document-page-break]' }]; },
+  renderHTML() {
+    return ['div', {
+      'data-document-page-break': 'true',
+      class: 'structured-editor__page-break',
+      contenteditable: 'false',
+      role: 'separator',
+      'aria-label': 'A4 쪽 나누기'
+    }];
+  }
+});
+
 const FONT_FAMILIES = [
   { value: '', label: '기본 글꼴', group: '기본' },
   { value: 'Pretendard', label: '프리텐다드', group: '한글 기본·시스템' },
@@ -296,6 +313,7 @@ class DocumentTableView extends TableView {
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANUAL-WHOLE-DOCUMENT:(?:START|END)))\s*-->/gu;
+const pageBreakPattern = /<!--\s*DOCUMENT-PAGE-BREAK\s*-->/gu;
 
 const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
@@ -357,7 +375,27 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     next.attrs = { ...next.attrs, documentDefaultsVersion: 2 };
     return next;
   };
-  return visit(source);
+  const normalized = visit(source);
+  if (normalized.type !== 'doc' || !normalized.content?.length) return normalized;
+  const content: JSONContent[] = [];
+  for (let index = 0; index < normalized.content.length;) {
+    const node = normalized.content[index];
+    const emptyParagraph = node.type === 'paragraph' && !jsonText(node).trim() && !node.content?.some((child) => child.type && child.type !== 'hardBreak');
+    if (!emptyParagraph) { content.push(node); index += 1; continue; }
+    let end = index + 1;
+    while (end < normalized.content.length) {
+      const candidate = normalized.content[end];
+      if (candidate.type !== 'paragraph' || jsonText(candidate).trim() || candidate.content?.some((child) => child.type && child.type !== 'hardBreak')) break;
+      end += 1;
+    }
+    const runLength = end - index;
+    const hasContentBefore = content.some((candidate) => candidate.type !== 'documentPageBreak');
+    const hasContentAfter = end < normalized.content.length;
+    if (runLength >= 3 && hasContentBefore && hasContentAfter) content.push({ type: 'documentPageBreak' });
+    else content.push(...normalized.content.slice(index, end));
+    index = end;
+  }
+  return { ...normalized, content };
 };
 
 /**
@@ -409,10 +447,11 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
 };
 
 const markdownToEditorHtml = (markdown: string): string => {
-  const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
+  const withPageBreaks = markdown.replace(pageBreakPattern, '\n<div data-document-page-break="true"></div>\n');
+  const withMarkers = withPageBreaks.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
-    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -433,6 +472,10 @@ const createTurndown = () => {
       const marker = node instanceof HTMLElement ? node.getAttribute('data-ai-chapter-marker') : '';
       return marker ? `\n\n<!-- ${marker} -->\n\n` : '';
     }
+  });
+  service.addRule('documentPageBreak', {
+    filter: (node) => node instanceof HTMLElement && node.hasAttribute('data-document-page-break'),
+    replacement: () => '\n\n<!-- DOCUMENT-PAGE-BREAK -->\n\n'
   });
   service.addRule('documentTextStyle', {
     filter: (node) => node instanceof HTMLElement && node.tagName === 'SPAN' && Boolean(normalizeFontFamily(node.style.fontFamily) || normalizeFontSize(node.style.fontSize) || normalizeTextColor(node.style.color)),
@@ -482,11 +525,12 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: 
       TableKit.configure({ table: { resizable: false } }),
       Image.configure({ allowBase64: false, inline: false }),
       AiChapterMarker,
+      DocumentPageBreak,
       DocumentTextStyle,
       DocumentPresentationAttributes
     ]);
     return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
-      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+      ADD_ATTR: ['data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -638,6 +682,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       Placeholder.configure({ placeholder }),
       CharacterCount,
       AiChapterMarker,
+      DocumentPageBreak,
       DocumentTextStyle,
       DocumentPresentationAttributes,
       ...(collaborationSession ? [
@@ -985,6 +1030,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           const transaction = editor.state.tr.delete(from, from + image.nodeSize).insert(nextPosition, image); transaction.setSelection(NodeSelection.create(transaction.doc, nextPosition)); editor.view.dispatch(transaction.scrollIntoView());
         }}>이미지 ↓</ToolbarButton>
         <ToolbarButton label="선택 이미지 삭제" disabled={!imageSelected} onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
+        <ToolbarButton label="현재 위치에서 다음 A4 쪽 시작" onClick={() => editor?.chain().focus().insertContent({ type: 'documentPageBreak' }).run()}>쪽 나누기</ToolbarButton>
         <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>구분선</ToolbarButton>
         <ToolbarButton label="현재 위치에 빈 줄 삽입" onClick={insertBlankLine}>빈 줄</ToolbarButton>
         <ToolbarButton label="서식 지우기" onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}>서식 지우기</ToolbarButton>
@@ -1034,6 +1080,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('left').run()}>왼쪽</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('center').run()}>가운데</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('right').run()}>오른쪽</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().insertContent({type:'documentPageBreak'}).run()}>쪽 나누기</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={insertBlankLine}>빈 줄</button>
           {tableActive&&<><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addRowAfter().run()}>행 +</button><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addColumnAfter().run()}>열 +</button></>}
           {selectionAssistant&&<>
@@ -1046,7 +1093,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <EditorContent editor={editor} />
       </>}
     </div>
-    <footer>{pageMode==='a4-portrait'&&<span className="structured-editor__a4-guide">청록색 구분선마다 A4 1페이지 · 미리보기도 같은 100% 글자 크기로 표 행·문단 단위 분리</span>}{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
+    <footer>{pageMode==='a4-portrait'&&<span className="structured-editor__a4-guide">청록색 ‘쪽 나누기’가 4단계에서도 같은 위치에 적용됩니다 · 아래 실시간 A4 페이지로 확인</span>}{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
     </section>
   </>;
 });
