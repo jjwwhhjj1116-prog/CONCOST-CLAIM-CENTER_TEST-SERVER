@@ -198,6 +198,11 @@ const DocumentPresentationAttributes = Extension.create({
       {
         types: ['table'],
         attributes: {
+          documentDefaultsVersion: {
+            default: 2,
+            parseHTML: (element) => Number(element.getAttribute('data-document-defaults-version')) || 1,
+            renderHTML: (attributes) => ({ 'data-document-defaults-version': String(Number(attributes.documentDefaultsVersion) || 2) })
+          },
           tableWidth: {
             default: 100,
             parseHTML: (element) => Math.min(100, Math.max(35, Number(element.getAttribute('data-table-width')) || Number.parseFloat(element.style.width) || 100)),
@@ -282,6 +287,49 @@ const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANU
 const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
+const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
+const normalizeA4TableJson = (source: JSONContent): JSONContent => {
+  const visit = (node: JSONContent): JSONContent => {
+    const next: JSONContent = { ...node, ...(node.attrs ? { attrs: { ...node.attrs } } : {}), ...(node.content ? { content: node.content.map(visit) } : {}) };
+    if (next.type !== 'table' || !next.content?.length) return next;
+    const rows = next.content.filter((row) => row.type === 'tableRow');
+    const firstCells = rows[0]?.content ?? [];
+    const columnCount = firstCells.reduce((sum, cell) => sum + Math.max(1, Number(cell.attrs?.colspan) || 1), 0);
+    if (!columnCount) return next;
+    const rawWidths: number[] = [];
+    firstCells.forEach((cell) => {
+      const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
+      const stored = Array.isArray(cell.attrs?.colwidth) ? cell.attrs?.colwidth as unknown[] : [];
+      for (let index = 0; index < span; index += 1) rawWidths.push(Number(stored[index]) || 0);
+    });
+    const storedTotal = rawWidths.reduce((sum, width) => sum + Math.max(0, width), 0);
+    const tableWidth = Math.min(100, Math.max(35, Number(next.attrs?.tableWidth) || 100));
+    const availableWidth = Math.round(676 * tableWidth / 100);
+    const normalizedWidths = rawWidths.map((width) => Math.max(20, Math.round(storedTotal > 0 ? width / storedTotal * availableWidth : availableWidth / columnCount)));
+    const wasLegacy = Number(next.attrs?.documentDefaultsVersion) < 2;
+    const rightColumns = new Set(firstCells.flatMap((cell, index) => rightAlignedTableHeader.test(jsonText(cell)) ? [index] : []));
+    rows.forEach((row, rowIndex) => {
+      let columnIndex = 0;
+      row.content?.forEach((cell) => {
+        const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
+        const cellText = jsonText(cell);
+        cell.attrs = {
+          ...cell.attrs,
+          colwidth: normalizedWidths.slice(columnIndex, columnIndex + span),
+          ...(wasLegacy ? {
+            verticalAlignment: 'middle',
+            horizontalAlignment: rowIndex > 0 && (rightColumns.has(columnIndex) || rightAlignedTableValue.test(cellText)) ? 'right' : 'center'
+          } : {})
+        };
+        columnIndex += span;
+      });
+    });
+    next.attrs = { ...next.attrs, documentDefaultsVersion: 2 };
+    return next;
+  };
+  return visit(source);
+};
+
 /**
  * Make saved table measurements portable between the editor and the A4 preview.
  * Tiptap stores resized columns as pixels; copying those pixels into a narrower
@@ -321,7 +369,7 @@ const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
-    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -373,7 +421,7 @@ const createTurndown = () => {
   service.addRule('adjustableTable', {
     filter: 'table',
     replacement: (_content, node) => node instanceof HTMLTableElement
-      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style'] })}\n\n`
+      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style'] })}\n\n`
       : ''
   });
   return service;
@@ -395,7 +443,7 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent): string =>
       DocumentPresentationAttributes
     ]);
     return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
-      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -480,7 +528,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const selectionRef = useRef<StructuredSelection | null>(null);
   // useEditor is recreated for each documentKey. Calculate this value on that
   // render so a chapter never inherits the previous chapter's first content.
-  const initialContent = collaborationSession ? undefined : editorJson ?? markdownToEditorHtml(value);
+  const initialContent = collaborationSession ? undefined : editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value);
 
   const selectedImageElement = (activeEditor: Editor): HTMLImageElement | null => {
     if (!(activeEditor.state.selection instanceof NodeSelection) || activeEditor.state.selection.node.type.name !== 'image') return null;
@@ -594,8 +642,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const desiredSignature = structuredDocumentContentSignature(value, editorJson);
     if (desiredSignature === lastAppliedContentSignature.current) return;
     lastAppliedContentSignature.current = desiredSignature;
-    editor.commands.setContent(editorJson ?? markdownToEditorHtml(value), { emitUpdate: false });
-  }, [collaborationSession, editor, editorJson, value]);
+    editor.commands.setContent(editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), { emitUpdate: false });
+  }, [collaborationSession, editor, editorJson, pageMode, value]);
 
   useEffect(() => {
     if (!collaborationSession || !collaborationSynced || !editor?.isInitialized || editor.isDestroyed || !editor.isEmpty || !value.trim()) return;

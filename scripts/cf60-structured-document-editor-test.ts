@@ -20,7 +20,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(editor, /data-image-align/u);
   assert.match(editor, /data-table-width/u);
   assert.match(editor, /data-table-density/u);
-  assert.match(editor, /const initialContent = collaborationSession \? undefined : editorJson \?\? markdownToEditorHtml\(value\)/u);
+  assert.match(editor, /const initialContent = collaborationSession \? undefined : editorJson \? \(pageMode === 'a4-portrait' \? normalizeA4TableJson\(editorJson\) : editorJson\) : markdownToEditorHtml\(value\)/u);
   assert.match(report, /StructuredDocumentEditor/u);
   assert.match(report, /editorJson/u);
   assert.match(report, /report-step3-[\s\S]*?selectionAssistant/u);
