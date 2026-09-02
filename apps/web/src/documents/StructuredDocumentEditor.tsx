@@ -299,6 +299,20 @@ const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANU
 const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
+const normalizeColumnWidths = (widths: number[], targetTotal: number): { widths: number[]; repaired: boolean } => {
+  const positiveTotal = widths.reduce((sum, width) => sum + (Number.isFinite(width) && width > 0 ? width : 0), 0);
+  const average = positiveTotal > 0 ? positiveTotal / Math.max(1, widths.length) : 0;
+  const missing = widths.map((width) => !Number.isFinite(width) || width <= 0 || (average > 0 && width < average * 0.15));
+  const missingCount = missing.filter(Boolean).length;
+  const defaultWidth = targetTotal / Math.max(1, widths.length);
+  const remaining = Math.max(0, targetTotal - defaultWidth * missingCount);
+  const knownTotal = widths.reduce((sum, width, index) => sum + (missing[index] ? 0 : width), 0);
+  const normalized = widths.map((width, index) => missing[index]
+    ? defaultWidth
+    : (knownTotal > 0 ? width / knownTotal * remaining : defaultWidth));
+  return { widths: normalized, repaired: missingCount > 0 };
+};
+
 const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
 const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
@@ -317,8 +331,9 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     const storedTotal = rawWidths.reduce((sum, width) => sum + Math.max(0, width), 0);
     const tableWidth = Math.min(100, Math.max(35, Number(next.attrs?.tableWidth) || 100));
     const availableWidth = Math.round(676 * tableWidth / 100);
-    const normalizedWidths = rawWidths.map((width) => Math.max(20, Math.round(storedTotal > 0 ? width / storedTotal * availableWidth : availableWidth / columnCount)));
-    const requiresA4Migration = Number(next.attrs?.documentDefaultsVersion) < 2 || storedTotal > availableWidth * 1.05;
+    const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth);
+    const normalizedWidths = normalizedColumns.widths.map((width) => Math.max(20, Math.round(width)));
+    const requiresA4Migration = normalizedColumns.repaired || Number(next.attrs?.documentDefaultsVersion) < 2 || storedTotal > availableWidth * 1.05;
     const rightColumns = new Set(firstCells.flatMap((cell, index) => rightAlignedTableHeader.test(jsonText(cell)) ? [index] : []));
     rows.forEach((row, rowIndex) => {
       if (requiresA4Migration) row.attrs = { ...row.attrs, rowHeightMm: null };
@@ -360,10 +375,9 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
     const columns = [...table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
     if (columns.length) {
       const widths = columns.map((column) => Number.parseFloat(column.style.width || column.getAttribute('width') || '0'));
-      const total = widths.reduce((sum, width) => sum + (Number.isFinite(width) && width > 0 ? width : 0), 0);
+      const normalized = normalizeColumnWidths(widths, 100).widths;
       columns.forEach((column, index) => {
-        const proportional = total > 0 ? (Math.max(0, widths[index]) / total) * 100 : 100 / columns.length;
-        column.style.width = `${Math.max(1, proportional).toFixed(4)}%`;
+        column.style.width = `${Math.max(1, normalized[index]).toFixed(4)}%`;
         column.removeAttribute('width');
       });
     }
