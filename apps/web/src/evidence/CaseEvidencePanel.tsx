@@ -1,3 +1,4 @@
+import { fetchEvidenceUpload } from './upload-evidence';
 import { Button } from '@claim-studio/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -19,6 +20,10 @@ interface CaseEvidenceFile {
   uploadedAt: string;
   downloadUrl: string;
   driveUrl: string | null;
+  displayName?: string;
+  versionNumber?: number;
+  isLatest?: boolean;
+  changeSummary?: string[];
 }
 
 const categoryCopy: Record<CaseEvidenceCategory, { title: string; description: string; icon: string; phase: string }> = {
@@ -62,7 +67,7 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const keysRef = useRef(new Map<string, string>());
   const caseIdRef = useRef(caseId);
   const loadSequenceRef = useRef(0);
-
+  const uploadBusyRef = useRef(false);
   const load = useCallback(async () => {
     if (!caseId) { setFiles([]); return; }
     const requestCaseId = caseId;
@@ -85,45 +90,53 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
 
   const upload = async (incoming: FileList | File[], requestedCategory: CaseEvidenceCategory = category) => {
     const selected = Array.from(incoming);
-    if (!caseId || !selected.length) return;
+    if (!caseId || !selected.length || uploadBusyRef.current) return;
     if (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected) { setError('관리자 설정에서 회사 Google Drive 계정을 먼저 연결해 주세요.'); return; }
     const targetCaseId = caseId;
     const targetCategory = requestedCategory;
+    uploadBusyRef.current = true;
     setCategory(targetCategory);
     setUploading(selected.length); setError(''); setNotice('');
     let completed = 0;
     for (const file of selected) {
+      if (caseIdRef.current !== targetCaseId) break;
       const fingerprint = `${targetCaseId}:${targetCategory}:${file.name}:${file.size}:${file.lastModified}`;
       const key = keysRef.current.get(fingerprint) ?? `case-evidence-${crypto.randomUUID()}`;
       keysRef.current.set(fingerprint, key);
       try {
         const form = new FormData();
         form.set('file', file); form.set('category', targetCategory);
-        const response = await fetch(`/api/cases/${encodeURIComponent(targetCaseId)}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: form });
-        const payload = await response.json() as { file?: CaseEvidenceFile; error?: string };
+        const response = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(targetCaseId)}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: form }, { isCurrent: () => caseIdRef.current === targetCaseId });
+        const payload = await response.json() as { file?: CaseEvidenceFile; error?: string; code?: string };
+        if (caseIdRef.current !== targetCaseId) break;
+        if (['DUPLICATE_EXACT', 'UPLOAD_CANCELLED'].includes(payload.code ?? '')) { keysRef.current.delete(fingerprint); continue; }
         if (!response.ok || !payload.file) throw new Error(payload.error ?? `${file.name}: 업로드에 실패했습니다.`);
         keysRef.current.delete(fingerprint);
-        if (caseIdRef.current === targetCaseId) setFiles((current) => [payload.file as CaseEvidenceFile, ...current.filter((item) => item.id !== payload.file?.id)]);
         completed += 1;
+        await load();
       } catch (reason) { if (caseIdRef.current === targetCaseId) setError(reason instanceof Error ? reason.message : `${file.name}: 업로드에 실패했습니다.`); }
       finally { if (caseIdRef.current === targetCaseId) setUploading((count) => Math.max(0, count - 1)); }
     }
-    if (completed && caseIdRef.current === targetCaseId) setNotice(`${completed}개 ${categoryCopy[targetCategory].title}를 프로젝트 자료실에 저장했습니다.`);
+    uploadBusyRef.current = false;
+    if (completed && caseIdRef.current === targetCaseId) setNotice(`${categoryCopy[targetCategory].title} 파일 ${completed}개를 프로젝트 자료실에 저장했습니다.`);
     if (inputRef.current) inputRef.current.value = '';
   };
 
   const download = async (file: CaseEvidenceFile) => {
     setError('');
     try {
-      const response = await fetch(file.downloadUrl);
+      const response = await fetch(`/api/cases/evidence/${encodeURIComponent(file.id)}/download`);
       if (!response.ok) throw new Error('파일 무결성 확인 또는 다운로드에 실패했습니다.');
       const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = file.originalName; anchor.click(); URL.revokeObjectURL(url);
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = file.displayName ?? file.originalName; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '파일 다운로드에 실패했습니다.'); }
   };
 
   const categoryFiles = files.filter((file) => file.category === category);
-  const visibleFiles = compact ? categoryFiles.slice(0, 6) : categoryFiles;
+  const latestFiles = categoryFiles.filter((file) => file.isLatest !== false);
+  const archivedFiles = categoryFiles.filter((file) => file.isLatest === false);
+  const visibleFiles = compact ? latestFiles.slice(0, 6) : latestFiles;
+  const fileRow = (file: CaseEvidenceFile) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>v{file.versionNumber ?? 1} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small>{Boolean(file.changeSummary?.length) && <details className="evidence-change-summary"><summary title={file.changeSummary?.join('\n')}>Gemini 변경 요약</summary><ul>{file.changeSummary?.map((text, index) => <li key={index}>{text}</li>)}</ul></details>}</div><span className={`evidence-version-badge ${file.isLatest === false ? 'is-archive' : 'is-latest'}`}>{file.isLatest === false ? '이전 버전 / ARCHIVE' : '최신본 / FINAL'}</span><div className="case-evidence-file-actions"><Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>;
   const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
   return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 통합 자료실">
     {!compact && <h3>프로젝트 자료 → 회사 Google Drive에 업로드하세요</h3>}
@@ -134,10 +147,11 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
       <input ref={inputRef} type="file" multiple accept={ACCEPT} disabled={uploadDisabled} onChange={(event) => event.target.files && void upload(event.target.files)} />
       <span aria-hidden="true">⇧</span><div><strong>{categoryCopy[category].title} → 회사 Google Drive에 업로드하세요</strong><small>{uploading ? `${uploading}개 파일 저장 중… · ` : uploadDisabled ? '회사 Google Drive 연결이 필요합니다 · ' : '파일을 끌어다 놓거나 선택하세요 · '}문서·사진·녹음파일 최대 10MB · CONCOST 자료실/20_클레임센터/프로젝트명/자료종류(업로더_날짜)에 저장합니다.{storagePolicy === 'D1_TEST_FALLBACK' && ' Drive 연결 전에는 임시 보관됩니다.'}</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
     </div>
-    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? '회사 Google Drive 저장' : '임시 보관'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 계정 연결 완료 · 개인 Google 계정 공유 없이 클레임센터·경영지원본부와 관리자만 스튜디오 로그인으로 이용합니다.' : '업로드가 잠겨 있습니다. 관리자에게 회사 Drive 연결을 요청하세요.' : '회사 Drive 연결 전에는 업로드 자료를 임시 보관합니다.'} {googleDriveConnected && <button type="button" className="case-evidence-drive-link" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기 →</button>}</p>
+    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? '회사 Google Drive 저장' : '임시 보관'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 계정 연결 완료 · 개인 Google 계정 공유 없이 소관 부서(클레임센터·경영지원본부), 관리자 또는 해당 프로젝트에 배정된 회원이 스튜디오 로그인으로 이용합니다.' : '업로드가 잠겨 있습니다. 관리자에게 회사 Drive 연결을 요청하세요.' : '회사 Drive 연결 전에는 업로드 자료를 임시 보관합니다.'} {googleDriveConnected && <button type="button" className="case-evidence-drive-link" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기 →</button>}</p>
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error} <button type="button" onClick={() => void load()}>다시 확인</button></p>}
     <div className="case-evidence-list"><header><div><span>PROJECT EVIDENCE</span><h3>{categoryCopy[category].title} 목록</h3></div><div><em>{categoryFiles.length} FILES</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
-      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map((file) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>{categoryCopy[file.category].title} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small></div><span>{file.storageProvider === 'GOOGLE_DRIVE' ? '회사 DRIVE' : '이전 저장본'}</span><div className="case-evidence-file-actions"><Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>)}</ul> : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
+      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map(fileRow)}</ul> : <p className="case-evidence-empty">아직 저장된 최신 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
+      {archivedFiles.length > 0 && <details className="evidence-archive"><summary>이전 버전 / ARCHIVE · {archivedFiles.length}개</summary><ul>{archivedFiles.map(fileRow)}</ul></details>}
     </div>
   </section>;
 }

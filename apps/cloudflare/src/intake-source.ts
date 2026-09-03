@@ -116,7 +116,19 @@ async function unzipEntry(bytes: Uint8Array, entry: ZipEntry): Promise<Uint8Arra
   else {
     try {
       const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-      output = new Uint8Array(await new Response(stream).arrayBuffer());
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        size += next.value.length;
+        if (size > MAX_ZIP_ENTRY_BYTES || size > entry.uncompressedSize) { await reader.cancel(); throw new Error('expanded ZIP limit'); }
+        chunks.push(next.value);
+      }
+      output = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.length; }
     } catch {
       throw new IntakeSourceError('INVALID_INTAKE_XLSX', 'Excel 시트 압축을 해제할 수 없습니다.');
     }
@@ -196,4 +208,25 @@ export async function extractIntakeSource(fileName: string, suppliedMimeType: st
     return { kind: 'SPREADSHEET', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extractedText: await extractXlsx(bytes) };
   }
   throw new IntakeSourceError('UNSUPPORTED_INTAKE_SOURCE', '녹음(mp3·m4a·wav·ogg·webm), 텍스트(txt·csv) 또는 Excel(.xlsx) 파일만 사용할 수 있습니다.');
+}
+
+/** Office/HWPX text shares the bounded ZIP reader used by the spreadsheet importer. */
+export async function extractEvidenceText(fileName: string, mimeType: string, bytes: Uint8Array): Promise<string> {
+  const extension = extensionOf(fileName);
+  if (['txt', 'csv', 'xlsx'].includes(extension)) return (await extractIntakeSource(fileName, mimeType, bytes)).extractedText ?? '';
+  if (!['docx', 'hwpx'].includes(extension)) throw new IntakeSourceError('UNSUPPORTED_EVIDENCE_TEXT', '문서 텍스트 추출을 지원하지 않는 형식입니다.');
+  const entries = zipEntries(bytes).filter((entry) => extension === 'docx' ? /^word\/(document|header\d+|footer\d+)\.xml$/iu.test(entry.name) : /^Contents\/section\d+\.xml$/iu.test(entry.name));
+  if (!entries.length || entries.length > 100) throw new IntakeSourceError('INVALID_EVIDENCE_DOCUMENT', '문서 본문을 읽을 수 없습니다.');
+  const parts: string[] = [];
+  let length = 0;
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
+    const xml = new TextDecoder('utf-8', { fatal: true }).decode(await unzipEntry(bytes, entry));
+    const text = [...xml.matchAll(/<(?:[\w.-]+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?t>/giu)].map((match) => xmlText(match[1])).join('\n');
+    length += text.length;
+    if (length > MAX_EXTRACTED_CHARACTERS) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', '문서 내용이 100,000자를 넘습니다. 비교할 문서를 나누어 주세요.');
+    parts.push(text);
+  }
+  const result = parts.join('\n').trim();
+  if (!result) throw new IntakeSourceError('EMPTY_EVIDENCE_DOCUMENT', '문서에서 비교할 텍스트를 찾지 못했습니다.');
+  return result;
 }

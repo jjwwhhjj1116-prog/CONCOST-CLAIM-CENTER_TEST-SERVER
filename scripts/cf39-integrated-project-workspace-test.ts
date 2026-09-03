@@ -157,6 +157,8 @@ test('CF43 each signed-in member can persistently change their own password with
 
 test('CF39 all assigned login roles upload project-wide evidence categories and immutable attribution survives listing', async () => {
   const { sql, env } = await setup();
+  sql.exec(migration('0055_cf85_drive_department_access.sql'));
+  sql.exec(migration('0058_cf104_evidence_versions.sql'));
   const meeting = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`, STAFF_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf39-meeting-recording-0001' }, body: evidenceForm('MEETING_RECORDING', 'kickoff.mp3', 'audio/mpeg', [0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x41]) }), env);
   assert.equal(meeting.status, 201);
   assert.equal((await meeting.json() as any).file.category, 'MEETING_RECORDING');

@@ -1,3 +1,4 @@
+import { fetchEvidenceUpload } from '../evidence/upload-evidence';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Select } from '@claim-studio/ui';
 import { ApiError, apiRequest } from '../api';
@@ -553,11 +554,11 @@ async function archiveWorkflowResult(caseId: string, kind: 'KICKOFF' | 'SITE_SUR
   const form = new FormData();
   form.set('file', new File([workflowArchiveText(kind, value, statusLabel)], fileName, { type: 'text/plain;charset=utf-8' }));
   form.set('category', category);
-  const response = await fetch(`/api/cases/${encodeURIComponent(caseId)}/evidence`, {
+  const response = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(caseId)}/evidence`, {
     method: 'POST',
     headers: { 'Idempotency-Key': `workflow-result-${crypto.randomUUID()}` },
     body: form
-  });
+  }, { reuseExact: true });
   const payload = await response.json().catch(() => ({})) as { file?: WorkflowArchivedFile; error?: string };
   if (!response.ok || !payload.file) throw new Error(payload.error ?? '자동작성 결과를 Google Drive에 보관하지 못했습니다.');
   return payload.file;
@@ -599,7 +600,7 @@ const WorkflowAiImporter: React.FC<{
     setSelectedFile(null); setStoredFileName(''); setBusy(true); setError(''); setMessage('선택한 원본을 프로젝트 자료로 가져오고 있습니다.');
     try {
       const evidence = new FormData(); evidence.set('file',file); evidence.set('category',evidenceCategoryFor(kind,file));
-      const stored = await fetch(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method:'POST',headers:{'Idempotency-Key':`workflow-source-${crypto.randomUUID()}`},body:evidence });
+      const stored = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method:'POST',headers:{'Idempotency-Key':`workflow-source-${crypto.randomUUID()}`},body:evidence }, { reuseExact: true });
       const storedPayload = await stored.json().catch(() => ({})) as { error?: string };
       if (!stored.ok) throw new Error(storedPayload.error ?? '원본을 회사 Google Drive에 저장하지 못했습니다.');
       setSelectedFile(file);

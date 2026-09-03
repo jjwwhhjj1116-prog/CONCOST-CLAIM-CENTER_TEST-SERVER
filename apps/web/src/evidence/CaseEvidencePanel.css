@@ -1,4 +1,24 @@
 .case-evidence-panel { display: grid; gap: 14px; }
+.case-evidence-list .evidence-version-badge { font-size: .75rem; white-space: normal; }
+.case-evidence-list .evidence-version-badge.is-latest { color: #166534; border-color: #86c69b; background: #ecfdf3; }
+.case-evidence-list .evidence-version-badge.is-archive { color: #475569; border-color: #cbd5e1; background: #f1f5f9; }
+.evidence-archive > summary { padding: 16px; cursor: pointer; font-weight: 700; }
+.evidence-change-summary { font-size: .8rem; }
+.evidence-change-summary summary { cursor: pointer; width: fit-content; }
+.case-evidence-list .evidence-change-summary ul { padding-left: 20px; list-style: disc; }
+.case-evidence-list .evidence-change-summary li { display: list-item; padding: 4px 0; border: 0; overflow-wrap: anywhere; }
+.evidence-version-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); box-sizing: border-box; padding: 28px; border: 1px solid #94a3b8; border-radius: 14px; color: #172b45; background: #fff; box-shadow: 0 16px 48px #0f172a40; overflow: auto; }
+.evidence-version-dialog::backdrop { background: #0f172a99; }
+.evidence-version-dialog h2 { margin: 0 0 20px; font-size: 1.4rem; line-height: 1.45; }
+.evidence-version-dialog p, .evidence-version-dialog li { font-size: 1rem; line-height: 1.6; overflow-wrap: anywhere; }
+.evidence-conflict-file { display: grid; gap: 4px; padding: 14px; background: #f1f5f9; border-radius: 6px; }
+.evidence-version-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 24px; }
+.evidence-version-actions button { min-height: 44px; padding: 10px 14px; border: 1px solid #94a3b8; border-radius: 6px; background: #f8fafc; color: #172b45; font: inherit; cursor: pointer; }
+.evidence-version-actions button.is-primary { background: #166534; border-color: #166534; color: #fff; font-weight: 700; }
+.evidence-version-actions button:hover { filter: brightness(.95); }
+.evidence-version-dialog :focus-visible, .evidence-archive summary:focus-visible, .evidence-change-summary summary:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
+:root[data-theme='dark'] .evidence-version-dialog { background: #16243b; color: #f1f5f9; }
+:root[data-theme='dark'] .evidence-conflict-file { background: #243651; }
 .case-evidence-categories { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .case-evidence-categories button { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid rgba(148,163,184,.18); border-radius: 15px; background: rgba(8,14,31,.72); color: inherit; text-align: left; cursor: pointer; }
 .case-evidence-categories button.is-active { border-color: rgba(34,211,238,.55); background: linear-gradient(135deg,rgba(124,58,237,.18),rgba(34,211,238,.1)); box-shadow: 0 0 0 3px rgba(34,211,238,.06); }

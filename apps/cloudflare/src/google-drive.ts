@@ -572,3 +572,13 @@ export async function downloadEvidenceFromDrive(fetcher: GoogleFetch, accessToke
   if (!response.ok) throw providerFailure(response, 'Google Drive download');
   return response;
 }
+
+export async function renameEvidenceInDrive(fetcher: GoogleFetch, accessToken: string, fileId: string, name: string): Promise<void> {
+  if (!GOOGLE_ID.test(fileId)) throw new GoogleDriveError('INVALID_GOOGLE_FILE_ID', 400, 'Google Drive file ID is invalid');
+  const response = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name`, {
+    method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
+  });
+  if (!response.ok) throw providerFailure(response, 'Google Drive version archive', true);
+  const result = await safeJson(response);
+  if (result.id !== fileId || result.name !== name) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google Drive archive result needs reconciliation', true);
+}

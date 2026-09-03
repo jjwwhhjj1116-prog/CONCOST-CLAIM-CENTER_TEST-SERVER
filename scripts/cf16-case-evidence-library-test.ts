@@ -94,6 +94,10 @@ function evidenceForm(bytes: Uint8Array, category: 'TAKEOFF_SOURCE' | 'COST_BREA
 
 test('CF16 uploads chunked project evidence and exposes the identical file in the project library after restart', async () => {
   const { sql, env } = await setup();
+  sql.exec(migration('0022_cf30_settings_template_preview.sql'));
+  sql.exec(migration('0031_cf39_integrated_project_workspace.sql'));
+  sql.exec("ALTER TABLE preview_users ADD COLUMN department_code TEXT NOT NULL DEFAULT 'CLAIM_CENTER'");
+  sql.exec(migration('0058_cf104_evidence_versions.sql'));
   const bytes = new Uint8Array(500_200);
   bytes[0] = 0x50; bytes[1] = 0x4b; bytes[2] = 0x03; bytes[3] = 0x04;
   bytes.fill(0x41, 4);
@@ -123,7 +127,8 @@ test('CF16 uploads chunked project evidence and exposes the identical file in th
   const download = await worker.fetch(request(uploadBody.file.downloadUrl), env);
   assert.equal(download.status, 200);
   assert.deepEqual(new Uint8Array(await download.arrayBuffer()), bytes);
-  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`, OUTSIDER_TOKEN), env)).status, 404);
+  // Same-department staff need not be individually assigned; cross-department denial is covered by CF104.
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`, OUTSIDER_TOKEN), env)).status, 200);
 
   const SQL = await initSqlJs();
   const restarted = new SQL.Database(sql.export());

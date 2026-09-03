@@ -316,10 +316,54 @@ model DocumentVersion {
   uploadedBy      User                   @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
   evidenceLinks   ReportEvidenceLink[]
   outputArtifacts ReportOutputArtifact[]
+  evidenceVersion EvidenceVersion?
 
   @@unique([documentId, versionNumber])
   @@index([documentId])
   @@index([storageKey])
+}
+
+// CF104 SQLite handoff schema. The legacy Node /documents API is not the Cloudflare /evidence adapter.
+model EvidenceVersion {
+  id String @id
+  organizationId String
+  caseId String
+  category String
+  documentVersionId String? @unique
+  groupId String
+  versionNumber Int
+  isLatest Boolean @default(true)
+  supersedesId String? @unique
+  changeSummaryJson String @default("[]")
+  modelCode String @default("")
+  documentVersion DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  @@unique([groupId, versionNumber])
+  @@index([organizationId, caseId, category, isLatest])
+}
+
+model EvidenceUploadReview {
+  id String @id
+  organizationId String
+  caseId String
+  category String
+  userId String
+  fingerprint String
+  baseId String
+  snapshotHash String
+  analysisJson String
+  modelCode String
+  expiresAt DateTime
+  consumedAt DateTime?
+}
+
+model EvidenceUploadLock {
+  organizationId String
+  caseId String
+  category String
+  id String @unique
+  userId String
+  createdAt DateTime @default(now())
+  @@id([organizationId, caseId, category])
 }
 
 model Meeting {
