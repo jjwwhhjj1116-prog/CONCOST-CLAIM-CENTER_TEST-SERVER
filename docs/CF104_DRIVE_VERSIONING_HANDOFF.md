@@ -6,7 +6,47 @@
 
 현재 화면이 사용하는 Cloudflare `/api/cases/:caseId/evidence`와 서버 다운로드 경로에 구현했다. 중앙 자료실의 13개 자료 구분, 착수회의·현장조사 자료 업로드, 회의록 자동작성 결과 보관, 보고서의 HWP·XLSX 원본 연결이 같은 업로드 절차를 사용한다.
 
-**이 문서 작성 시 실제 Cloudflare 배포, D1/운영 SQLite migration, 회사 Drive 파일 변경은 실행하지 않았다.** 이전 배포 권한 요청이 거절된 상태이므로 명시적인 대상 서버 적용 승인이 필요하다. 기본 production Wrangler 설정으로 실행하지 않는다.
+**2026-09-03 사용자 승인으로 기존 Cloudflare 개발/테스트 서버에 배포하고 D1 migration 0058을 적용했다.** 베트남 Native SQLite에는 적용하지 않았으며, 배포 검수에서 회사 Drive 파일을 업로드·변경·삭제하지 않았다. 기본 production Wrangler 설정은 사용하지 않았다.
+
+### 실제 배포 기록
+
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev
+- 배포 소스: `bc7e45e` (CF104 `6a9e1f6` 및 CF103 포함). 이 문서의 후속 수정은 문서 전용이다.
+- 최종 Worker version: `0dce12b0-9eec-49f8-b037-192bc6626581`.
+- 대상 D1: `concost-claim-center-development-db`, ID `16d1f25b-60c8-4489-95ed-4fa7de161c9f`. 적용 후 미적용 migration 없음.
+- `RELEASE_MAINTENANCE=1`로 Worker/API 접근을 503 차단한 상태에서 최종 백업·migration·전후 대조를 수행한 뒤, `RELEASE_MAINTENANCE=0`으로 다시 배포했다. 정적 자산은 점검 중에도 제공될 수 있지만 DB/API 경로는 차단된다.
+- `/readiness` 200·Drive 연결 정상, 비로그인 `/api/cases` 401 확인. 실제 Chrome에서 기존 관리자 로그인 유지, 회사 Drive CONNECTED, OpenAI·Claude·Gemini 연결 정상 표시, 콘솔 오류 0건 확인. 설정/연결 확인 버튼은 누르지 않았다.
+- 기존 회의록 1개가 FINAL v1로 표시되며 원파일명·등록일시·업로더·7.7KB 정보가 보존됐다. 스튜디오 서버 다운로드 버튼을 확인했고 중앙 자료실의 직접 Drive 링크는 0개였다. 실파일 업로드·Gemini 비교·다운로드 bytes 검수와는 구별한다.
+
+### 배포 백업과 데이터 보존 증거
+
+아래 경로는 Git에 포함하지 않은 로컬 비공개 산출물이다. SQL에는 업무 데이터와 암호화된 credential이 있으므로 소스 전달물이나 외부 검증 서버로 전송하지 않는다.
+
+- 최종 점검모드 백업: `artifacts/backups/cf104-development-quiesced-20260903.sql`.
+- 서명 manifest: `artifacts/backups/cf104-development-quiesced-20260903.manifest.json`.
+- SQL SHA-256: `a7eb8eb33e462d56500de3c489598d12cb862a6c700248fbec5d806e8adbab3c`.
+- 별도로 기록한 서명 공개키 SHA-256 pin: `0bedbf71984b9ff592e2c5b867497b27139ee9ead15e4e79a8feb5bf065e373a`.
+- 적용 후 비교본: `artifacts/backups/cf104-development-after-20260903.sql`.
+- 점검모드 D1 Time Travel bookmark: `000000bc-00000000-000050db-021fca70ce9875729ccdfe1d7a9ed6a2`.
+- 적용 전후 기존 업무 테이블 111개의 행 수와 전체 행 canonical SHA가 동일했다. 기존 `d1_migrations`의 모든 행(id/name/applied_at)도 동일하고 0058만 추가됐다. 신규 3개 테이블은 비어 있으며 예상 schema와 일치했다. `integrity_check` 정상, `foreign_key_check` 위반 0건.
+- 사용자 9명·프로젝트 2개·세션 2개·배정 3개·Drive 자료 1개·Google credential 1개·OAuth 설정 1개·AI credential 3개를 포함한 기존 레코드 전체가 보존됐다. 기존 Worker master key의 존재만 확인했으며 값 조회·교체·rotation은 하지 않았다. 서명 검증용 일회성 개인키는 메모리에서만 생성했다.
+
+사전 검증에는 환경 제약이 있었다. 로컬 Wrangler D1 emulator는 시작 단계에서 멈춰 해당 명령을 중단했다. 실제 업무 데이터가 든 서명 백업은 로컬 Node 내장 SQLite 격리 사본에 복원하여 0058 적용 및 전체 데이터/원장/schema 보존을 검증했다. 별도 임시 원격 D1에는 **Git의 migration SQL만** 실제 Wrangler runner로 적용하여 엔진 호환성을 확인했다. 업무 데이터 백업을 임시 원격 D1로 복원하는 시도는 승인되지 않아 실행하지 않았으므로, 원격 populated-clone 또는 로컬 Wrangler 검증을 통과했다고 해석하면 안 된다.
+
+임시 검증 D1 `concost-claim-center-cf104-check-20260903` (`33a1f518-e207-4348-9bce-9d9c16842d78`)은 검수 후 삭제했다. 여기에 회사 업무 데이터는 없었다. 원본 개발 DB와 로컬 백업은 유지했다.
+
+복구 기준은 이전 Worker version `37afe8c7-64de-483b-85f8-648a1a6c7039` 및 위 최종 백업/bookmark다. 이번 배포에서 Time Travel restore나 reverse SQL은 실행하지 않았다. 실제 복구는 현재 데이터에 영향을 주므로 별도 승인과 점검모드에서 수행한다.
+
+사용한 개발 서버 명령(원본 DB 복구 명령이 아님):
+
+```powershell
+node node_modules/wrangler/bin/wrangler.js deploy --config wrangler.development.jsonc --var RELEASE_MAINTENANCE:1
+node node_modules/wrangler/bin/wrangler.js d1 migrations apply DB --remote --config wrangler.development.jsonc
+node node_modules/wrangler/bin/wrangler.js deploy --config wrangler.development.jsonc --var RELEASE_MAINTENANCE:0
+node node_modules/wrangler/bin/wrangler.js d1 migrations list DB --remote --config wrangler.development.jsonc
+```
+
+백업 생성·서명·검증·격리 사본 비교는 `scripts/cf104-d1-release-check.mjs`의 `sign`, `verify`, `preflight`, `compare`로 수행했다. `verify`에는 manifest와 별도로 위 공개키 pin이 필수다. 이 도구는 로컬 파일만 처리하며 원격 DB/Drive를 변경하지 않는다.
 
 ### 반영한 계약
 
@@ -76,7 +116,7 @@
 
 ## 재현 검수
 
-최종 로컬 결과: 아래 관련 테스트 58/58 통과, Prisma schema 검증·TypeScript 검사·production web 빌드 통과. 기존 대형 JS chunk 경고는 유지된다.
+최종 로컬 결과: 점검모드 API 차단 검수를 포함해 아래 관련 테스트 59/59 통과, Prisma schema 검증·TypeScript 검사·production web 빌드 통과. 기존 대형 JS chunk 경고는 유지된다.
 
 ```powershell
 node node_modules/tsx/dist/cli.mjs --test scripts/cf104-drive-versioning-test.ts scripts/cf104-sqlite-migration-test.ts scripts/cf104-upload-dialog-test.ts scripts/cf16-case-evidence-library-test.ts scripts/cf05-google-drive-test.ts scripts/cf76-drive-project-scope-test.ts scripts/cf85-drive-department-recovery-test.ts scripts/cf39-integrated-project-workspace-test.ts scripts/cf47-intake-source-test.ts
