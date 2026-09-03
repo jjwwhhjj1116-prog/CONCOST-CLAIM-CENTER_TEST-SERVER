@@ -147,6 +147,15 @@ test('CF104 project access is department OR assignment, with matching insert gua
   assert.equal(sql.exec('PRAGMA foreign_key_check').length,0); sql.close();
 });
 
+test('CF104 deployment maintenance stops every Worker route before database access',async()=>{
+  const env={RELEASE_MAINTENANCE:'1',DB:{prepare(){throw new Error('Database must not be reached during maintenance');}}} as unknown as CloudflareEnv;
+  for(const path of ['/api/cases','/api/cases/evidence/00000000-0000-4000-8000-000000000104/download','/auth/google/callback','/readiness']){
+    const response=await worker.fetch(new Request(`https://preview.example${path}`),env);
+    assert.equal(response.status,503);assert.equal(response.headers.get('Retry-After'),'60');
+    assert.equal((await response.json() as any).code,'RELEASE_MAINTENANCE');
+  }
+});
+
 test('CF104 hash duplicates include renamed files and preserve successful request replay',async()=>{
   const {sql,env}=await setup(); sql.exec(versionMigration);
   let calls=0; env.GEMINI_TEST_FETCH=async()=>{calls++;throw Error('must not call');};

@@ -53,6 +53,7 @@ interface AssetsLike {
 }
 
 export interface CloudflareEnv {
+  RELEASE_MAINTENANCE?: string;
   ASSETS?: AssetsLike;
   DB?: D1DatabaseLike;
   FILES?: unknown;
@@ -8103,6 +8104,11 @@ async function handleBusinessCards(request: Request, env: CloudflareEnv, url: UR
 // Router dispatch
 const worker = {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
+    if (env.RELEASE_MAINTENANCE === '1') {
+      const response = json({ error: '자료 보존을 위한 배포 점검 중입니다. 잠시 후 다시 시도해 주세요.', code: 'RELEASE_MAINTENANCE' }, 503);
+      response.headers.set('Retry-After', '60');
+      return response;
+    }
     const url = new URL(request.url);
 
     if (url.pathname === '/health' || url.pathname === '/api/health') {
