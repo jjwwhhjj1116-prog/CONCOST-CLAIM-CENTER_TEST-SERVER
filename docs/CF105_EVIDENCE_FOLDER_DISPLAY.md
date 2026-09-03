@@ -18,7 +18,16 @@
 - 관련 Worker/API/문서 가져오기/업로드 대화상자/폴더 그룹 검사 62개 통과, 실제 SQLite 보존 검사 1개 통과(합계 63).
 - Web TypeScript 검사·production build 통과. 기존 대형 JS chunk 경고 유지. 개발 설정 Worker dry-run bundle 통과.
 - 내장 브라우저의 로컬 합성 fixture에서 데스크톱 1,280px / 좁은 화면 390px 검수. 동명 2폴더 분리, ARCHIVE-only 폴더 표시·펼침, 이름 조회 실패 안내, 긴 폴더명/파일명 줄바꿈 확인. 가로 넘침 없음, HTML 문자열의 이미지 DOM 생성 없음, 콘솔 오류/경고 없음. viewport는 검수 후 복원했다.
-- 회사 파일로 업로드·교체·이동 테스트는 하지 않았다. Chrome 전문 검수 세션에 탭 소유권 오류가 있어 루트의 별도 초기 브라우저 연결로 로컬 UI를 검증했다. 실제 배포·인증된 화면 결과는 배포 후 별도 기록한다.
+- 회사 파일로 업로드·교체·이동 테스트는 하지 않았다. Chrome 전문 검수 세션에 탭 소유권 오류가 있어 루트의 별도 초기 브라우저 연결로 로컬 UI를 검증했다. 루트의 Chrome 연결에서는 기존 관리자 로그인도 정상 확인되어 배포 전후 동일 자료실을 대조했다.
+
+## 배포 결과
+
+- 개발/테스트 URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/cases/files
+- 배포 코드: `e4484e1`. Worker version: `fac25524-9805-4678-86b7-92d49d989a88`.
+- `wrangler.development.jsonc`만 사용했고 `RELEASE_MAINTENANCE:0`으로 배포했다. 이번 변경에서 D1/SQLite migration은 실행하지 않았다.
+- 배포 후 `/readiness` 200 ready, Google Drive connected true, 비로그인 `/api/cases` 401.
+- 실제 Chrome 자료실에서 `회의록(유종욱_2026.09.03)` 저장 폴더와 `업로더: 유종욱` 표시 확인. 기존 `착수회의_회의록_2026-09-03.xlsx`, v1, 2026-09-03 14:11:08, 7.7KB 정보와 스튜디오 다운로드 버튼이 유지됐다. 콘솔 오류/경고 0건.
+- 이전 Worker version은 `0dce12b0-9eec-49f8-b037-192bc6626581`. 조회/표시만 변경했으므로 코드 복구에 DB 복원이나 Drive 파일 변경은 필요하지 않다. 이번에는 롤백을 실행하지 않았다.
 
 ```powershell
 node node_modules/tsx/dist/cli.mjs --test scripts/cf104-drive-versioning-test.ts scripts/cf105-evidence-folders-test.ts scripts/cf104-upload-dialog-test.ts scripts/cf16-case-evidence-library-test.ts scripts/cf05-google-drive-test.ts scripts/cf76-drive-project-scope-test.ts scripts/cf85-drive-department-recovery-test.ts scripts/cf39-integrated-project-workspace-test.ts scripts/cf47-intake-source-test.ts
