@@ -24,6 +24,19 @@ interface CaseEvidenceFile {
   versionNumber?: number;
   isLatest?: boolean;
   changeSummary?: string[];
+  folder?: { key: string; name: string | null };
+}
+
+export function groupEvidenceFiles(files: CaseEvidenceFile[]) {
+  const groups = new Map<string, { key: string; name: string; files: CaseEvidenceFile[] }>();
+  for (const file of files) {
+    const temporary = file.storageProvider === 'D1_TEMPORARY';
+    const key = file.folder?.key ?? (temporary ? 'temporary' : `unknown-${file.id}`);
+    const group = groups.get(key) ?? { key, name: temporary ? '스튜디오 임시 보관' : file.folder?.name || '폴더명 확인 불가', files: [] };
+    group.files.push(file);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
 }
 
 const categoryCopy: Record<CaseEvidenceCategory, { title: string; description: string; icon: string; phase: string }> = {
@@ -134,9 +147,10 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
 
   const categoryFiles = files.filter((file) => file.category === category);
   const latestFiles = categoryFiles.filter((file) => file.isLatest !== false);
-  const archivedFiles = categoryFiles.filter((file) => file.isLatest === false);
   const visibleFiles = compact ? latestFiles.slice(0, 6) : latestFiles;
-  const fileRow = (file: CaseEvidenceFile) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>v{file.versionNumber ?? 1} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small>{Boolean(file.changeSummary?.length) && <details className="evidence-change-summary"><summary title={file.changeSummary?.join('\n')}>Gemini 변경 요약</summary><ul>{file.changeSummary?.map((text, index) => <li key={index}>{text}</li>)}</ul></details>}</div><span className={`evidence-version-badge ${file.isLatest === false ? 'is-archive' : 'is-latest'}`}>{file.isLatest === false ? '이전 버전 / ARCHIVE' : '최신본 / FINAL'}</span><div className="case-evidence-file-actions"><Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>;
+  const folderGroups = groupEvidenceFiles(categoryFiles.filter((file) => file.isLatest === false || visibleFiles.includes(file)));
+  const missingFolderNames = categoryFiles.some((file) => file.storageProvider === 'GOOGLE_DRIVE' && !file.folder?.name);
+  const fileRow = (file: CaseEvidenceFile) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small className="case-evidence-uploader">업로더: {file.uploadedBy || '기록 없음'}</small><small>v{file.versionNumber ?? 1} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {formatBytes(file.byteSize)}</small>{Boolean(file.changeSummary?.length) && <details className="evidence-change-summary"><summary title={file.changeSummary?.join('\n')}>Gemini 변경 요약</summary><ul>{file.changeSummary?.map((text, index) => <li key={index}>{text}</li>)}</ul></details>}</div><span className={`evidence-version-badge ${file.isLatest === false ? 'is-archive' : 'is-latest'}`}>{file.isLatest === false ? '이전 버전 / ARCHIVE' : '최신본 / FINAL'}</span><div className="case-evidence-file-actions"><Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>;
   const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
   return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 통합 자료실">
     {!compact && <h3>프로젝트 자료 → 회사 Google Drive에 업로드하세요</h3>}
@@ -149,9 +163,20 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     </div>
     <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? '회사 Google Drive 저장' : '임시 보관'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 계정 연결 완료 · 개인 Google 계정 공유 없이 소관 부서(클레임센터·경영지원본부), 관리자 또는 해당 프로젝트에 배정된 회원이 스튜디오 로그인으로 이용합니다.' : '업로드가 잠겨 있습니다. 관리자에게 회사 Drive 연결을 요청하세요.' : '회사 Drive 연결 전에는 업로드 자료를 임시 보관합니다.'} {googleDriveConnected && <button type="button" className="case-evidence-drive-link" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기 →</button>}</p>
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error} <button type="button" onClick={() => void load()}>다시 확인</button></p>}
-    <div className="case-evidence-list"><header><div><span>PROJECT EVIDENCE</span><h3>{categoryCopy[category].title} 목록</h3></div><div><em>{categoryFiles.length} FILES</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
-      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map(fileRow)}</ul> : <p className="case-evidence-empty">아직 저장된 최신 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
-      {archivedFiles.length > 0 && <details className="evidence-archive"><summary>이전 버전 / ARCHIVE · {archivedFiles.length}개</summary><ul>{archivedFiles.map(fileRow)}</ul></details>}
+    <div className="case-evidence-list"><header><div><h3>{categoryCopy[category].title} · 폴더별 자료</h3></div><div><em>파일 {categoryFiles.length}개</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
+      {!loading && missingFolderNames && <p className="case-evidence-folder-notice">일부 저장 폴더명을 확인하지 못했습니다. 파일과 업로더 정보는 그대로 이용할 수 있습니다. <button type="button" onClick={() => void load()}>폴더명 다시 확인</button></p>}
+      {loading ? <p className="case-evidence-empty">자료와 저장 폴더명을 불러오는 중입니다.</p> : folderGroups.length ? folderGroups.map((folder) => {
+        const latest = folder.files.filter((file) => file.isLatest !== false);
+        const archive = folder.files.filter((file) => file.isLatest === false);
+        return <section className="case-evidence-folder" key={folder.key} aria-label={`저장 폴더: ${folder.name}`}>
+          <div className="case-evidence-folder-heading">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/></svg>
+            <div><small>저장 폴더</small><h4>{folder.name}</h4><p>업로더: {[...new Set(folder.files.map((file) => file.uploadedBy || '기록 없음'))].join(', ')} · 파일 {folder.files.length}개</p></div>
+          </div>
+          {latest.length > 0 && <ul>{latest.map(fileRow)}</ul>}
+          {archive.length > 0 && <details className="evidence-archive"><summary>이전 버전 / ARCHIVE · {archive.length}개</summary><ul>{archive.map(fileRow)}</ul></details>}
+        </section>;
+      }) : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
     </div>
   </section>;
 }

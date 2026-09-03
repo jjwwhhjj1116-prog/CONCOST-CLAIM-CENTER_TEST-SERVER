@@ -4,8 +4,13 @@ import { CaseEvidencePanel } from '../src/evidence/CaseEvidencePanel';
 import '../src/preview-theme.css';
 import '../src/theme-system.css';
 import '../src/evidence/CaseEvidencePanel.css';
-const file = { id:'00000000-0000-4000-8000-000000000104',category:'MEETING_MINUTES',originalName:'착수회의_회의록_2026-09-03.txt',mimeType:'text/plain',byteSize:1234,sha256:'a'.repeat(64),storageProvider:'GOOGLE_DRIVE',uploadedBy:'검수 담당자',uploadedAt:'2026-09-03T03:00:00Z',downloadUrl:'/api/cases/evidence/00000000-0000-4000-8000-000000000104/download',driveUrl:null,versionNumber:2,isLatest:true,changeSummary:['회의 참석자와 후속 일정 수정'] };
-let files = [file,{...file,id:'00000000-0000-4000-8000-000000000105',versionNumber:1,isLatest:false,changeSummary:[]}];
+const file = { id:'00000000-0000-4000-8000-000000000104',category:'MEETING_MINUTES',originalName:'착수회의_회의록_2026-09-03.txt',mimeType:'text/plain',byteSize:1234,sha256:'a'.repeat(64),storageProvider:'GOOGLE_DRIVE',uploadedBy:'검수 담당자',uploadedAt:'2026-09-03T03:00:00Z',downloadUrl:'/api/cases/evidence/00000000-0000-4000-8000-000000000104/download',driveUrl:null,versionNumber:2,isLatest:true,changeSummary:['회의 참석자와 후속 일정 수정'],folder:{key:'folder-current',name:'회의록(검수 담당자_2026.09.03)'} };
+let files = [file,
+  {...file,id:'00000000-0000-4000-8000-000000000105',versionNumber:1,isLatest:false,changeSummary:[],folder:{key:'folder-archive',name:'회의록(검수 담당자_2026.09.02)'}},
+  {...file,id:'00000000-0000-4000-8000-000000000106',originalName:'이름이_같은_다른_폴더의_회의록.txt',folder:{...file.folder,key:'folder-same-name'}},
+  {...file,id:'00000000-0000-4000-8000-000000000107',originalName:'이전_자료_원문.txt',folder:{key:'folder-unknown',name:null}},
+  {...file,id:'00000000-0000-4000-8000-000000000108',originalName:'긴_한글_회의록_파일명_줄바꿈_확인_'.repeat(5)+'.txt',uploadedBy:'현장조사 및 회의 자료 검수 담당자',folder:{key:'folder-long',name:'회의록_매우긴_폴더명_'.repeat(8)+'<img src=x onerror=alert(1)>'}}
+];
 window.fetch = async(input,init)=>{
   const path=new URL(String(input),location.origin).pathname;
   if(path.endsWith('/download'))return new Response('합성 자료 다운로드');

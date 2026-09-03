@@ -21,6 +21,7 @@ import {
   validateEvidenceFile,
   validateReportTemplateFile,
   verifyDriveFolder,
+  readEvidenceFolderNames,
   CLAIM_CENTER_DEPARTMENT_FOLDER_NAME,
   CONCOST_DRIVE_ROOT_NAME,
   type ClaimCenterFolderKind,
@@ -7312,11 +7313,11 @@ async function getGoogleDriveCredential(env: CloudflareEnv): Promise<{ refreshTo
   }
 }
 
-async function accessToken(env: CloudflareEnv): Promise<string> {
+async function accessToken(env: CloudflareEnv, fetcher: GoogleFetch = googleFetch(env)): Promise<string> {
   const config = await googleConfig(env);
   const credential = await getGoogleDriveCredential(env);
   if (!config || !credential) throw new GoogleDriveError('GOOGLE_DRIVE_NOT_CONNECTED', 503, 'Connect Google Drive before using file storage');
-  return refreshAccessToken(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, refreshToken: credential.refreshToken });
+  return refreshAccessToken(fetcher, { clientId: config.clientId, clientSecret: config.clientSecret, refreshToken: credential.refreshToken });
 }
 
 async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -7649,6 +7650,17 @@ function caseEvidenceProjection(row: CaseEvidenceRow): Record<string, unknown> {
   };
 }
 
+async function caseEvidenceProjections(env: CloudflareEnv, caseId: string, rows: CaseEvidenceRow[], knownFolders?: Map<string, string>): Promise<Record<string, unknown>[]> {
+  const folderIds = [...new Set(rows.flatMap((row) => row.googleFolderId ? [row.googleFolderId] : []))];
+  let names = knownFolders ?? new Map<string, string>();
+  if (!knownFolders && folderIds.length) {
+    try { names = await readEvidenceFolderNames(googleFetch(env), (fetcher) => accessToken(env, fetcher), caseId, folderIds); }
+    catch { /* Folder metadata is optional; retain the authorized file list when Drive is unavailable. */ }
+  }
+  const folders = new Map(await Promise.all(folderIds.map(async (id) => [id, { key: await sha256Hex(`${caseId}:${id}`), name: names.get(id) ?? null }] as const)));
+  return rows.map((row) => ({ ...caseEvidenceProjection(row), folder: row.googleFolderId ? folders.get(row.googleFolderId) : { key: row.storageProvider === 'D1_TEMPORARY' ? 'temporary' : `unknown-${row.id}`, name: null } }));
+}
+
 async function analyzeEvidenceVersions(env: CloudflareEnv, candidates: EvidenceRecord[], fileName: string, mimeType: string, bytes: Uint8Array) {
   const policy = await workflowAiGovernance(env);
   if (!policy.confidentialEnabled || !['PAID_NO_PRODUCT_IMPROVEMENT', 'VERTEX_AI_ENTERPRISE'].includes(policy.serviceTier)) {
@@ -7768,6 +7780,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   const collectionMatch = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/evidence$/iu);
   if (!collectionMatch) return json({ error: 'Case evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
   const caseId = collectionMatch[1];
+  const projectFile = async (row: CaseEvidenceRow, knownFolders?: Map<string, string>) => (await caseEvidenceProjections(env, caseId, [row], knownFolders))[0];
   if (!await canAccessProject(caseId)) return forbidden();
   const caseRow = await organizationPreviewCase(env, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
@@ -7794,7 +7807,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     const configured = Boolean(await googleConfig(env));
     const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
     const files = await evidenceVersions(db, caseId, [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 200));
-    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl: null, accessMode: 'STUDIO_SESSION_PROXY', departmentAccess: user.roles.includes('admin') ? 'ADMIN_OVERRIDE' : user.departmentCode, allowedDepartments: ['CLAIM_CENTER','MANAGEMENT_SUPPORT'], storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF85_DRIVE_DEPARTMENT_ACCESS' });
+    return json({ files: await caseEvidenceProjections(env, caseId, files), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl: null, accessMode: 'STUDIO_SESSION_PROXY', departmentAccess: user.roles.includes('admin') ? 'ADMIN_OVERRIDE' : user.departmentCode, allowedDepartments: ['CLAIM_CENTER','MANAGEMENT_SUPPORT'], storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF85_DRIVE_DEPARTMENT_ACCESS' });
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);
@@ -7816,7 +7829,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     try { await db.prepare('SELECT evidence_id FROM preview_evidence_versions LIMIT 0').all(); }
     catch { return json({ error: '자료실 버전 관리 마이그레이션이 필요합니다.', code: 'EVIDENCE_SCHEMA_UPGRADE_REQUIRED' }, 503); }
     const previous = (await categoryEvidence(db, caseId, category)).find((entry) => entry.idempotencyKey === idempotencyKey);
-    if (previous) return previous.requestFingerprint === fingerprint ? json({ file: caseEvidenceProjection(previous), replay: true }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    if (previous) return previous.requestFingerprint === fingerprint ? json({ file: await projectFile(previous), replay: true }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
     const prepared = await prepareEvidenceVersion({ db, caseId, category, userId: user.id, sha256: validated.sha256, fingerprint, form: form!, fileName: file.name,
       analyze: (candidates) => analyzeEvidenceVersions(env, candidates, file.name, validated.mimeType, validated.bytes) });
     if (prepared.response) return prepared.response;
@@ -7834,7 +7847,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
         const replay = await db.prepare(
           `SELECT id,${evidenceCategorySelect},original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?`
         ).bind(existingOperation.id).first<CaseEvidenceRow>();
-        return replay ? json({ file: caseEvidenceProjection(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }) : json({ error: 'Google Drive upload metadata requires reconciliation', code: 'RECONCILIATION_REQUIRED' }, 409);
+        return replay ? json({ file: await projectFile(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }) : json({ error: 'Google Drive upload metadata requires reconciliation', code: 'RECONCILIATION_REQUIRED' }, 409);
       }
 
       const operationId = crypto.randomUUID();
@@ -7849,7 +7862,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
         const conflict = await db.prepare('SELECT id,status,request_fingerprint AS requestFingerprint FROM preview_google_case_operations WHERE organization_id=? AND case_id=? AND idempotency_key=?').bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<{ id: string; status: string; requestFingerprint: string }>();
         if (conflict?.requestFingerprint === fingerprint && conflict.status === 'SUCCEEDED') {
           const replay = await db.prepare(`SELECT id,${evidenceCategorySelect},original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?`).bind(conflict.id).first<CaseEvidenceRow>();
-          if (replay) return json({ file: caseEvidenceProjection(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
+          if (replay) return json({ file: await projectFile(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
         }
         return json({ error: '동일 파일 업로드가 진행 중이거나 확인 대기 중입니다.', code: 'UPLOAD_CONFLICT' }, 409);
       }
@@ -7881,7 +7894,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
         ]) as Array<{ meta?: { changes?: number } }>;
         if (results.slice(0, 3).some((result) => result.meta?.changes !== 1)) throw new GoogleDriveError('GOOGLE_METADATA_COMMIT_FAILED', 503, 'Google upload metadata did not commit atomically', true);
         versionPlan.committed = true;
-        return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, versionNumber: versionPlan.versionNumber, isLatest: true, changeSummary: versionPlan.summary, googleFileId: uploaded.fileId, googleFolderId: datedFolder.id }), replay: false, folderPath: `${CONCOST_DRIVE_ROOT_NAME}/${CLAIM_CENTER_DEPARTMENT_FOLDER_NAME}/${caseRow.caseNumber} ${caseRow.title}/${datedFolderName}`, folderNaming: 'PROJECT_ATTRIBUTED_DAILY', phase: 'CF85_DRIVE_FOLDER_RECOVERY' }, 201);
+        return json({ file: await projectFile({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, versionNumber: versionPlan.versionNumber, isLatest: true, changeSummary: versionPlan.summary, googleFileId: uploaded.fileId, googleFolderId: datedFolder.id }, new Map([[datedFolder.id, datedFolder.name]])), replay: false, folderPath: `${CONCOST_DRIVE_ROOT_NAME}/${CLAIM_CENTER_DEPARTMENT_FOLDER_NAME}/${root.name}/${datedFolder.name}`, folderNaming: 'PROJECT_ATTRIBUTED_DAILY', phase: 'CF85_DRIVE_FOLDER_RECOVERY' }, 201);
       } catch (reason) {
         const uncertain = versionPlan.externalWriteStarted || (reason instanceof GoogleDriveError && reason.uncertain);
         const failedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();
@@ -7893,7 +7906,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       `SELECT id,${evidenceCategorySelect},original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,request_fingerprint AS requestFingerprint ` +
       'FROM preview_case_evidence WHERE organization_id=? AND case_id=? AND idempotency_key=?'
     ).bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<CaseEvidenceRow>();
-    if (existing) return existing.requestFingerprint === fingerprint ? json({ file: caseEvidenceProjection(existing), replay: true, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    if (existing) return existing.requestFingerprint === fingerprint ? json({ file: await projectFile(existing), replay: true, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
     const chunks: Uint8Array[] = [];
     for (let offset = 0; offset < validated.bytes.length; offset += CASE_EVIDENCE_CHUNK_BYTES) chunks.push(validated.bytes.slice(offset, Math.min(validated.bytes.length, offset + CASE_EVIDENCE_CHUNK_BYTES)));
     if (!db.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
@@ -7912,7 +7925,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     ];
     await db.batch(statements);
     versionPlan.committed = true;
-    return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: chunks.length, storageProvider: 'D1_TEMPORARY', uploadedBy: user.displayName, uploadedAt, versionNumber: versionPlan.versionNumber, isLatest: true, changeSummary: versionPlan.summary }), replay: false, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }, 201);
+    return json({ file: await projectFile({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: chunks.length, storageProvider: 'D1_TEMPORARY', uploadedBy: user.displayName, uploadedAt, versionNumber: versionPlan.versionNumber, isLatest: true, changeSummary: versionPlan.summary }), replay: false, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }, 201);
   } catch (reason) {
     return reason instanceof GoogleDriveError ? json({ error: reason.message, code: reason.code }, reason.status) : json({ error: 'Evidence upload failed safely', code: 'EVIDENCE_UPLOAD_FAILED' }, 500);
   } finally {

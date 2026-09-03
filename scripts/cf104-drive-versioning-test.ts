@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import initSqlJs, { type Database } from 'sql.js';
 import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index.js';
-import { encryptSecret, GOOGLE_DRIVE_SCOPE } from '../apps/cloudflare/src/google-drive.js';
+import { encryptSecret, GOOGLE_DRIVE_SCOPE, readEvidenceFolderNames } from '../apps/cloudflare/src/google-drive.js';
 import { parseVersionAnalysis } from '../apps/cloudflare/src/evidence-versioning.js';
 import { extractEvidenceText } from '../apps/cloudflare/src/intake-source.js';
 import { createRequire } from 'node:module';
@@ -235,7 +235,7 @@ async function mockDrive(sql: Database, env: CloudflareEnv) {
   const master='ab'.repeat(32);const encrypted=await encryptSecret('synthetic-refresh-token',master,'concost:google-refresh');
   Object.assign(env,{GOOGLE_CLIENT_ID:'synthetic-client.apps.googleusercontent.com',GOOGLE_CLIENT_SECRET:'synthetic-client-secret',GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY:master,GOOGLE_OAUTH_REDIRECT_ORIGIN:'https://preview.example',GOOGLE_ALLOWED_DOMAIN:'example.invalid',ALLOW_TEST_GOOGLE_MODES:'true'});
   sql.run('INSERT INTO preview_google_credentials VALUES(?,?,?,?,?,?,?)',['concost',encrypted.ciphertextHex,encrypted.ivHex,GOOGLE_DRIVE_SCOPE,ADMIN_ID,'2026-09-03T00:00:00Z','2026-09-03T00:00:00Z']);
-  const state={uploads:0,renames:[] as string[],failRename:false,beforeUpload:null as null|(()=>Promise<void>),files:new Map<string,string>()};let ordinal=0;
+  const state={uploads:0,renames:[] as string[],failRename:false,failFolderLookup:false,folderReads:0,folders:new Map<string,any>(),beforeUpload:null as null|(()=>Promise<void>),files:new Map<string,string>()};let ordinal=0;
   env.GOOGLE_TEST_FETCH=async(input,init)=>{
     const url=new URL(String(input));const method=init?.method??'GET';
     if(url.hostname==='oauth2.googleapis.com')return Response.json({access_token:'synthetic-access-token',token_type:'Bearer',expires_in:3600,scope:GOOGLE_DRIVE_SCOPE});
@@ -250,14 +250,78 @@ async function mockDrive(sql: Database, env: CloudflareEnv) {
       const metadata=JSON.parse(String(init?.body));state.renames.push(metadata.name);
       return state.failRename?new Response('synthetic failure',{status:500}):Response.json({id:url.pathname.split('/').pop(),name:metadata.name});
     }
-    if(method==='GET')return Response.json({files:[]});
+    if(method==='GET'){
+      if(url.searchParams.get('pageSize')==='1000'){state.folderReads++;if(state.failFolderLookup)return new Response('Unavailable',{status:503});}
+      const query=url.searchParams.get('q')??'';
+      const properties=[...query.matchAll(/appProperties has \{ key='([^']+)' and value='([^']*)' \}/gu)];
+      const parent=query.match(/'([^']+)' in parents/u)?.[1];
+      return Response.json({files:[...state.folders.values()].filter(folder=>properties.every(([,key,value])=>folder.appProperties?.[key]===value)&&(!parent||folder.parents?.includes(parent)))});
+    }
     if(method==='POST'){
-      const metadata=JSON.parse(String(init?.body));return Response.json({id:`synthetic-folder-${++ordinal}`,name:metadata.name,mimeType:'application/vnd.google-apps.folder',trashed:false,parents:metadata.parents,appProperties:metadata.appProperties});
+      const metadata=JSON.parse(String(init?.body));const folder={id:`synthetic-folder-${++ordinal}`,name:metadata.name,mimeType:'application/vnd.google-apps.folder',trashed:false,parents:metadata.parents,appProperties:metadata.appProperties};state.folders.set(folder.id,folder);return Response.json(folder);
     }
     throw Error(`Unexpected mock request ${method} ${url.pathname}`);
   };
   return state;
 }
+
+test('CF105 folder names use Drive metadata, preserve attribution and never disclose Drive IDs',async()=>{
+  const {sql,env}=await setup();sql.exec(versionMigration);const state=await mockDrive(sql,env);
+  const key=crypto.randomUUID();const first=await upload(env,'minutes.txt','first',STAFF_TOKEN,'MEETING_MINUTES',key);
+  assert.equal(first.status,201);const created=await first.json() as any;
+  assert.match(created.file.folder.name,/^회의록\(/u);
+  assert.match(created.file.folder.key,/^[0-9a-f]{64}$/u);
+  const second=await upload(env,'site.txt','site document',STAFF_TOKEN,'SITE_DOCUMENT');assert.equal(second.status,201);
+  const folders=[...state.folders.values()].filter(folder=>['MEETING_MINUTES','SITE_DOCUMENT'].includes(folder.appProperties?.claimCenterFolderKind));
+  assert.equal(folders.length,2);
+  for(const folder of folders)folder.name='동일한 실제 폴더명 (변경됨)';
+  const before=JSON.stringify(sql.exec('SELECT * FROM preview_google_case_evidence'));
+  const files=await list(env);
+  assert.equal(files.length,2);assert.equal(new Set(files.map(file=>file.folder.key)).size,2);
+  assert.ok(files.every(file=>file.folder.name==='동일한 실제 폴더명 (변경됨)'));
+  assert.equal(files.find(file=>file.id===created.file.id).uploadedBy,created.file.uploadedBy);
+  assert.equal(files.find(file=>file.id===created.file.id).folder.key,created.file.folder.key);
+  const replay=await upload(env,'minutes.txt','first',STAFF_TOKEN,'MEETING_MINUTES',key);
+  assert.equal(replay.status,200);const replayed=await replay.json() as any;
+  assert.deepEqual(replayed.file.folder,files.find(file=>file.id===created.file.id).folder);
+  assert.doesNotMatch(JSON.stringify([created,files,replayed]),/synthetic-(?:folder|file)-|https:\/\/drive\.google\.com/u);
+  assert.equal(JSON.stringify(sql.exec('SELECT * FROM preview_google_case_evidence')),before);
+  const writes=state.uploads;state.failFolderLookup=true;
+  const fallback=await list(env);assert.equal(fallback.length,2);assert.ok(fallback.every(file=>file.folder.name===null));
+  assert.equal(await (await worker.fetch(request(created.file.downloadUrl,STAFF_TOKEN),env)).text(),'first');
+  assert.equal(state.uploads,writes);assert.equal(state.renames.length,0);
+  sql.run("UPDATE preview_users SET department_code='DEVELOPMENT',version=version+1 WHERE id=?",[STAFF_ID]);
+  sql.run('DELETE FROM preview_case_assignments WHERE case_id=? AND user_id=?',[CASE_ID,STAFF_ID]);
+  const reads=state.folderReads;
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,STAFF_TOKEN),env)).status,403);
+  assert.equal(state.folderReads,reads);sql.close();
+});
+
+test('CF105 folder lookup validates project ownership, pages empty responses and retains partial results',async()=>{
+  let calls=0;const id='synthetic-folder-allowed';const hidden='synthetic-folder-hidden';
+  const folder={id,name:'実際 <img src=x> 폴더',mimeType:'application/vnd.google-apps.folder',trashed:false,appProperties:{claimCenterCaseId:CASE_ID}};
+  const names=await readEvidenceFolderNames(async(input,init)=>{
+    assert.equal(init?.method??'GET','GET');assert.equal(new URL(String(input)).searchParams.get('pageSize'),'1000');calls++;
+    if(calls===1)return Response.json({files:[],nextPageToken:'page-2'});
+    if(calls===2)return Response.json({files:[folder,{...folder,id:hidden,appProperties:{claimCenterCaseId:ADMIN_ID}},{...folder,id:'synthetic-trashed',trashed:true},{...folder,id:'synthetic-file-type',mimeType:'text/plain'},{...folder,id:'synthetic-not-requested'}],nextPageToken:'page-3'});
+    return new Response('Unavailable',{status:503});
+  },async()=>'synthetic-token',CASE_ID,[id,hidden,'synthetic-trashed','synthetic-file-type']);
+  assert.equal(calls,3);assert.deepEqual([...names],[[id,folder.name]]);
+});
+
+test('CF105 metadata timeout covers token refresh and stalled JSON bodies', {timeout:18_000}, async()=>{
+  for(const phase of ['token','body']){
+    let signal:AbortSignal|null|undefined;
+    const started=Date.now();
+    const result=await readEvidenceFolderNames(async(_input,init)=>{
+      signal=init?.signal;
+      if(phase==='token')return new Promise<Response>((_resolve,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true}));
+      return new Response(new ReadableStream({start(controller){signal!.addEventListener('abort',()=>controller.error(signal!.reason),{once:true});}}));
+    },async(fetcher)=>{if(phase==='token')await fetcher('https://oauth2.googleapis.com/token',{method:'POST'});return 'synthetic-token';},CASE_ID,['synthetic-folder-stalled']);
+    assert.equal(result.size,0);assert.equal(signal?.aborted,true);
+    assert.ok(Date.now()-started<9_000,`${phase} exceeded metadata deadline`);
+  }
+});
 
 test('CF104 Drive replacement archives remotely, streams downloads and retains file ID on rename failure',async()=>{
   const {sql,env}=await setup();sql.exec(versionMigration);allowGemini(sql);const state=await mockDrive(sql,env);

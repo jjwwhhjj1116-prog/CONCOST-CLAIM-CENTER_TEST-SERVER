@@ -1,4 +1,21 @@
-.case-evidence-panel { display: grid; gap: 14px; }
+.case-evidence-panel { display: grid; gap: 14px; container-type: inline-size; }
+.case-evidence-folder { min-width: 0; border-top: 1px solid var(--border-strong); }
+.case-evidence-folder-heading { display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--surface-soft); color: var(--text-primary); }
+.case-evidence-folder-heading > svg { flex: 0 0 24px; width: 24px; height: 24px; margin-top: 4px; }
+.case-evidence-folder-heading > div { min-width: 0; display: grid; gap: 4px; }
+.case-evidence-folder-heading h4 { margin: 0; font-size: 1rem; line-height: 1.5; overflow-wrap: anywhere; }
+.case-evidence-folder-heading small, .case-evidence-folder-heading p { margin: 0; color: var(--text-secondary); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.case-evidence-list .case-evidence-folder li strong { white-space: normal; overflow-wrap: anywhere; font-size: .9rem; line-height: 1.5; }
+.case-evidence-list .case-evidence-folder li small { color: var(--text-secondary); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.case-evidence-folder li .case-evidence-uploader { font-weight: 700; }
+.case-evidence-folder-notice { margin: 0; padding: 12px 16px; color: var(--text-secondary); font-size: .85rem; line-height: 1.6; }
+.case-evidence-folder-notice button { border: 0; background: transparent; color: var(--text-primary); font: inherit; text-decoration: underline; cursor: pointer; padding: 8px; }
+.case-evidence-folder-notice button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+@container (max-width: 640px) {
+  .case-evidence-folder > ul > li, .case-evidence-folder > details > ul > li { grid-template-columns: 34px minmax(0, 1fr); }
+  .case-evidence-folder li > .evidence-version-badge, .case-evidence-folder .case-evidence-file-actions { grid-column: 2; width: fit-content; max-width: 100%; }
+  .case-evidence-folder .case-evidence-file-actions button { white-space: normal; }
+}
 .case-evidence-list .evidence-version-badge { font-size: .75rem; white-space: normal; }
 .case-evidence-list .evidence-version-badge.is-latest { color: #166534; border-color: #86c69b; background: #ecfdf3; }
 .case-evidence-list .evidence-version-badge.is-archive { color: #475569; border-color: #cbd5e1; background: #f1f5f9; }

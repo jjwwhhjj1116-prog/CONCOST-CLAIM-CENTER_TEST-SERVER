@@ -355,6 +355,49 @@ function driveQueryValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
 }
 
+// Read names of recorded upload folders only. Never create, move or rename on a library GET.
+export async function readEvidenceFolderNames(fetcher: GoogleFetch, getToken: (fetcher: GoogleFetch) => Promise<string>, caseId: string, folderIds: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  if (!/^[0-9a-f-]{36}$/iu.test(caseId)) return names;
+  const wanted = new Set(folderIds.filter((id) => GOOGLE_ID.test(id)));
+  if (!wanted.size) return names;
+  const deadline = Date.now() + 6_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6_000);
+  const boundedFetch: GoogleFetch = (input, init) => fetcher(input, { ...init, signal: controller.signal });
+  let pageToken = '';
+  try {
+  const token = await getToken(boundedFetch);
+  // ponytail: cap at 3 pages/6 seconds; unresolved names stay explicitly unknown. Add lazy paging if projects exceed 3,000 folders.
+  for (let page = 0; wanted.size && page < 3 && Date.now() < deadline; page++) {
+    const url = new URL(`${GOOGLE_DRIVE_API}/files`);
+    url.searchParams.set('q', `trashed = false and mimeType = 'application/vnd.google-apps.folder' and appProperties has { key='claimCenterCaseId' and value='${driveQueryValue(caseId)}' }`);
+    url.searchParams.set('spaces', 'drive');
+    url.searchParams.set('pageSize', '1000');
+    url.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,trashed,appProperties)');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    try {
+      const response = await boundedFetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) break;
+      const payload = await safeJson(response);
+      if (!Array.isArray(payload.files)) break;
+      for (const entry of payload.files) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        const item = entry as Record<string, unknown>;
+        const properties = item.appProperties as Record<string, unknown> | undefined;
+        if (typeof item.id !== 'string' || !wanted.has(item.id) || item.mimeType !== 'application/vnd.google-apps.folder' || item.trashed === true || properties?.claimCenterCaseId !== caseId || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 1000) continue;
+        names.set(item.id, item.name);
+        wanted.delete(item.id);
+      }
+      if (typeof payload.nextPageToken !== 'string' || !payload.nextPageToken || payload.nextPageToken === pageToken) break;
+      pageToken = payload.nextPageToken;
+    } catch { break; } // Name lookup failure must not hide existing files or block their proxy downloads.
+  }
+  } catch { /* Token refresh shares the metadata deadline; unavailable metadata is not a file-list failure. */ }
+  finally { clearTimeout(timeout); }
+  return names;
+}
+
 export const CONCOST_DRIVE_ROOT_NAME = 'CONCOST 자료실';
 export const CLAIM_CENTER_DEPARTMENT_FOLDER_NAME = '20_클레임센터';
 
