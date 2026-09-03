@@ -27,7 +27,7 @@ import { inferredTableColumnWeight, normalizeColumnWidths } from './structured-d
 import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
 import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
 import { DocumentReviewPages } from './DocumentPreviewPane';
-import { ScaledImage, ScaledTableResize } from './document-resize-scale';
+import { ScaledImage, ScaledTableResize, selectTableCells } from './document-resize-scale';
 
 export interface StructuredSelection {
   from: number;
@@ -224,7 +224,7 @@ export const DocumentTextStyle = Mark.create({
   }
 });
 
-const DocumentPresentationAttributes = Extension.create({
+export const DocumentPresentationAttributes = Extension.create({
   name: 'documentPresentationAttributes',
   addGlobalAttributes() {
     return [
@@ -285,6 +285,7 @@ const DocumentPresentationAttributes = Extension.create({
             default: null,
             parseHTML: (element) => {
               const raw = element.getAttribute('data-row-height-mm') ?? element.style.height.replace(/mm$/iu, '');
+              if (!raw.trim()) return null;
               const parsed = Number(raw);
               return Number.isFinite(parsed) ? clampMeasurement(parsed, 6, 100, 12) : null;
             },
@@ -300,7 +301,7 @@ const DocumentPresentationAttributes = Extension.create({
   }
 });
 
-class DocumentTableView extends TableView {
+export class DocumentTableView extends TableView {
   constructor(node: ProseMirrorNode, cellMinWidth: number, view: EditorView, HTMLAttributes?: Record<string, unknown>) {
     super(node, cellMinWidth, view, HTMLAttributes);
     this.applyPresentation(node);
@@ -325,11 +326,17 @@ class DocumentTableView extends TableView {
     this.table.style.tableLayout = 'fixed';
     const columns = [...this.table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
     if (columns.length) {
-      const storedWidths = columns.map((column) => Number.parseFloat(column.style.width || column.getAttribute('width') || '0'));
-      const total = storedWidths.reduce((sum, columnWidth) => sum + (Number.isFinite(columnWidth) && columnWidth > 0 ? columnWidth : 0), 0);
+      const storedWidths: number[] = [], weights: number[] = [];
+      node.firstChild?.forEach(cell => {
+        for (let index = 0; index < cell.attrs.colspan; index++) {
+          storedWidths.push(Number(cell.attrs.colwidth?.[index]) || 0);
+          weights.push(inferredTableColumnWeight(cell.textContent, cell.textContent.length));
+        }
+      });
+      const proportions = normalizeColumnWidths(storedWidths, 100, weights, Number(node.attrs.documentDefaultsVersion) < 2).widths;
       columns.forEach((column, index) => {
-        const proportional = total > 0 ? Math.max(0, storedWidths[index]) / total * 100 : 100 / columns.length;
-        column.style.width = `${Math.max(1, proportional).toFixed(4)}%`;
+        column.style.width = `${proportions[index].toFixed(4)}%`;
+        column.style.minWidth = '';
         column.removeAttribute('width');
       });
     }
@@ -343,7 +350,7 @@ const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
 const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
-const normalizeA4TableJson = (source: JSONContent): JSONContent => {
+export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
     const next: JSONContent = { ...node, ...(node.attrs ? { attrs: { ...node.attrs } } : {}), ...(node.content ? { content: node.content.map(visit) } : {}) };
     if (next.type !== 'table' || !next.content?.length) return next;
@@ -372,17 +379,18 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
       });
     });
     const inferredWeights = headers.map((header, index) => inferredTableColumnWeight(header, longestValues[index]));
-    const storedTotal = rawWidths.reduce((sum, width) => sum + Math.max(0, width), 0);
     const tableWidth = Math.min(100, Math.max(35, Number(next.attrs?.tableWidth) || 100));
     const availableWidth = Math.round(676 * tableWidth / 100);
-    const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth, inferredWeights);
-    const normalizedWidths = normalizedColumns.widths.map((width) => Math.max(20, Math.round(width)));
-    const requiresA4Migration = normalizedColumns.repaired || Number(next.attrs?.documentDefaultsVersion) < 2 || storedTotal > availableWidth * 1.05;
+    const requiresA4Migration = Number(next.attrs?.documentDefaultsVersion ?? 1) < 2;
+    const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth, inferredWeights, requiresA4Migration);
+    const normalizedWidths = normalizedColumns.widths.map((width) => Math.max(1, Math.round(width)));
     const rightColumns = new Set(firstCells.flatMap((cell, index) => rightAlignedTableHeader.test(jsonText(cell)) ? [index] : []));
+    const occupiedUntil: number[] = [];
     rows.forEach((row, rowIndex) => {
       if (requiresA4Migration) row.attrs = { ...row.attrs, rowHeightMm: null };
       let columnIndex = 0;
       row.content?.forEach((cell) => {
+        while ((occupiedUntil[columnIndex] ?? 0) > rowIndex) columnIndex++;
         const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
         const cellText = jsonText(cell);
         cell.attrs = {
@@ -393,6 +401,7 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
             horizontalAlignment: rowIndex > 0 && (rightColumns.has(columnIndex) || rightAlignedTableValue.test(cellText)) ? 'right' : 'center'
           } : {})
         };
+        for (let index = columnIndex; index < columnIndex + span; index++) occupiedUntil[index] = rowIndex + Math.max(1, Number(cell.attrs.rowspan) || 1);
         columnIndex += span;
       });
     });
@@ -413,13 +422,15 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
   if (!html.trim() || typeof DOMParser === 'undefined') return html;
   const parsed = new DOMParser().parseFromString(`<main>${html}</main>`, 'text/html');
   parsed.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+    table.dataset.documentDefaultsVersion ||= '2';
+    table.dataset.tableDensity ||= 'normal';
     const requestedWidth = Math.min(100, Math.max(35, Number(table.dataset.tableWidth) || Number.parseFloat(table.style.width) || 100));
     table.dataset.tableWidth = String(requestedWidth);
     table.style.width = `${requestedWidth}%`;
     table.style.tableLayout = 'fixed';
     let columns = [...table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
     if (!columns.length && table.rows[0]?.cells.length) {
-      const headerCells = [...table.rows[0].cells];
+      const headerCells = [...table.rows[0].cells].flatMap(cell => Array.from({ length: cell.colSpan || 1 }, () => cell));
       const longestValues = headerCells.map((_cell, columnIndex) => [...table.rows].slice(1).reduce((longest, row) => Math.max(longest, row.cells[columnIndex]?.textContent?.trim().length ?? 0), 0));
       const inferredWeights = headerCells.map((cell, index) => inferredTableColumnWeight(cell.textContent ?? '', longestValues[index]));
       const inferredWidths = normalizeColumnWidths(Array.from({ length: headerCells.length }, () => 0), 100, inferredWeights).widths;
@@ -434,12 +445,24 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
     }
     if (columns.length) {
       const widths = columns.map((column) => Number.parseFloat(column.style.width || column.getAttribute('width') || '0'));
-      const normalized = normalizeColumnWidths(widths, 100).widths;
+      const normalized = normalizeColumnWidths(widths, 100, [], Number(table.dataset.documentDefaultsVersion) < 2).widths;
       columns.forEach((column, index) => {
         column.style.width = `${Math.max(1, normalized[index]).toFixed(4)}%`;
         column.removeAttribute('width');
       });
     }
+    // PM reads colwidth attributes, not CSS percentages. Supply the same complete grid to every path.
+    const occupiedUntil: number[] = [];
+    const pixelWidths = columns.map(column => Math.max(1, Math.round(Number.parseFloat(column.style.width) * 676 * requestedWidth / 10000)));
+    [...table.rows].forEach((row, rowIndex) => {
+      let columnIndex = 0;
+      [...row.cells].forEach(cell => {
+        while ((occupiedUntil[columnIndex] ?? 0) > rowIndex) columnIndex++;
+        cell.setAttribute('colwidth', pixelWidths.slice(columnIndex, columnIndex + cell.colSpan).join(','));
+        for (let index = columnIndex; index < columnIndex + cell.colSpan; index++) occupiedUntil[index] = rowIndex + cell.rowSpan;
+        columnIndex += cell.colSpan;
+      });
+    });
     const headerCells = [...(table.rows[0]?.cells ?? [])];
     const rightColumns = new Set(headerCells.flatMap((cell, index) => rightAlignedTableHeader.test(cell.textContent ?? '') ? [index] : []));
     [...table.rows].forEach((row, rowIndex) => [...row.cells].forEach((cell, cellIndex) => {
@@ -456,7 +479,7 @@ export const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = withPageBreaks.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
-    ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -527,7 +550,7 @@ const createTurndown = () => {
   service.addRule('adjustableTable', {
     filter: 'table',
     replacement: (_content, node) => node instanceof HTMLTableElement
-      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style'] })}\n\n`
+      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style'] })}\n\n`
       : ''
   });
   return service;
@@ -551,7 +574,7 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: 
       DocumentPresentationAttributes
     ]);
     return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
-      ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+      ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -629,6 +652,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [cellVerticalAlignment, setCellVerticalAlignment] = useState<'top' | 'middle' | 'bottom'>('middle');
   const [columnWidthMm, setColumnWidthMm] = useState('35');
   const [rowHeightMm, setRowHeightMm] = useState('');
+  const [selectedCellCount, setSelectedCellCount] = useState(0);
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState('');
   const [inheritedFontSize, setInheritedFontSize] = useState('16');
@@ -660,6 +684,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   const syncContextualControls = (activeEditor: Editor) => {
     const selection = activeEditor.state.selection;
+    let cellCount = 0;
+    if (selection instanceof CellSelection) selection.forEachCell(() => { cellCount++; });
+    setSelectedCellCount(cellCount);
     setSpacingBlocked(selection instanceof CellSelection);
     const spacer = selection instanceof NodeSelection && selection.node.type.name === 'documentSpacer';
     const positions = selectedSpacingPositions(activeEditor);
@@ -710,7 +737,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       StarterKit.configure(collaborationSession ? { undoRedo: false, link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } } : { link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true, allowTableNodeSelection: true, View: DocumentTableView } }),
+      TableKit.configure({ table: { resizable: true, lastColumnResizable: false, allowTableNodeSelection: false, View: DocumentTableView } }),
       ScaledTableResize,
       ScaledImage.configure({
         allowBase64: false,
@@ -873,10 +900,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     if (runAction({ kind: 'cellAlign', alignment })) setCellVerticalAlignment(alignment);
   };
 
-  const applySelectedTableMeasurements = () => {
+  const applySelectedTableMeasurements = (mode: 'width' | 'height') => {
     const width = clampMeasurement(columnWidthMm, 10, 180, 35);
     const height = rowHeightMm.trim() ? clampMeasurement(rowHeightMm, 6, 100, 12) : null;
-    if (runAction({ kind: 'measurements', width, height })) {
+    if (runAction({ kind: 'measurements', width: mode === 'width' ? width : null, height: mode === 'height' ? height : undefined })) {
       setColumnWidthMm(String(width)); setRowHeightMm(height === null ? '' : String(height));
     }
   };
@@ -1109,14 +1136,15 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <ToolbarButton label="선택 이미지 삭제" onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
     </div>}
     {!readOnly && !preview && tableActive && <div className="structured-editor__object-controls is-table" role="group" aria-label="선택 표 크기와 간격">
-      <strong>현재 표</strong>
+      <strong>{selectedCellCount ? `${selectedCellCount}개 셀 선택` : '현재 표'}</strong>
+      <div>{(['table','row','column'] as const).map(scope=><ToolbarButton key={scope} label={scope==='table'?'표 전체 선택':scope==='row'?'현재 행 선택':'현재 열 선택'} onClick={()=>{if(editor)selectTableCells(editor.view,scope);}}>{scope==='table'?'표 전체':scope==='row'?'행 선택':'열 선택'}</ToolbarButton>)}</div>
       <label><span>표 너비</span><input aria-label="표 너비 비율" type="range" min="35" max="100" step="5" value={tableWidthPercent} onChange={(event) => applyTablePresentation({ tableWidth: Number(event.target.value) })} /><output>{tableWidthPercent}%</output></label>
       <div className="structured-editor__quick-sizes">{[50, 65, 80, 100].map((size) => <ToolbarButton key={size} label={`표 너비 ${size}%`} active={tableWidthPercent === size} onClick={() => applyTablePresentation({ tableWidth: size })}>{size}%</ToolbarButton>)}</div>
       <div><span>정렬</span>{(['left', 'center', 'right'] as const).map((alignment) => <ToolbarButton key={alignment} label={`표 ${alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'} 정렬`} active={tableAlignment === alignment} onClick={() => applyTablePresentation({ tableAlignment: alignment })}>{alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'}</ToolbarButton>)}</div>
       <div><span>셀 상하</span>{(['top', 'middle', 'bottom'] as const).map((alignment) => <ToolbarButton key={alignment} label={`선택 셀 ${alignment === 'top' ? '위' : alignment === 'middle' ? '가운데' : '아래'} 정렬`} active={cellVerticalAlignment === alignment} onClick={() => applyCellVerticalAlignment(alignment)}>{alignment === 'top' ? '위' : alignment === 'middle' ? '가운데' : '아래'}</ToolbarButton>)}</div>
       <div><span>셀 간격</span>{(['compact', 'normal', 'comfortable'] as const).map((density) => <ToolbarButton key={density} label={`표 ${density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}`} active={tableDensity === density} onClick={() => applyTablePresentation({ tableDensity: density })}>{density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}</ToolbarButton>)}</div>
-      <div className="structured-editor__table-measurements"><label><span>선택 열 너비</span><input aria-label="선택 열 너비 밀리미터" type="number" min="10" max="180" step="1" value={columnWidthMm} onChange={(event) => setColumnWidthMm(event.target.value)}/><output>mm</output></label><label><span>선택 행 높이</span><input aria-label="선택 행 높이 밀리미터" type="number" min="6" max="100" step="1" value={rowHeightMm} placeholder="자동" onChange={(event) => setRowHeightMm(event.target.value)}/><output>{rowHeightMm ? 'mm' : '자동'}</output></label><ToolbarButton label="선택 행 높이를 내용에 맞게 자동 조정" onClick={()=>setRowHeightMm('')}>행높이 자동</ToolbarButton><ToolbarButton label="선택한 표 셀의 열 너비와 행 높이 적용" onClick={applySelectedTableMeasurements}>치수 적용</ToolbarButton></div>
-      <small>셀을 선택한 뒤 상하 정렬과 열·행 치수를 적용할 수 있습니다. 열 경계선 드래그도 그대로 지원합니다.</small>
+      <div className="structured-editor__table-measurements"><label><span>선택 열 너비</span><input aria-label="선택 열 너비 밀리미터" type="number" min="10" max="180" step="1" value={columnWidthMm} onChange={(event) => setColumnWidthMm(event.target.value)}/><output>mm</output></label><ToolbarButton label="선택 열 너비 적용" onClick={()=>applySelectedTableMeasurements('width')}>너비 적용</ToolbarButton><label><span>선택 행 높이</span><input aria-label="선택 행 높이 밀리미터" type="number" min="6" max="100" step="1" value={rowHeightMm} placeholder="자동" onChange={(event) => setRowHeightMm(event.target.value)}/><output>{rowHeightMm ? 'mm' : '자동'}</output></label><ToolbarButton label="선택 행 높이 적용" onClick={()=>applySelectedTableMeasurements('height')}>높이 적용</ToolbarButton><ToolbarButton label="선택 행 높이를 내용에 맞게 자동 조정" onClick={()=>runAction({kind:'measurements',width:null,height:null})}>행높이 자동</ToolbarButton></div>
+      <small>셀 선택 후 글자·정렬·치수 적용 · 열/행 경계 드래그 · Ctrl+Z 취소. 행은 내용이 잘리지 않는 높이까지 줄어듭니다.</small>
       <ToolbarButton label="표 삭제" onClick={() => runAction({ kind: 'command', command: 'deleteTable' })}>표 삭제</ToolbarButton>
     </div>}
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}

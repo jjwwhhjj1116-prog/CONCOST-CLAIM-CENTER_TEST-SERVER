@@ -8,10 +8,10 @@ export const inferredTableColumnWeight = (header: string, longestValueLength: nu
   return Math.min(1.8, Math.max(0.8, 0.55 + Math.sqrt(Math.min(100, longestValueLength)) / 3));
 };
 
-export const normalizeColumnWidths = (widths: number[], targetTotal: number, inferredWeights: number[] = []): { widths: number[]; repaired: boolean } => {
+export const normalizeColumnWidths = (widths: number[], targetTotal: number, inferredWeights: number[] = [], repairLegacyCollapse = true): { widths: number[]; repaired: boolean } => {
   const positiveTotal = widths.reduce((sum, width) => sum + (Number.isFinite(width) && width > 0 ? width : 0), 0);
   const average = positiveTotal > 0 ? positiveTotal / Math.max(1, widths.length) : 0;
-  const missing = widths.map((width) => !Number.isFinite(width) || width <= 0 || (average > 0 && width < average * 0.15));
+  const missing = widths.map((width) => !Number.isFinite(width) || width <= 0 || (repairLegacyCollapse && average > 0 && width < average * 0.15));
   const missingCount = missing.filter(Boolean).length;
   if (missingCount === widths.length && inferredWeights.length === widths.length) {
     const weightTotal = inferredWeights.reduce((sum, weight) => sum + Math.max(0.1, weight), 0);

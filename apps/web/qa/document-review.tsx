@@ -9,6 +9,9 @@ import '../src/theme-system.css';
 import '../src/documents/StructuredDocumentEditor.css';
 import '../src/routes/PreviewReportStudio.css';
 import { editingContracts } from './document-editing-contracts';
+import { tableEditingContracts } from './table-editing-contracts';
+import { PROPOSAL_COMPANY_MODULE_CONTENT } from '../../cloudflare/src/proposal-company-content';
+import expertProfile from '../../cloudflare/src/proposal-template-assets/CH04_EXPERT_PROFILE.jpg';
 
 const p = (text:string):JSONContent => ({type:'paragraph',content:[{type:'text',text}]});
 const sample:JSONContent={type:'doc',content:[{type:'heading',attrs:{level:2},content:[{type:'text',text:'편집·출력 간격 검증'}]},p('이 문단 다음의 빈 줄을 클릭하여 간격을 바꾸세요.'),{type:'documentSpacer',attrs:{heightPx:24}},p('이 문장은 빈 줄 다음에 오는 본문입니다.'),{type:'paragraph'},{type:'paragraph'},{type:'paragraph'},p('연속 빈 문단은 자동 쪽 나누기가 아닙니다.'),{type:'table',attrs:{tableWidth:100},content:[{type:'tableRow',content:['업무','금액'].map(text=>({type:'tableHeader',attrs:{colwidth:[330]},content:[p(text)]}))},{type:'tableRow',content:['검토','1,000'].map(text=>({type:'tableCell',attrs:{colwidth:[330]},content:[p(text)]}))}]}]};
@@ -63,15 +66,17 @@ function contracts():string[]{
    assert(parse(html).querySelector('span')?.style.color==='rgb(255, 0, 0)','색상 유실');
   }
  });
- return [...results, ...editingContracts()];
+ return [...results, ...editingContracts(), ...tableEditingContracts()];
 }
 function Fixture(){
+ const [chapterNumber,setChapterNumber]=useState(1);
  const [manualChapters,setManualChapters]=useState(()=>[1,2,3].map(number=>({number,title:`직접 작성 ${number}장`,kind:'VARIABLE' as const,body:markdown(sample),editorJson:sample as JSONContent|null})));
  const [showOutput,setShowOutput]=useState(false);const [mode,setMode]=useState('proposal');const [json,setJson]=useState<JSONContent|null>(sample);const [body,setBody]=useState(()=>markdown(sample));const [epoch,setEpoch]=useState(0);const [results,setResults]=useState<string[]>([]);const [width,setWidth]=useState('100%');
- const chapter={number:1,title:'간격 검수',kind:'VARIABLE' as const,body,editorJson:json};
+ const chapter={number:chapterNumber,title:chapterNumber===4?'전문가 현황':chapterNumber===9?'건설 클레임·소송·기술감정 실적':'간격 검수',kind:chapterNumber>=4?'FIXED' as const:'VARIABLE' as const,body,editorJson:json};
  return <main style={{padding:16,maxWidth:width,margin:'auto',background:'#f1f5f9',color:'#17253a'}}>
   <header style={{display:'flex',gap:12,flexWrap:'wrap',padding:12}}><strong>CF96 로컬 회귀 · 업무 데이터와 연결 없음</strong><button onClick={()=>setResults(contracts())}>왕복 검증 실행</button><button onClick={()=>setMode('proposal')}>제안서</button><button onClick={()=>setMode('report')}>보고서</button><button onClick={()=>{setJson(null);setEpoch(x=>x+1);}}>Markdown으로 다시 열기</button><button onClick={()=>{setJson(sample);setBody(markdown(sample));setEpoch(x=>x+1);}}>샘플 초기화</button><select aria-label="검증 화면 폭" value={width} onChange={e=>setWidth(e.target.value)}>{['100%','1920px','1440px','1280px','800px','390px'].map(v=><option key={v}>{v}</option>)}</select></header>
   <div><button onClick={()=>setShowOutput(current=>!current)}>4단계 렌더 비교</button><button onClick={()=>{setJson({type:'doc',content:[p('크기 조절 검증'),{type:'image',attrs:{src:'/qa/resize.svg',alt:'Resize QA',width:360,height:180}},...sample.content!]});setEpoch(x=>x+1);}}>이미지 크기 샘플</button></div>
+  <div>{[4,9].map(number=><button key={number} onClick={()=>{setChapterNumber(number);setMode('proposal');setJson(null);setBody(number===4?PROPOSAL_COMPANY_MODULE_CONTENT.CH04_EXPERTS.replace('\n\n',`\n\n![전문가 프로필](${expertProfile})\n\n`):PROPOSAL_COMPANY_MODULE_CONTENT.CH09_CLAIM);setEpoch(x=>x+1);}}>{number}장 실제 공통 양식</button>)}</div>
   <output style={{whiteSpace:'pre-wrap',display:'block'}} aria-label="회귀 결과">{results.join('\n')}</output>
   <div><button onClick={()=>setMode('manual')}>2단계 직접 작성</button><button disabled={!manualChapters.every(proposalChapterHasContent)} onClick={()=>{setBody(manualChapters[0].body);setJson(manualChapters[0].editorJson);setMode('proposal');setEpoch(x=>x+1);}}>직접 초안 3단계로 확인</button><button onClick={()=>void navigator.clipboard.writeText('## 붙여넣기 제목\n\n**굵은 문장**\n\n| 업무 | 금액 |\n| --- | --- |\n| 검토 | 1000 |')}>Markdown 예시 복사</button></div>
   {mode==='manual'?<ProposalManualDraft chapters={manualChapters} documentKey="qa-manual" readOnly={false} onChange={(number,body,editorJson)=>setManualChapters(current=>current.map(chapter=>chapter.number===number?{...chapter,body,editorJson}:chapter))}/>:<>

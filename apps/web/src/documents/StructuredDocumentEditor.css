@@ -21,6 +21,10 @@
 .structured-editor.is-a4-portrait .tiptap li,.structured-editor.is-a4-portrait .structured-editor__canvas .structured-editor__preview li{margin-bottom:9px}
 
 /* HWP-style table defaults: readable 12px type, automatic row height and stable proportions. */
+.structured-editor .tiptap th,.structured-editor .tiptap td{position:relative}
+.structured-editor .tiptap.row-resize-cursor{cursor:row-resize}
+.structured-editor .tiptap :is(th,td) p,.structured-editor.is-a4-portrait .tiptap :is(th,td) p,.structured-editor.is-a4-portrait .structured-editor__canvas .structured-editor__preview :is(th,td) p,.structured-editor__preview :is(th,td) p,.proposal-final-chapter .proposal-rich-content :is(th,td) p{min-height:0;margin:0;line-height:inherit}
+.structured-editor .tiptap:has(img[src*="CH04_EXPERT_PROFILE"]) table[data-table-density="normal"] :is(th,td),.structured-editor__preview:has(img[src*="CH04_EXPERT_PROFILE"]) table[data-table-density="normal"] :is(th,td),.proposal-final-chapter .proposal-rich-content:has(img[src*="CH04_EXPERT_PROFILE"]) table[data-table-density="normal"] :is(th,td){padding:4px 6px}
 .structured-editor .tiptap table,.structured-editor__preview table{table-layout:fixed;max-width:100%}
 .structured-editor .tiptap th,.structured-editor .tiptap td,.structured-editor__preview th,.structured-editor__preview td{box-sizing:border-box;height:auto;min-width:0;overflow-wrap:anywhere;word-break:normal;font-size:12px;line-height:1.55;text-align:center;vertical-align:middle}
 .structured-editor.is-a4-portrait .tiptap .tableWrapper{box-sizing:border-box;width:100%;max-width:100%;overflow:visible}

@@ -5,6 +5,7 @@ import { CellSelection, selectedRect } from '@tiptap/pm/tables';
 import type { Node as DocumentNode } from '@tiptap/pm/model';
 import { closeHistory } from '@tiptap/pm/history';
 import { normalizeSpacerHeight } from './document-spacing';
+import { writeTableColumnWidths } from './document-resize-scale';
 
 const spacingKey = new PluginKey<number[] | null>('document-spacing-selection');
 const isBlank = (node: DocumentNode | null) => node?.type.name === 'documentSpacer'
@@ -87,7 +88,7 @@ export type RepeatableDocumentAction =
   | { kind: 'table'; rows: number; columns: number }
   | { kind: 'attributes'; target: 'image' | 'table'; attrs: Record<string, unknown> }
   | { kind: 'cellAlign'; alignment: 'top' | 'middle' | 'bottom' }
-  | { kind: 'measurements'; width: number; height: number | null }
+  | { kind: 'measurements'; width: number | null; height?: number | null }
   | { kind: 'command'; command: 'addRowAfter' | 'addColumnAfter' | 'deleteRow' | 'deleteColumn' | 'mergeCells' | 'splitCell' | 'deleteTable' | 'setHorizontalRule' }
   | { kind: 'pageBreak' | 'clearFormat' };
 
@@ -116,14 +117,29 @@ export function applyDocumentAction(editor: Editor, action: RepeatableDocumentAc
       if (!editor.isActive('table')) return false;
       const rect = selectedRect(editor.state);
       const tr = editor.state.tr;
-      for (const relative of rect.map.cellsInRect({ left: rect.left, right: rect.right, top: action.kind === 'measurements' ? 0 : rect.top, bottom: action.kind === 'measurements' ? rect.map.height : rect.bottom })) {
+      for (const relative of action.kind === 'cellAlign' ? rect.map.cellsInRect(rect) : []) {
         const pos = rect.tableStart + relative;
         const node = tr.doc.nodeAt(pos);
         if (!node) continue;
-        const attrs = action.kind === 'cellAlign' ? { verticalAlignment: action.alignment } : { colwidth: Array.from({ length: Math.max(1, Number(node.attrs.colspan) || 1) }, () => Math.round(action.width * 96 / 25.4)) };
+        const attrs = action.kind === 'cellAlign' ? { verticalAlignment: action.alignment } : {};
         tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs });
       }
-      if (action.kind === 'measurements') {
+      if (action.kind === 'measurements' && action.width !== null) {
+        const wrapper = editor.view.nodeDOM(rect.tableStart - 1) as HTMLElement | null;
+        const table = wrapper?.matches('table') ? wrapper : wrapper?.querySelector('table');
+        if (!table) return false;
+        const scale = table.getBoundingClientRect().width / table.offsetWidth;
+        const widths = [...table.querySelectorAll(':scope > colgroup > col')].map(col => col.getBoundingClientRect().width / scale);
+        if (widths.length !== rect.map.width) return false;
+        const total = widths.reduce((sum, value) => sum + value, 0), count = rect.right - rect.left;
+        const rest = widths.length - count;
+        const minimum = Math.min(24, total / widths.length);
+        const desired = rest ? Math.max(minimum, Math.min(action.width * 96 / 25.4, (total - rest * minimum) / count)) : total / count;
+        const otherWeight = widths.reduce((sum, width, index) => sum + (index < rect.left || index >= rect.right ? Math.max(0, width - minimum) : 0), 0);
+        const free = Math.max(0, total - desired * count - minimum * rest);
+        writeTableColumnWidths(tr, rect.tableStart, rect.table, widths.map((width, index) => index >= rect.left && index < rect.right ? desired : minimum + free * (otherWeight ? Math.max(0, width - minimum) / otherWeight : 1 / rest)));
+      }
+      if (action.kind === 'measurements' && action.height !== undefined) {
         let pos = rect.tableStart;
         rect.table.forEach((row, _offset, index) => {
           if (index >= rect.top && index < rect.bottom) tr.setNodeMarkup(pos, undefined, { ...row.attrs, rowHeightMm: action.height });

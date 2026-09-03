@@ -18,7 +18,7 @@ test('CF93 normalizes resized table columns and applies readable automatic table
   const editorCss = read('apps/web/src/documents/StructuredDocumentEditor.css');
   const theme = read('apps/web/src/theme-system.css');
   assert.match(editor, /normalizeStructuredDocumentHtml/u);
-  assert.match(editor, /proportional.*100/u);
+  assert.match(editor, /normalizeColumnWidths\(storedWidths, 100/u);
   assert.match(editor, /data-cell-horizontal-align/u);
   assert.match(editor, /행높이 자동/u);
   assert.match(editorCss, /font-size:12px/u);
