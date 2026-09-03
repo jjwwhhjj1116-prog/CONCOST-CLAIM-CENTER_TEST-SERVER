@@ -12,7 +12,7 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
-import { selectedRect } from '@tiptap/pm/tables';
+import { CellSelection, selectedRect } from '@tiptap/pm/tables';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
@@ -24,6 +24,7 @@ import { gfm } from 'turndown-plugin-gfm';
 import * as Y from 'yjs';
 import { structuredDocumentContentSignature } from './structured-document-sync';
 import { inferredTableColumnWeight, normalizeColumnWidths } from './structured-document-layout';
+import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
 
 export interface StructuredSelection {
   from: number;
@@ -119,6 +120,18 @@ const DocumentPageBreak = Node.create({
       role: 'separator',
       'aria-label': 'A4 쪽 나누기'
     }];
+  }
+});
+
+const DocumentSpacer = Node.create({
+  name: 'documentSpacer', group: 'block', atom: true, selectable: true,
+  addAttributes() { return { heightPx: { default: 16, parseHTML: element => normalizeSpacerHeight(element.getAttribute('data-document-spacer')) } }; },
+  parseHTML() { return [{ tag: 'div[data-document-spacer]' }]; },
+  renderHTML({ node }) {
+    const height = normalizeSpacerHeight(node.attrs.heightPx);
+    return ['div', { 'data-document-spacer': String(height), class: 'structured-editor__spacer',
+      style: `height:${height}px;min-height:${height}px;margin:0;padding:0;line-height:0`,
+      contenteditable: 'false', role: 'separator', 'aria-label': `빈 줄 ${height}px` }];
   }
 });
 
@@ -313,7 +326,6 @@ class DocumentTableView extends TableView {
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANUAL-WHOLE-DOCUMENT:(?:START|END)))\s*-->/gu;
-const pageBreakPattern = /<!--\s*DOCUMENT-PAGE-BREAK\s*-->/gu;
 
 const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
@@ -375,27 +387,8 @@ const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     next.attrs = { ...next.attrs, documentDefaultsVersion: 2 };
     return next;
   };
-  const normalized = visit(source);
-  if (normalized.type !== 'doc' || !normalized.content?.length) return normalized;
-  const content: JSONContent[] = [];
-  for (let index = 0; index < normalized.content.length;) {
-    const node = normalized.content[index];
-    const emptyParagraph = node.type === 'paragraph' && !jsonText(node).trim() && !node.content?.some((child) => child.type && child.type !== 'hardBreak');
-    if (!emptyParagraph) { content.push(node); index += 1; continue; }
-    let end = index + 1;
-    while (end < normalized.content.length) {
-      const candidate = normalized.content[end];
-      if (candidate.type !== 'paragraph' || jsonText(candidate).trim() || candidate.content?.some((child) => child.type && child.type !== 'hardBreak')) break;
-      end += 1;
-    }
-    const runLength = end - index;
-    const hasContentBefore = content.some((candidate) => candidate.type !== 'documentPageBreak');
-    const hasContentAfter = end < normalized.content.length;
-    if (runLength >= 3 && hasContentBefore && hasContentAfter) content.push({ type: 'documentPageBreak' });
-    else content.push(...normalized.content.slice(index, end));
-    index = end;
-  }
-  return { ...normalized, content };
+  // Blank paragraphs are spacing, never an implicit command to create a page.
+  return visit(source);
 };
 
 /**
@@ -446,12 +439,12 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
   return parsed.querySelector('main')?.innerHTML ?? html;
 };
 
-const markdownToEditorHtml = (markdown: string): string => {
-  const withPageBreaks = markdown.replace(pageBreakPattern, '\n<div data-document-page-break="true"></div>\n');
+export const markdownToEditorHtml = (markdown: string): string => {
+  const withPageBreaks = expandDocumentSpacingMarkers(markdown);
   const withMarkers = withPageBreaks.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
-    ADD_ATTR: ['data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -459,6 +452,13 @@ const escapeHtmlAttribute = (value: string): string => value.replace(/&/gu, '&am
 
 const createTurndown = () => {
   const service = new TurndownService({
+    blankReplacement: (_content, node) => {
+      if (node instanceof HTMLElement && node.hasAttribute('data-document-spacer')) return `\n\n${spacerMarker(node.getAttribute('data-document-spacer'))}\n\n`;
+      if (node instanceof HTMLElement && node.hasAttribute('data-document-page-break')) return '\n\n<!-- DOCUMENT-PAGE-BREAK -->\n\n';
+      if (node instanceof HTMLElement && node.hasAttribute('data-ai-chapter-marker')) return `\n\n<!-- ${node.getAttribute('data-ai-chapter-marker')} -->\n\n`;
+      if (node instanceof HTMLElement && node.tagName === 'P') return '\n\n<p><br></p>\n\n';
+      return (node as HTMLElement & { isBlock?: boolean }).isBlock ? '\n\n' : '';
+    },
     bulletListMarker: '-',
     codeBlockStyle: 'fenced',
     emDelimiter: '*',
@@ -466,6 +466,10 @@ const createTurndown = () => {
     strongDelimiter: '**'
   });
   service.use(gfm);
+  service.addRule('emptyParagraph', {
+    filter: node => node instanceof HTMLElement && node.tagName === 'P' && !(node.textContent ?? '').trim() && !node.querySelector('img,table,iframe,video,audio'),
+    replacement: () => '\n\n<p><br></p>\n\n'
+  });
   service.addRule('aiChapterMarker', {
     filter: (node) => node instanceof HTMLElement && node.hasAttribute('data-ai-chapter-marker'),
     replacement: (_content, node) => {
@@ -476,6 +480,10 @@ const createTurndown = () => {
   service.addRule('documentPageBreak', {
     filter: (node) => node instanceof HTMLElement && node.hasAttribute('data-document-page-break'),
     replacement: () => '\n\n<!-- DOCUMENT-PAGE-BREAK -->\n\n'
+  });
+  service.addRule('documentSpacer', {
+    filter: node => node instanceof HTMLElement && node.hasAttribute('data-document-spacer'),
+    replacement: (_content, node) => `\n\n${spacerMarker((node as HTMLElement).getAttribute('data-document-spacer'))}\n\n`
   });
   service.addRule('documentTextStyle', {
     filter: (node) => node instanceof HTMLElement && node.tagName === 'SPAN' && Boolean(normalizeFontFamily(node.style.fontFamily) || normalizeFontSize(node.style.fontSize) || normalizeTextColor(node.style.color)),
@@ -513,7 +521,7 @@ const createTurndown = () => {
   return service;
 };
 
-const editorHtmlToMarkdown = (html: string): string => createTurndown().turndown(html).replace(/\n{3,}/gu, '\n\n').trim();
+export const editorHtmlToMarkdown = (html: string): string => createTurndown().turndown(html).replace(/\n{3,}/gu, '\n\n').trim();
 
 /** Render the same structured document used by the editor for final previews. */
 export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: { pageMode?: 'standard' | 'a4-portrait' }): string => {
@@ -526,11 +534,12 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: 
       Image.configure({ allowBase64: false, inline: false }),
       AiChapterMarker,
       DocumentPageBreak,
+      DocumentSpacer,
       DocumentTextStyle,
       DocumentPresentationAttributes
     ]);
     return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
-      ADD_ATTR: ['data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+      ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -608,6 +617,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [fontSize, setFontSize] = useState('');
   const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
   const [copyStatus, setCopyStatus] = useState('');
+  const [blankLineHeight, setBlankLineHeight] = useState('16');
+  const [spacingSelected, setSpacingSelected] = useState(false);
+  const [spacingBlocked, setSpacingBlocked] = useState(false);
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [tableRows, setTableRows] = useState(3);
   const [tableColumns, setTableColumns] = useState(3);
@@ -626,6 +638,12 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   const syncContextualControls = (activeEditor: Editor) => {
     const selection = activeEditor.state.selection;
+    setSpacingBlocked(selection instanceof CellSelection);
+    const spacer = selection instanceof NodeSelection && selection.node.type.name === 'documentSpacer';
+    const emptyParagraph = selection.empty && selection.$from.parent.type.name === 'paragraph' && selection.$from.parent.textContent.trim() === '';
+    const pageBreak = selection instanceof NodeSelection && selection.node.type.name === 'documentPageBreak';
+    setSpacingSelected(spacer || emptyParagraph || pageBreak);
+    if (spacer && !(document.activeElement instanceof HTMLElement && document.activeElement.closest('.structured-editor__spacing-controls'))) setBlankLineHeight(String(normalizeSpacerHeight(selection.node.attrs.heightPx)));
     const selectedImage = selection instanceof NodeSelection && selection.node.type.name === 'image';
     setImageSelected(selectedImage);
     if (selectedImage && selection instanceof NodeSelection) {
@@ -683,6 +701,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       CharacterCount,
       AiChapterMarker,
       DocumentPageBreak,
+      DocumentSpacer,
       DocumentTextStyle,
       DocumentPresentationAttributes,
       ...(collaborationSession ? [
@@ -768,8 +787,24 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   const insertBlankLine = () => {
     if (!editor) return;
-    const position = editor.state.selection.to;
-    editor.chain().focus().setTextSelection(position).splitBlock().splitBlock().run();
+    const selection = editor.state.selection;
+    // Multi-cell ranges are table operations, not a valid single block insertion point.
+    if (selection instanceof CellSelection) return;
+    const spacer = editor.schema.nodes.documentSpacer.create({ heightPx: normalizeSpacerHeight(blankLineHeight) });
+    const empty = selection.empty && selection.$from.parent.type.name === 'paragraph' && selection.$from.parent.textContent.trim() === '';
+    const position = empty ? selection.$from.before() : selection instanceof NodeSelection ? selection.to : selection.$to.depth > 0 ? selection.$to.after() : selection.to;
+    const tr = empty ? editor.state.tr.replaceWith(position, selection.$from.after(), spacer) : editor.state.tr.insert(position, spacer);
+    tr.setSelection(NodeSelection.create(tr.doc, position));
+    editor.view.dispatch(tr.scrollIntoView()); editor.view.focus();
+  };
+
+  const applyBlankLineHeight = () => {
+    if (!editor || !spacingSelected) return;
+    const selection = editor.state.selection;
+    if (selection instanceof NodeSelection && ['documentSpacer', 'documentPageBreak'].includes(selection.node.type.name)) {
+      const tr = editor.state.tr.replaceWith(selection.from, selection.to, editor.schema.nodes.documentSpacer.create({ heightPx: normalizeSpacerHeight(blankLineHeight) }));
+      tr.setSelection(NodeSelection.create(tr.doc, selection.from)); editor.view.dispatch(tr); editor.view.focus();
+    } else insertBlankLine();
   };
 
   const applyImageWidth = (percentage: number) => {
@@ -1032,9 +1067,15 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="선택 이미지 삭제" disabled={!imageSelected} onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
         <ToolbarButton label="현재 위치에서 다음 A4 쪽 시작" onClick={() => editor?.chain().focus().insertContent({ type: 'documentPageBreak' }).run()}>쪽 나누기</ToolbarButton>
         <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>구분선</ToolbarButton>
-        <ToolbarButton label="현재 위치에 빈 줄 삽입" onClick={insertBlankLine}>빈 줄</ToolbarButton>
         <ToolbarButton label="서식 지우기" onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}>서식 지우기</ToolbarButton>
       </div>
+    </div>}
+    {!readOnly && !preview && <div className="structured-editor__spacing-controls" role="group" aria-label="빈 줄 간격 편집">
+      <label>빈 줄 간격 <input aria-label="빈 줄 간격 픽셀" type="number" min="1" max="240" step="1" value={blankLineHeight} onChange={event => setBlankLineHeight(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); applyBlankLineHeight(); } }}/><span>px</span></label>
+      <ToolbarButton label="현재 위치에 빈 줄 삽입" onClick={insertBlankLine} disabled={!blankLineHeight || spacingBlocked}>빈 줄 삽입</ToolbarButton>
+      <ToolbarButton label="선택한 빈 줄 간격 적용" onClick={applyBlankLineHeight} disabled={!spacingSelected || !blankLineHeight}>선택 간격 적용</ToolbarButton>
+      <ToolbarButton label="선택한 빈 줄 또는 쪽 나누기 삭제" disabled={!spacingSelected} onClick={() => { if (!editor) return; if (editor.state.selection instanceof NodeSelection) editor.chain().focus().deleteSelection().run(); else editor.chain().focus().selectParentNode().deleteSelection().run(); }}>간격 삭제</ToolbarButton>
+      <small>{spacingBlocked?'여러 셀 선택을 해제하고 빈 줄을 넣을 위치에 커서를 놓으세요.':'빈 줄 클릭 → 간격 적용. 쪽 나누기를 선택해 적용하면 빈 줄로 바뀝니다.'}</small>
     </div>}
     {!readOnly && !preview && imageSelected && <div className="structured-editor__object-controls is-image" role="group" aria-label="선택 이미지 크기와 정렬">
       <strong>선택 이미지</strong>
@@ -1093,7 +1134,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <EditorContent editor={editor} />
       </>}
     </div>
-    <footer>{pageMode==='a4-portrait'&&<span className="structured-editor__a4-guide">청록색 ‘쪽 나누기’가 4단계에서도 같은 위치에 적용됩니다 · 아래 실시간 A4 페이지로 확인</span>}{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
+    <footer>{pageMode==='a4-portrait'&&<span className="structured-editor__a4-guide">연속 편집 영역 · 머리글 포함 실제 페이지는 출력 미리보기에서 확인</span>}{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
     </section>
   </>;
 });

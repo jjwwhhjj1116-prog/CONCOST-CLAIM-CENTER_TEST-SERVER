@@ -33,3 +33,13 @@
 .structured-editor__selection-menu button.is-active{background:#d9eaff;color:#075fc8}
 .structured-editor__selection-format,.structured-editor__selection-color{display:grid;gap:2px;color:#dce9f8;font-size:10px;font-weight:850}.structured-editor__selection-format select{box-sizing:border-box;width:126px;height:34px;border:0;border-radius:7px;background:#fff;color:#183250;font-family:inherit;font-size:12px;font-weight:750;line-height:1.2;padding:4px 24px 4px 7px}.structured-editor__selection-format.is-size select{width:74px}.structured-editor__selection-color input{box-sizing:border-box;width:40px;height:34px;border:2px solid #fff;border-radius:7px;background:#fff;padding:2px;cursor:pointer}.structured-editor__selection-format:focus-within select,.structured-editor__selection-color:focus-within input{outline:3px solid #73b2ff;outline-offset:2px}
 @media(max-width:860px){.structured-editor.is-a4-portrait .tiptap,.structured-editor.is-a4-portrait .structured-editor__preview{width:794px}.structured-editor.is-a4-portrait .structured-editor__canvas{overflow:auto}}
+.structured-editor__spacing-controls{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;padding:8px 12px;border-bottom:1px solid #c7d8e7;background:#f4f8fc;font-size:12px}
+.structured-editor__spacing-controls label{display:flex;align-items:center;gap:5px;white-space:nowrap;font-weight:750}
+.structured-editor__spacing-controls input{width:64px;min-height:32px;padding:4px 6px;border:1px solid #aec3d7;border-radius:4px;font:inherit;background:#fff;color:#183250}
+.structured-editor__spacing-controls small{color:#456078;line-height:1.4}
+.structured-editor .tiptap [data-document-spacer],.structured-editor__preview [data-document-spacer]{display:block;box-sizing:border-box;position:relative;clear:both;border:0;margin:0;padding:0;line-height:0;min-height:0}
+.structured-editor .tiptap [data-document-spacer]{cursor:pointer;background:rgba(14,116,144,.045)}
+.structured-editor .tiptap [data-document-spacer]:hover,.structured-editor .tiptap [data-document-spacer].ProseMirror-selectednode{outline:1px dashed #0e7490;background:rgba(14,116,144,.09)}
+.structured-editor .tiptap [data-document-spacer]:hover::after,.structured-editor .tiptap [data-document-spacer].ProseMirror-selectednode::after{content:'빈 줄 · ' attr(data-document-spacer) 'px';position:absolute;right:4px;top:0;padding:2px 4px;background:#e5f4f8;color:#07566d;font:11px/1.2 sans-serif;pointer-events:none}
+.structured-editor .tiptap :has(+[data-document-spacer]),.structured-editor__preview :has(+[data-document-spacer]){margin-bottom:0!important}
+.structured-editor .tiptap [data-document-spacer]+*,.structured-editor__preview [data-document-spacer]+*{margin-top:0!important}

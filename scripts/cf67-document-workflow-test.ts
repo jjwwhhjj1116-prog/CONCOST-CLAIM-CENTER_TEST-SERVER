@@ -22,14 +22,14 @@ test('CF67 required fields, dirty navigation, and authoring step gates are expli
   assert.match(proposal, /registerNavigationBlocker/u);
   assert.match(proposal, /if\(dirty\)event\.preventDefault/u);
   assert.match(report, /<Input required label="보고서 제목"/u);
-  assert.match(report, /<Select required label="작성할 프로젝트"/u);
+  assert.match(report, /<Select\b[^>]*\brequired label="작성할 프로젝트"/u);
   assert.match(proposal, /proposal-step1-textarea/u);
   assert.match(proposal, /workflow-next-action/u);
   assert.match(report, /report-current-project--persistent/u);
   assert.match(report, /DocumentToolMenus/u);
   assert.match(theme, /\.workflow-next-action/u);
   assert.match(theme, /background:linear-gradient\(135deg,#c2410c,#9a3412\)!important;color:#fff!important/u);
-  assert.match(report, /if \(dirty \|\| outlineDirty\) event\.preventDefault/u);
+  assert.match(report, /if \(dirty \|\| outlineDirty \|\| workspaceDirty\) event\.preventDefault/u);
   assert.doesNotMatch(report, /dirty \|\| outlineDirty \|\| saving/u);
   assert.match(app, /popstate/u);
   assert.match(app, /requestNavigation/u);

@@ -102,7 +102,8 @@
     "test:cf92": "tsx --test --test-name-pattern=CF92 scripts/cf47-intake-source-test.ts",
     "test:cf93": "tsx --test scripts/cf93-proposal-a4-editor-parity-test.ts",
     "test:cf94": "tsx --test scripts/cf94-proposal-typography-table-stability-test.ts",
-    "test:cf95": "tsx --test scripts/cf95-proposal-pagination-hwp-test.ts"
+    "test:cf95": "tsx --test scripts/cf95-proposal-pagination-hwp-test.ts",
+    "test:cf96": "tsx --test scripts/cf96-document-spacing-test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

@@ -36,7 +36,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /dangerouslySetInnerHTML/u);
   assert.match(proposal, /renderStructuredDocumentHtml/u);
   assert.match(proposal, /editorJson=\{item\.editorJson\}/u);
-  assert.match(proposal, /ADD_ATTR:\['data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density'/u);
+  assert.match(proposal, /ADD_ATTR:\['data-document-spacer','data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density'/u);
   assert.match(proposal, /<StructuredDocumentEditor key=\{`proposal-\$\{activeProposal\.id\}-\$\{chapter\.number\}`\}/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);

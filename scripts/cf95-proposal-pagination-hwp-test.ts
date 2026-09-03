@@ -34,9 +34,9 @@ test('CF95 keeps every reviewed proposal sheet inside one visible A4 page', () =
   assert.match(theme, /proposal-final-chapter__viewport[^}]*overflow:hidden/u);
   assert.match(theme, /proposal-final-chapter__fit[^}]*transform:scale\(1\)/u);
   assert.match(editor, /DocumentPageBreak/u);
-  assert.match(editor, /runLength >= 3[^\n]*documentPageBreak/u);
+  assert.doesNotMatch(editor, /runLength >= 3[^\n]*documentPageBreak/u);
   assert.match(editor, /현재 위치에서 다음 A4 쪽 시작/u);
-  assert.match(editor, /청록색 ‘쪽 나누기’가 4단계에서도 같은 위치에 적용/u);
+  assert.match(editor, /머리글 포함 실제 페이지는 출력 미리보기에서 확인/u);
   assert.match(editorCss, /structured-editor__page-break[^}]*border-top:2px solid #0ea5e9/u);
   assert.doesNotMatch(editorCss, /repeating-linear-gradient\(to bottom[^;]*1118px/u);
 });
