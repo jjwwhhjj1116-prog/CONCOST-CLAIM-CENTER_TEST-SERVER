@@ -2,3 +2,12 @@
 @media(max-width:1100px){.schedule-print-toolbar{position:static;align-items:flex-start;flex-direction:column}.schedule-print-root{padding-top:20px;overflow:auto}.schedule-print-pdf-guide{position:static;transform:none;margin-bottom:12px}.schedule-print-sheet{transform-origin:top left}.schedule-print-toolbar__controls{justify-content:flex-start}}
 @media print{@page{size:A4 landscape;margin:0}.schedule-print-root{padding:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}.schedule-print-toolbar,.schedule-print-pdf-guide,.schedule-print-status{display:none!important}.schedule-print-pages{display:block}.schedule-print-sheet{width:297mm;height:210mm;min-height:210mm;box-shadow:none;margin:0;break-after:page;page-break-after:always}.schedule-print-sheet:last-child{break-after:auto;page-break-after:auto}}
 .schedule-print-calendar__days .is-saturday,.schedule-print-track .is-saturday{background-color:#eaf7ff}.schedule-print-calendar__days .is-sunday,.schedule-print-track .is-sunday{background-color:#fff0f5}
+.schedule-print-identity { padding:3mm; border:1px solid #afc0d4; background:#f3f7fc; }
+.schedule-print-identity h2 { margin:0 0 1.5mm; color:#102d60; font-size:14pt; line-height:1.35; overflow-wrap:anywhere; }
+.schedule-print-identity p { margin:0; color:#344b67; font-size:9pt; }
+.schedule-print-sheet.is-overview .schedule-print-calendar__head,.schedule-print-sheet.is-overview .schedule-print-calendar__row { grid-template-columns:48mm 22mm 1fr; }
+.schedule-print-pm { display:flex; align-items:center; justify-content:center; border-right:1px solid #afc0d4; padding:1mm; color:#14243a; font-size:8pt; font-weight:800; text-align:center; overflow-wrap:anywhere; }
+.schedule-print-calendar__head .schedule-print-pm { background:#eaf0f7; }
+.schedule-print-range b { white-space:nowrap; }
+.schedule-print-sheet.is-detail .schedule-print-range { padding:0 1mm; }
+.schedule-print-sheet.is-detail .schedule-print-project small { color:#435871; }

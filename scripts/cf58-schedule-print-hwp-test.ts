@@ -12,7 +12,8 @@ test('CF58 project schedule exposes authenticated D1-backed A4 landscape printin
   const css = read('apps/web/src/workflow/ProjectSchedulePrint.css');
   assert.match(app, /currentPath === '\/print\/projects\/month-a4'/u);
   assert.match(router, /path: '\/print\/projects\/month-a4'/u);
-  assert.match(schedule, /🖨 일정표 출력/u);
+  assert.match(schedule, /전체 일정표 출력/u);
+  assert.match(schedule, /프로젝트별 일정표 출력/u);
   assert.match(print, /\/api\/project-workflow\/schedule/u);
   assert.match(print, /scheduleDayInfo/u);
   assert.match(print, /colorMode/u);

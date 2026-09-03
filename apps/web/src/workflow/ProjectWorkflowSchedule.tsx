@@ -133,6 +133,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [projects, setProjects] = useState<WorkflowProject[]>([]);
   const [liveError, setLiveError] = useState('');
+  const [projectPrintOpen, setProjectPrintOpen] = useState(false);
   const focusedStageId = workflowStageFromRoute(routeId);
   const routeParams = new URLSearchParams(window.location.search);
   const requestedProjectId = routeParams.get('projectId');
@@ -221,11 +222,13 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
     } finally { setErpRetryBusy(false); }
   };
 
-  const openSchedulePrint = () => {
+  const openSchedulePrint = (projectId = '') => {
     const month = `${calendarYear}-${String(calendarMonthIndex + 1).padStart(2, '0')}`;
-    const printUrl = `/print/projects/month-a4?month=${month}&lang=ko&colorMode=color`;
-    const printWindow = window.open(printUrl, '_blank', 'noopener,noreferrer');
-    if (!printWindow) setLiveError('일정표 출력 창이 차단되었습니다. 브라우저의 팝업 허용 후 다시 눌러 주세요.');
+    const query = new URLSearchParams({ month, lang: 'ko', colorMode: 'color' });
+    if (projectId) query.set('projectId', projectId);
+    // noopener deliberately returns null even when the tab opens successfully.
+    window.open(`/print/projects/month-a4?${query}`, '_blank', 'noopener,noreferrer');
+    setProjectPrintOpen(false);
   };
 
   return (
@@ -268,7 +271,8 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             <div className="schedule-toolbar">
               <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
               <div className="schedule-toolbar-actions">
-                <Button className="schedule-print-launch" size="sm" onClick={openSchedulePrint}>일정표 출력</Button>
+                <Button className="schedule-print-launch" size="sm" onClick={() => openSchedulePrint()}>전체 일정표 출력</Button>
+                <Button size="sm" variant="secondary" aria-expanded={projectPrintOpen} aria-controls="project-print-select" onClick={() => setProjectPrintOpen((open) => !open)}>프로젝트별 일정표 출력</Button>
                 <Button size="sm" variant={viewMode === '30days' ? 'primary' : 'secondary'} onClick={() => setViewMode('30days')}>30일</Button>
                 <Button size="sm" variant={viewMode === 'month' ? 'primary' : 'secondary'} onClick={() => setViewMode('month')}>월별 보기</Button>
                 <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹ 이전</Button>
@@ -276,6 +280,13 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                 <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>다음 ›</Button>
               </div>
             </div>
+
+            {projectPrintOpen && <label className="schedule-project-print-picker" htmlFor="project-print-select">출력할 프로젝트
+              <select id="project-print-select" defaultValue="" onChange={(event) => { if (event.target.value) openSchedulePrint(event.target.value); }}>
+                <option value="" disabled>프로젝트를 선택하세요</option>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.code} · {project.name}</option>)}
+              </select>
+            </label>}
 
             <div className="schedule-holiday-guide" aria-label="한국과 베트남 휴일 표시 안내">
               <strong>한국 본사 · VIETQS 휴일 캘린더</strong>
@@ -289,6 +300,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
           <div className="schedule-board" role="table" aria-label="프로젝트 월간 일정표">
             <div className="schedule-board-header" role="row">
               <div className="schedule-left-heading" role="columnheader">프로젝트 정보 <span>공정률</span></div>
+              <div className="schedule-pm-cell is-heading" role="columnheader">담당 PM</div>
               <div className="schedule-days" role="row">
                 {calendarDays.map((day) => {
                   const weekday = DAY_LABELS[new Date(calendarYear, calendarMonthIndex, day).getDay()];
@@ -304,6 +316,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                   <span className="schedule-project-copy"><strong>{project.name}{project.deliveryStatus === 'DELIVERED' && <em className="schedule-delivered-badge">납품완료</em>}</strong><small>{project.code} · {claimTypeLabel(project.claimType)} · {project.deliveryStatus === 'DELIVERED' ? 'Drive 최종 납품본 보관' : awardLabel(project.awardStatus)} · {project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 미지정'}</small></span>
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
                 </button>
+                <div className="schedule-pm-cell" role="cell">{project.responsiblePm?.name ?? '미지정'}</div>
                 <div className="schedule-track" role="cell" aria-label={`${project.name} ${project.start}부터 ${project.end}까지`}>
                   {calendarDays.map((day) => <span key={day} title={calendarDayDetails.get(day)?.label} className={`schedule-grid-cell ${calendarDayDetails.get(day)?.className ?? ''} ${day === todayDay ? 'is-today' : ''}`} />)}
                   {(() => {

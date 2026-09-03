@@ -1,0 +1,10 @@
+import { WORKFLOW_STAGES, type WorkflowProject } from '../src/workflow/workflow-model';
+
+export const qaProjects: WorkflowProject[] = [
+  { id:'project-1', caseId:'case-1', code:'CF102-001', name:'세교구역 재건축 공사비 검토 용역 · 합성 검수 프로젝트', client:'검수 발주처', claimType:'TYPE-01', progress:33, start:'2026-09-02', end:'2026-10-31', awardStatus:'WON', responsiblePm:{id:'pm-1',name:'현동명'}, canManageSchedule:true, highlights:[], stages:WORKFLOW_STAGES.map((stage,index)=>({stageId:stage.id,stageCode:['PROPOSAL','AWARD','KICKOFF','SITE_SURVEY','TAKEOFF_COST','REPORT_WRITING'][index],owner:'검수 담당자',detail:stage.name,status:'PLANNED',startDay:2,endDay:30,startDate:index===5?'2026-09-30':'2026-09-02',endDate:index===5?'2026-10-31':'2026-09-16',scheduleExplicit:true,scheduleVersion:1})) },
+  { id:'project-2', caseId:'case-2', code:'CF102-002', name:'PM 미지정 검수 프로젝트', client:'검수 발주처', claimType:'TYPE-01',progress:0,start:'2026-09-01',end:'2026-09-30',awardStatus:'WON',responsiblePm:null,highlights:[],stages:[] }
+];
+
+const titles=['제안(용역)의 목적','당 현장의 핵심 쟁점 분석','업무 수행 내용 및 추진 계획','전문가 현황','당사의 강점','조직도 및 업무 영역','도시정비사업 공사비검증 실적','한국부동산원 공사비검증 실적','건설 클레임·소송·기술감정 실적','자격 증명자료','용역 조건 및 제안 범위','맺음말'];
+const chapters=titles.map((title,index)=>({number:index+1,title,kind:index<3?'VARIABLE':'FIXED',body:`### ${title}\n\n${index+1}장 담당자가 확인한 고유 검수 본문입니다.\n\n- 내용과 출력 순서를 확인합니다.`,editorJson:null}));
+export const qaProposal = {id:'proposal-1',caseId:'case-1',templateId:'template-1',title:'CF102 합성 검수 제안서',status:'DRAFT',version:1,currentVersionId:'version-1',approvedVersionId:null as string|null,reviews:[],exports:[],versions:[{id:'version-1',versionNumber:1,generationMode:'MANUAL',structuredInputsJson:JSON.stringify({clientName:'검수 발주처',projectTitle:qaProjects[0].name,subtitle:'공사비 검토 제안서',submissionDate:'2026-09-03',objective:chapters[0].body,keyIssues:chapters[1].body,planNotes:chapters[2].body,exclusions:'해당 없음',chapters,includedModuleCodes:[],templateSourceId:'source-1'}),sourceDocumentVersionIdsJson:'[]'}]};

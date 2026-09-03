@@ -386,7 +386,6 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .document-tool-icon.is-excel{background:#107c41;}.document-tool-icon.is-docx{background:#185abd;}.document-tool-icon.is-hwp{background:#0e91a8;font-family:'Noto Sans KR',sans-serif;}
 .document-tool-menu__panel{position:absolute;top:calc(100% + 7px);right:0;z-index:60;display:grid;min-width:220px;overflow:hidden;border:1px solid #cbd5e1;border-radius:12px;padding:6px;background:#fff;box-shadow:0 18px 42px rgba(15,23,42,.2);}
 .document-tool-menu:not([open])>.document-tool-menu__panel{display:none;}
-.document-tool-menu:hover>.document-tool-menu__panel,.document-tool-menu:focus-within>.document-tool-menu__panel{display:grid;}
 .document-tool-menu__panel button{min-height:40px;border:0;border-radius:8px;padding:8px 11px;background:transparent;color:#24364f;font-family:inherit;font-size:.77rem;font-weight:800;line-height:1.35;text-align:left;cursor:pointer;}
 .document-tool-menu__panel button:hover,.document-tool-menu__panel button:focus-visible{outline:none;background:#eef5fb;color:#0b4f87;}
 .document-tool-menu__panel button:disabled{cursor:not-allowed;opacity:.45;}

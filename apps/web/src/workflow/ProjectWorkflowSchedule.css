@@ -192,9 +192,16 @@
 .schedule-board-header,
 .schedule-project-row {
   display: grid;
-  grid-template-columns: 330px 1364px;
-  min-width: 1694px;
+  grid-template-columns: 330px 120px 1364px;
+  min-width: 1814px;
 }
+
+.schedule-pm-cell { position:sticky; left:330px; z-index:4; display:flex; align-items:center; justify-content:center; padding:10px; border-right:1px solid #2b3659; background:#11182d; color:#f4f7ff; font-size:.85rem; font-weight:800; text-align:center; overflow-wrap:anywhere; }
+.schedule-pm-cell.is-heading { z-index:6; background:#151d36; }
+:root[data-theme='light'] .schedule-pm-cell { background:#fff; color:#1b2738; border-color:#d8e0ea; }
+:root[data-theme='light'] .schedule-pm-cell.is-heading { background:#edf2f7; }
+.schedule-project-print-picker { display:flex; align-items:center; gap:12px; padding:12px 16px; color:inherit; font-weight:800; }
+.schedule-project-print-picker select { min-width:0; max-width:100%; flex:1; min-height:40px; padding:8px; border:1px solid #9baec6; border-radius:8px; background:#fff; color:#172d4a; font:inherit; }
 
 .detail-schedule-header,
 .workflow-stage-row {
@@ -330,6 +337,8 @@
 .detail-schedule-header > div:first-child { font-size: .76rem; }
 .workflow-stage-row { min-height: 92px; }
 .workflow-stage-info { grid-template-columns: 34px minmax(0, 1fr) auto; }
+.workflow-stage-info > .stage-number { width:34px; height:34px; border-radius:8px; font-size:1rem; }
+.workflow-stage-info > span:nth-child(2) { min-width:0; }
 .stage-number { display: grid; place-items: center; width: 60px; height: 60px; border-radius: 14px; color: white; font-size: 1.5rem; font-weight: 900; }
 .workflow-stage-info em { display: block; margin-top: 4px; overflow: hidden; color: #687792; font-size: .64rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .stage-status { padding: 5px 7px; border-radius: 999px; font-size: .61rem; white-space: nowrap; }
@@ -449,7 +458,9 @@
   .workflow-summary,
   .project-workflow-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .schedule-board-header,
-  .schedule-project-row { grid-template-columns: 270px minmax(992px, 1fr); min-width: 1262px; }
+  .schedule-project-row { grid-template-columns: 230px 100px 1364px; min-width: 1694px; }
+  .schedule-pm-cell { left:230px; }
+  .schedule-project-print-picker { align-items:stretch; flex-direction:column; }
   .detail-schedule-header,
   .workflow-stage-row { grid-template-columns: 270px var(--detail-timeline-width, 992px); min-width: calc(270px + var(--detail-timeline-width, 992px)); }
   .workforce-row { grid-template-columns: 1fr; gap: 5px; padding: 9px 0; }

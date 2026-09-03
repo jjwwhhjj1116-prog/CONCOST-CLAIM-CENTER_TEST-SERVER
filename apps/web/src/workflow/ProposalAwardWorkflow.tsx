@@ -163,7 +163,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [receptions, setReceptions] = useState<ProposalReception[]>([]);
-  const [selectedReceptionId, setSelectedReceptionId] = useState('');
+  const [selectedReceptionId, setSelectedReceptionId] = useState(() => new URLSearchParams(window.location.search).get('proposalId') ?? '');
   const [receptionQuery, setReceptionQuery] = useState('');
   const [receptionLoading, setReceptionLoading] = useState(routeId === 'WF-02' || routeId === 'WF-07');
   const keysRef = useRef(new Map<string, string>());
