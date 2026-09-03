@@ -1,10 +1,11 @@
 import { Extension, ResizableNodeView } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
-import { Plugin, TextSelection, type Transaction } from '@tiptap/pm/state';
+import { NodeSelection, Plugin, TextSelection, type Transaction } from '@tiptap/pm/state';
 import { CellSelection, TableMap, selectedRect } from '@tiptap/pm/tables';
 import { closeHistory } from '@tiptap/pm/history';
 import type { Node as DocumentNode } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
+import { fitImageDimensions } from './structured-document-layout';
 
 const displayScale = (element: HTMLElement) => element.offsetWidth > 0 ? element.getBoundingClientRect().width / element.offsetWidth : 1;
 
@@ -137,6 +138,23 @@ export const ScaledTableResize = Extension.create({
   }
 });
 
+/** Native Image omits these DOM attributes and does not update its inline dimensions on undo. */
+export function syncImageDimensions(element: HTMLElement, attrs: Record<string, unknown>, removeMissing = true) {
+  for (const key of ['width', 'height'] as const) {
+    const value = Number(attrs[key]);
+    if (Number.isFinite(value) && value > 0) {
+      element.setAttribute(key, String(value)); element.style[key] = `${value}px`;
+    } else if (removeMissing) {
+      element.removeAttribute(key); element.style.removeProperty(key);
+    }
+  }
+  const hasHeight = Number.isFinite(Number(attrs.height)) && Number(attrs.height) > 0;
+  if (hasHeight || removeMissing) {
+    element.style.objectFit = hasHeight ? 'fill' : '';
+    element.style.maxHeight = hasHeight ? 'none' : '';
+  }
+}
+
 export const ScaledImage = Image.extend({
   addNodeView() {
     const parent = this.parent?.();
@@ -144,25 +162,54 @@ export const ScaledImage = Image.extend({
     return props => {
       const view = parent(props);
       if (!(view instanceof ResizableNodeView)) return view;
-      let start = { width: 0, height: 0, scale: 1 };
+      type ResizeStart = { width: number; height: number; scale: number; maximumWidth: number; direction: string; shift: boolean; cancelled: boolean; doc: DocumentNode; current?: {width:number;height:number} };
+      let start: ResizeStart | null = null;
+      const doc = view.dom.ownerDocument;
+      const sync = () => syncImageDimensions(view.element, view.node.attrs);
+      const update = view.onUpdate;
+      view.onUpdate = (node, decorations, inner) => {
+        const accepted = update?.(node, decorations, inner) ?? true;
+        if (accepted) syncImageDimensions(view.element, node.attrs);
+        return accepted;
+      };
+      sync();
+      const keyboard = (event: KeyboardEvent) => {
+        if (!start) return;
+        start.shift = event.shiftKey;
+        view.preserveAspectRatio = start.shift;
+        if (event.key === 'Escape') { start.cancelled = true; event.preventDefault(); sync(); }
+      };
+      const cleanup = () => { doc.removeEventListener('keydown', keyboard, true); doc.removeEventListener('keyup', keyboard, true); };
       const begin = (event: Event) => {
         if (!(event.target instanceof Element) || !event.target.closest('[data-resize-handle]')) return;
-        start = { width: view.element.offsetWidth, height: view.element.offsetHeight, scale: displayScale(view.element) };
+        if (!props.editor.isEditable) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+        cleanup();
+        const pos = props.getPos();
+        if (pos !== undefined) props.editor.commands.setNodeSelection(pos);
+        const style = getComputedStyle(props.editor.view.dom);
+        start = { width: view.element.offsetWidth, height: view.element.offsetHeight, scale: displayScale(view.element), maximumWidth: props.editor.view.dom.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'), direction: event.target.closest('[data-resize-handle]')!.getAttribute('data-resize-handle')!, shift: (event as MouseEvent).shiftKey, cancelled: false, doc: props.editor.state.doc };
+        view.preserveAspectRatio = start.shift;
+        doc.addEventListener('keydown', keyboard, true); doc.addEventListener('keyup', keyboard, true);
       };
       view.dom.addEventListener('mousedown', begin, true); view.dom.addEventListener('touchstart', begin, true);
-      const resize = view.onResize;
       view.onResize = (width, height) => {
-        if (start.width && start.height && Math.abs(start.scale - 1) >= 0.001) {
-          const style = getComputedStyle(props.editor.view.dom);
-          const available = props.editor.view.dom.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0');
-          const minimumWidth = Math.max(view.minSize.width, view.preserveAspectRatio ? view.minSize.height * start.width / start.height : 0);
-          width = Math.min(available, Math.max(minimumWidth, start.width + (width - start.width) / start.scale));
-          height = view.preserveAspectRatio ? width * start.height / start.width : Math.max(view.minSize.height, start.height + (height - start.height) / start.scale);
-        }
-        resize?.(width, height);
+        if (!start || start.cancelled || !props.editor.isEditable || !start.doc.eq(props.editor.state.doc)) { if (start) start.cancelled = true; sync(); return; }
+        start.current = fitImageDimensions(start.width + (width - start.width) / start.scale, start.height + (height - start.height) / start.scale, start.maximumWidth, start.shift ? start.width / start.height : undefined);
+        // An edge gesture must not clamp an untouched dimension of an imported image.
+        if (!start.shift && ['left', 'right'].includes(start.direction)) start.current.height = start.height;
+        if (!start.shift && ['top', 'bottom'].includes(start.direction)) start.current.width = start.width;
+        syncImageDimensions(view.element, start.current);
+      };
+      view.onCommit = () => {
+        const gesture = start; start = null; cleanup(); view.preserveAspectRatio = false;
+        const pos = props.getPos();
+        if (!gesture?.current || gesture.cancelled || !props.editor.isEditable || !gesture.doc.eq(props.editor.state.doc) || pos === undefined || (Math.abs(gesture.current.width - gesture.width) < 1 && Math.abs(gesture.current.height - gesture.height) < 1)) { sync(); return; }
+        const tr = closeHistory(props.editor.state.tr).setNodeMarkup(pos, undefined, { ...view.node.attrs, ...gesture.current });
+        tr.setSelection(NodeSelection.create(tr.doc, pos)).setMeta('document-image-resize', gesture.current);
+        props.editor.view.dispatch(tr); props.editor.view.dispatch(closeHistory(props.editor.state.tr)); props.editor.view.focus();
       };
       const destroy = view.destroy.bind(view);
-      view.destroy = () => { view.dom.removeEventListener('mousedown', begin, true); view.dom.removeEventListener('touchstart', begin, true); destroy(); };
+      view.destroy = () => { cleanup(); view.dom.removeEventListener('mousedown', begin, true); view.dom.removeEventListener('touchstart', begin, true); destroy(); };
       return view;
     };
   }

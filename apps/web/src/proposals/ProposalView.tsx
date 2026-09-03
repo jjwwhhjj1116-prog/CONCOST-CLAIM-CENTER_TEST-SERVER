@@ -166,7 +166,7 @@ const deduplicateProposalImages=(body:string):string=>{
 };
 const renderProposalBodyHtml=(body:string,assets:readonly CompanyAsset[],hydrateCompanyAssets:boolean):string=>{
   const source=hydrateCompanyAssets?proposalChapterWithCompanyImages({number:assets[0]?.chapterNumber??0,title:'',kind:'FIXED',body},assets).body:body;
-  const rendered=marked.parse(expandDocumentSpacingMarkers(deduplicateProposalImages(source)),{async:false,gfm:true,breaks:true});
+  const rendered=marked.parse(expandDocumentSpacingMarkers(hydrateCompanyAssets?deduplicateProposalImages(source):source),{async:false,gfm:true,breaks:true});
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered==='string'?rendered:''),{
     ADD_ATTR:['data-document-spacer','data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']
   });
@@ -175,7 +175,7 @@ const ProposalRichContent=React.memo(function ProposalRichContent({body,editorJs
   const visible=assets.filter((asset)=>asset.hasContent&&asset.isActive).sort((a,b)=>a.displayOrder-b.displayOrder);
   const structuredHtml=editorJson?renderStructuredDocumentHtml(editorJson,{pageMode:'a4-portrait'}):'';
   const html=structuredHtml
-    ? DOMPurify.sanitize(deduplicateProposalImages(structuredHtml),{ADD_ATTR:['data-document-spacer','data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']})
+    ? DOMPurify.sanitize(structuredHtml,{ADD_ATTR:['data-document-spacer','data-document-page-break','data-image-align','data-table-width','data-table-align','data-table-density','data-cell-vertical-align','data-cell-horizontal-align','data-row-height-mm','colspan','rowspan','style','target','rel','width','height']})
     : renderProposalBodyHtml(body,visible,hydrateCompanyAssets);
   return <article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/>;
 });
@@ -246,7 +246,7 @@ export function ProposalFinalChapterPages({item,startPage,onPageCount}:{item:Pro
   },[item.body,item.editorJson,item.number,item.title]);
   useEffect(()=>onPageCount(item.number,layout.fragments.length),[item.number,layout.fragments.length,onPageCount]);
   return <>
-    <div ref={sourceRef} className="proposal-final-pagination-source proposal-final-chapter" aria-hidden="true"><ProposalRichContent body={item.body} editorJson={item.editorJson}/></div>
+    <div ref={sourceRef} className="proposal-final-pagination-source proposal-final-chapter" aria-hidden="true"><ProposalRichContent body={item.body} editorJson={item.editorJson} hydrateCompanyAssets={false}/></div>
     {layout.fragments.map((html,index)=><section className="proposal-final-chapter" data-export-page data-export-page-policy="fit" data-page-fit-overflow={layout.ready?'false':'true'} data-page-fit-scale={layout.scale.toFixed(3)} data-page-number={startPage+index} data-chapter-number={item.number} data-chapter-page-index={index+1} key={`${item.number}-${index}`}>
       <header><span>CHAPTER {String(item.number).padStart(2,'0')}{index>0?` · CONTINUED ${index+1}`:''}</span><h3>{item.number}. {item.title}</h3></header>
       <div className="proposal-final-chapter__viewport"><div className="proposal-final-chapter__fit"><article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/></div></div>

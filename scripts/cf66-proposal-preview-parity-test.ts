@@ -27,7 +27,7 @@ test('CF66 final preview renders the exact reviewed chapter snapshot without liv
     proposal.indexOf('function ProposalFinalChapterPage'),
     proposal.indexOf('export const ProposalView'),
   );
-  assert.match(finalPreview, /<ProposalRichContent body=\{item\.body\} editorJson=\{item\.editorJson\}\/>/u);
+  assert.match(finalPreview, /<ProposalRichContent body=\{item\.body\} editorJson=\{item\.editorJson\} hydrateCompanyAssets=\{false\}\/>/u);
   assert.doesNotMatch(finalPreview, /assets=\{/u);
   assert.match(proposal, /hydrateCompanyAssets\?proposalChapterWithCompanyImages/u);
   assert.match(proposal, /deduplicateProposalImages\(source\)/u);

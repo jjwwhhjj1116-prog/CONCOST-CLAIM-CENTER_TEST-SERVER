@@ -9,7 +9,7 @@ import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
 import { expandDocumentSpacingMarkers } from '../documents/document-spacing';
-import { StructuredDocumentEditor, renderStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { readReportDocx, readReportStudioWorkbook, readSpreadsheetExcerpt, reportStudioWorkbook } from '../proposals/proposal-excel';
@@ -119,7 +119,7 @@ function wholeReportDocument(content: string): string {
 function reportPreviewHtml(content: string, editorJson: import('@tiptap/core').JSONContent | null): string {
   const structured = editorJson ? renderStructuredDocumentHtml(editorJson) : '';
   const rendered = structured || marked.parse(expandDocumentSpacingMarkers(content), { async: false, gfm: true, breaks: true });
-  return DOMPurify.sanitize(typeof rendered === 'string' ? rendered : '', {
+  return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
     ADD_ATTR: ['data-document-spacer', 'data-document-page-break', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 }

@@ -23,11 +23,11 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import * as Y from 'yjs';
 import { structuredDocumentContentSignature } from './structured-document-sync';
-import { inferredTableColumnWeight, normalizeColumnWidths } from './structured-document-layout';
+import { fitImageDimensions, inferredTableColumnWeight, normalizeColumnWidths } from './structured-document-layout';
 import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
 import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
 import { DocumentReviewPages } from './DocumentPreviewPane';
-import { ScaledImage, ScaledTableResize, selectTableCells } from './document-resize-scale';
+import { ScaledImage, ScaledTableResize, selectTableCells, syncImageDimensions } from './document-resize-scale';
 
 export interface StructuredSelection {
   from: number;
@@ -421,6 +421,10 @@ export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
 export const normalizeStructuredDocumentHtml = (html: string): string => {
   if (!html.trim() || typeof DOMParser === 'undefined') return html;
   const parsed = new DOMParser().parseFromString(`<main>${html}</main>`, 'text/html');
+  parsed.querySelectorAll<HTMLImageElement>('img').forEach(image => syncImageDimensions(image, {
+    width: image.getAttribute('width') ?? image.style.width.match(/^(\d+(?:\.\d+)?)px$/)?.[1],
+    height: image.getAttribute('height') ?? image.style.height.match(/^(\d+(?:\.\d+)?)px$/)?.[1]
+  }, false));
   parsed.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
     table.dataset.documentDefaultsVersion ||= '2';
     table.dataset.tableDensity ||= 'normal';
@@ -644,6 +648,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [activeSelection, setActiveSelection] = useState<StructuredSelection | null>(null);
   const [imageSelected, setImageSelected] = useState(false);
   const [imageWidthPercent, setImageWidthPercent] = useState(100);
+  const [imageWidthPx, setImageWidthPx] = useState('360');
+  const [imageHeightPx, setImageHeightPx] = useState('180');
   const [imageAlignment, setImageAlignment] = useState<'left' | 'center' | 'right'>('center');
   const [tableActive, setTableActive] = useState(false);
   const [tableWidthPercent, setTableWidthPercent] = useState(100);
@@ -704,6 +710,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       const displayedWidth = Number(attributes.width) || element?.offsetWidth || availableWidth;
       setImageAlignment(alignment);
       setImageWidthPercent(Math.min(100, Math.max(10, Math.round((displayedWidth / availableWidth) * 100))));
+      if (!(document.activeElement instanceof HTMLElement && document.activeElement.closest('.structured-editor__image-measurements'))) {
+        setImageWidthPx(String(Math.round(displayedWidth)));
+        setImageHeightPx(String(Math.round(Number(attributes.height) || element?.offsetHeight || 180)));
+      }
     }
     const inTable = activeEditor.isActive('table');
     setTableActive(inTable);
@@ -744,10 +754,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         inline: false,
         resize: {
           enabled: true,
-          directions: ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
+          directions: ['top-left', 'top', 'top-right', 'left', 'right', 'bottom-left', 'bottom', 'bottom-right'],
           minWidth: 80,
           minHeight: 40,
-          alwaysPreserveAspectRatio: true
+          alwaysPreserveAspectRatio: false
         }
       }),
       Placeholder.configure({ placeholder }),
@@ -776,7 +786,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       }
     },
     immediatelyRender: false,
-    onUpdate: ({ editor: activeEditor }) => {
+    onUpdate: ({ editor: activeEditor, transaction }) => {
+      const imageSize = transaction.getMeta('document-image-resize');
+      if (imageSize) {
+        const action: RepeatableDocumentAction = { kind: 'attributes', target: 'image', attrs: imageSize };
+        lastActionRef.current = action;
+        setRepeatLabel(documentActionLabel(action));
+        setRepeatStatus('');
+      }
       const nextMarkdown = editorHtmlToMarkdown(activeEditor.getHTML());
       const nextJson = activeEditor.getJSON();
       lastAppliedContentSignature.current = structuredDocumentContentSignature(nextMarkdown, nextJson);
@@ -872,14 +889,18 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const currentWidth = Number(editor.state.selection.node.attrs.width) || element?.offsetWidth || element?.naturalWidth || availableWidth;
     const currentHeight = Number(editor.state.selection.node.attrs.height) || element?.offsetHeight || element?.naturalHeight || currentWidth;
     const aspectRatio = currentWidth > 0 && currentHeight > 0 ? currentWidth / currentHeight : 1;
-    const width = Math.max(80, Math.round((availableWidth * normalized) / 100));
-    const height = Math.max(40, Math.round(width / aspectRatio));
-    setImageWidthPercent(normalized);
-    if (element) {
-      element.style.width = `${width}px`;
-      element.style.height = `${height}px`;
+    const size = fitImageDimensions(availableWidth * normalized / 100, currentHeight, availableWidth, aspectRatio);
+    runAction({ kind: 'attributes', target: 'image', attrs: size });
+  };
+
+  const applyImageMeasurements = () => {
+    if (!editor || !Number.isFinite(Number(imageWidthPx)) || !Number.isFinite(Number(imageHeightPx)) || Number(imageWidthPx) <= 0 || Number(imageHeightPx) <= 0) return;
+    const style = getComputedStyle(editor.view.dom);
+    const availableWidth = editor.view.dom.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0');
+    const size = fitImageDimensions(Number(imageWidthPx), Number(imageHeightPx), availableWidth);
+    if (runAction({ kind: 'attributes', target: 'image', attrs: size })) {
+      setImageWidthPx(String(size.width)); setImageHeightPx(String(size.height));
     }
-    runAction({ kind: 'attributes', target: 'image', attrs: { width, height } });
   };
 
   const applyImageAlignment = (alignment: 'left' | 'center' | 'right') => {
@@ -1129,10 +1150,15 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     </div>}
     {!readOnly && !preview && imageSelected && <div className="structured-editor__object-controls is-image" role="group" aria-label="선택 이미지 크기와 정렬">
       <strong>선택 이미지</strong>
+      <div className="structured-editor__image-measurements" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); applyImageMeasurements(); } }}>
+        <label>가로 <input aria-label="이미지 가로 px" type="number" min="80" step="1" value={imageWidthPx} onChange={event => setImageWidthPx(event.target.value)} /> px</label>
+        <label>세로 <input aria-label="이미지 세로 px" type="number" min="40" max="680" step="1" value={imageHeightPx} onChange={event => setImageHeightPx(event.target.value)} /> px</label>
+        <ToolbarButton label="이미지 가로 세로 적용" onClick={applyImageMeasurements}>크기 적용</ToolbarButton>
+      </div>
       <label><span>크기</span><input aria-label="이미지 너비 비율" type="range" min="10" max="100" step="5" value={imageWidthPercent} onChange={(event) => applyImageWidth(Number(event.target.value))} /><output>{imageWidthPercent}%</output></label>
       <div className="structured-editor__quick-sizes">{[25, 50, 75, 100].map((size) => <ToolbarButton key={size} label={`이미지 너비 ${size}%`} active={imageWidthPercent === size} onClick={() => applyImageWidth(size)}>{size}%</ToolbarButton>)}</div>
       <div><span>정렬</span>{(['left', 'center', 'right'] as const).map((alignment) => <ToolbarButton key={alignment} label={`이미지 ${alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'} 정렬`} active={imageAlignment === alignment} onClick={() => applyImageAlignment(alignment)}>{alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'}</ToolbarButton>)}</div>
-      <small>파란 모서리 조절점을 드래그해도 원본 비율을 유지한 채 크기가 저장됩니다.</small>
+      <small>모서리: 가로·세로 · 변 가운데: 한 방향 · Shift: 비율 유지 · Esc: 취소</small>
       <ToolbarButton label="선택 이미지 삭제" onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
     </div>}
     {!readOnly && !preview && tableActive && <div className="structured-editor__object-controls is-table" role="group" aria-label="선택 표 크기와 간격">
@@ -1152,7 +1178,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     </div>
     <DocumentReviewPages previewContent={previewContent} width={previewWidth}>
     <div className="structured-editor__canvas">
-      {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(editor?.getHTML() ?? '') }} /> : <>
+      {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(normalizeStructuredDocumentHtml(editor?.getHTML() ?? '')) }} /> : <>
         {editor && <BubbleMenu
           editor={editor}
           pluginKey={`structured-selection-assistant-${documentKey ?? label}`}

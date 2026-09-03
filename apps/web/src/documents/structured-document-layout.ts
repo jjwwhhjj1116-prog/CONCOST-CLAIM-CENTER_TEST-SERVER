@@ -28,3 +28,17 @@ export const normalizeColumnWidths = (widths: number[], targetTotal: number, inf
     : (knownTotal > 0 ? width / knownTotal * remaining : defaultWidth));
   return { widths: normalized, repaired: missingCount > 0 };
 };
+
+/** Image edits share bounds; independent axes stay independent unless a ratio is requested. */
+export const fitImageDimensions = (width: number, height: number, maximumWidth: number, aspectRatio?: number) => {
+  const maxWidth = Math.max(1, maximumWidth), minWidth = Math.min(80, maxWidth);
+  if (aspectRatio && Number.isFinite(aspectRatio) && aspectRatio > 0) {
+    const upper = Math.min(maxWidth, 680 * aspectRatio);
+    width = Math.min(upper, Math.max(Math.min(upper, Math.max(minWidth, 40 * aspectRatio)), width));
+    height = width / aspectRatio;
+  } else {
+    width = Math.min(maxWidth, Math.max(minWidth, width));
+    height = Math.min(680, Math.max(40, height));
+  }
+  return { width: Math.round(width), height: Math.round(height) };
+};
