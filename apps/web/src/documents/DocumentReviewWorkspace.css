@@ -21,9 +21,8 @@
 .proposal-module-controls>summary{cursor:pointer;font-size:13px;font-weight:800;color:#244c70;padding:8px 0}
 .proposal-module-controls .proposal-module-panel{display:grid;gap:6px;border:0;padding:8px 0;background:transparent}
 .proposal-module-controls .proposal-module-panel label{margin:0;padding:6px}
-.proposal-module-controls .ui-button{display:flex;justify-content:center;grid-template-columns:none;width:100%;font-size:12px;padding:8px;white-space:normal}
+.proposal-module-controls .ui-button{display:flex;justify-content:center;width:100%;font-size:12px;padding:8px;white-space:normal}
 .proposal-module-controls .proposal-module-panel b{display:block;width:auto;height:auto;font-size:12px}
-.proposal-editor-stage .proposal-frontmatter-preview{display:none}
 .document-review-note{margin:0;color:#456078;font-size:12px;line-height:1.5}
 .report-stage-inline-editor>.document-review-split{width:100%;max-width:none}
 .report-stage-inline-editor>.document-review-split .structured-editor__preview{min-height:0}
