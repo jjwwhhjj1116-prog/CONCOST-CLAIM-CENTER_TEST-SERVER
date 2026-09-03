@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CF101 접수 목록 색상 · 로컬 검수</title>
+<link rel="stylesheet" href="/src/workflow/ProposalAwardWorkflow.css">
+<link rel="stylesheet" href="/src/theme-system.css">
+<body style="margin:24px;font-family:Arial,sans-serif">
+<p>CF101 로컬 CSS 검수 · 업무 데이터와 연결 없음 <button id="theme" type="button">밝게 / 어둡게</button></p>
+<main class="proposal-flow reception-flow"><div class="reception-status-columns">
+<section class="reception-status-list is-ready"><header><h3>접수 예정 프로젝트</h3></header><div class="reception-status-list__body">
+<button type="button" data-project="1" class="is-active" aria-pressed="true"><span class="proposal-award is-pending">접수 예정</span><strong>선택된 제안서</strong><small>확정 v2 · 클라이언트</small><em>✓ 선택됨</em></button>
+<button type="button" data-project="2" aria-pressed="false"><span class="proposal-award is-pending">접수 예정</span><strong>미선택 제안서</strong><small>확정 v6 · 클라이언트</small></button>
+</div></section>
+<section class="reception-status-list is-won"><header><h3>수주 확정 프로젝트</h3></header><div class="reception-status-list__body">
+<button type="button" data-project="3" aria-pressed="false"><span class="proposal-award is-won">수주 확정</span><strong>수주 확정 제안서</strong><small>담당자 · 확정 시각</small></button>
+</div></section></div></main>
+<script type="module">
+document.getElementById('theme').onclick = () => { document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; };
+document.querySelectorAll('[data-project]').forEach(button => { button.onclick = () => { document.querySelectorAll('[data-project]').forEach(row => { const selected = row === button; row.classList.toggle('is-active', selected); row.setAttribute('aria-pressed', String(selected)); row.querySelector('em')?.remove(); if (selected) { const mark = document.createElement('em'); mark.textContent = '✓ 선택됨'; row.append(mark); } }); }; });
+</script>
+</body></html>

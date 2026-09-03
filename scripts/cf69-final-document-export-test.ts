@@ -73,6 +73,8 @@ test('CF69 reception lists remain searchable scrollable and visibly selected', (
   assert.match(css, /is-ready \.reception-status-list__body > button\.is-active/u);
   assert.match(css, /is-won \.reception-status-list__body > button\.is-active/u);
   assert.match(css, /focus-visible/u);
+  assert.match(css, /:root\[data-theme='light'\] \.reception-status-list__body > button:not\(\.is-active\) \{ background: #ffffff; \}/u);
+  assert.match(css, /:root\[data-theme='light'\] \.reception-status-list__body > button:focus-visible \{ outline-color: #1769e0; \}/u);
   assert.match(workflow, /if \(!selectedItem \|\| !searchable\.includes\(needle\)\) setSelectedReceptionId\(''\)/u);
 });
 

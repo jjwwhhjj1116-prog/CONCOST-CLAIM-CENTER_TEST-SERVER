@@ -168,7 +168,9 @@
 :root[data-theme='light'] .reception-status-list__body > button,
 :root[data-theme='light'] .reception-database-card > header { border-color: #dbe4ed; }
 :root[data-theme='light'] .reception-list-search input { border-color: #c4d2e2; color: #172033; background: #f8fbff; }
-:root[data-theme='light'] .reception-status-list__body > button:hover { background: #eef5fb; }
+:root[data-theme='light'] .reception-status-list__body > button:not(.is-active) { background: #ffffff; }
+:root[data-theme='light'] .reception-status-list__body > button small { color: #526780; }
+:root[data-theme='light'] .reception-status-list__body > button:focus-visible { outline-color: #1769e0; }
 :root[data-theme='light'] .reception-status-list.is-ready .reception-status-list__body > button.is-active { color: #5c3400; background: linear-gradient(100deg, #fff0c8, #fff8e7); box-shadow: inset 5px 0 #f59e0b; }
 :root[data-theme='light'] .reception-status-list.is-won .reception-status-list__body > button.is-active { color: #064e3b; background: linear-gradient(100deg, #d9f8ec, #effcf7); box-shadow: inset 5px 0 #0f9f72; }
 :root[data-theme='light'] .reception-database-table { color: #243249; }
