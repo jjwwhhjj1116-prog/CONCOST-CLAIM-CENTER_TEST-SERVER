@@ -37,7 +37,7 @@ test('CF91 exposes editable cover and TOC in reviewer step and fixes proposal ou
 test('CF91 table editor supports vertical alignment and numeric row-column dimensions', () => {
   const editor = read('apps/web/src/documents/StructuredDocumentEditor.tsx');
   const css = read('apps/web/src/documents/StructuredDocumentEditor.css');
-  assert.match(editor, /selectedRect/u);
+  assert.match(read('apps/web/src/documents/document-editing-actions.ts'), /selectedRect/u);
   assert.match(editor, /verticalAlignment/u);
   assert.match(editor, /data-cell-vertical-align/u);
   assert.match(editor, /rowHeightMm/u);

@@ -12,7 +12,7 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
-import { CellSelection, selectedRect } from '@tiptap/pm/tables';
+import { CellSelection } from '@tiptap/pm/tables';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
@@ -25,6 +25,9 @@ import * as Y from 'yjs';
 import { structuredDocumentContentSignature } from './structured-document-sync';
 import { inferredTableColumnWeight, normalizeColumnWidths } from './structured-document-layout';
 import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
+import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
+import { DocumentReviewPages } from './DocumentPreviewPane';
+import { ScaledImage, ScaledTableResize } from './document-resize-scale';
 
 export interface StructuredSelection {
   from: number;
@@ -38,6 +41,9 @@ export interface StructuredSelectionAssistant {
   busy?: boolean;
   disabled?: boolean;
   onImprove: (mode: StructuredSelectionImprovementMode, selection: StructuredSelection) => void;
+  instruction?: string;
+  onInstructionChange?: (value: string) => void;
+  extraControls?: React.ReactNode;
 }
 
 export interface StructuredDocumentEditorHandle {
@@ -70,6 +76,9 @@ interface StructuredDocumentEditorProps {
   };
   selectionAssistant?: StructuredSelectionAssistant;
   onRequestInsertTable?: () => void;
+  onRequestInsertImage?: () => void;
+  previewContent?: React.ReactNode;
+  previewWidth?: number;
   onChange: (markdown: string, editorJson: JSONContent) => void;
   onSelectionChange?: (selection: StructuredSelection | null) => void;
 }
@@ -123,7 +132,7 @@ const DocumentPageBreak = Node.create({
   }
 });
 
-const DocumentSpacer = Node.create({
+export const DocumentSpacer = Node.create({
   name: 'documentSpacer', group: 'block', atom: true, selectable: true,
   addAttributes() { return { heightPx: { default: 16, parseHTML: element => normalizeSpacerHeight(element.getAttribute('data-document-spacer')) } }; },
   parseHTML() { return [{ tag: 'div[data-document-spacer]' }]; },
@@ -182,7 +191,7 @@ const normalizeTextColor = (value: unknown): string | null => {
   return shortHex ? `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}` : null;
 };
 
-const DocumentTextStyle = Mark.create({
+export const DocumentTextStyle = Mark.create({
   name: 'documentTextStyle',
   addAttributes() {
     return {
@@ -593,6 +602,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   collaborationError = '',
   selectionAssistant,
   onRequestInsertTable,
+  onRequestInsertImage,
+  previewContent,
+  previewWidth = 794,
   onChange,
   onSelectionChange
 }, ref) {
@@ -620,6 +632,11 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [blankLineHeight, setBlankLineHeight] = useState('16');
   const [spacingSelected, setSpacingSelected] = useState(false);
   const [spacingBlocked, setSpacingBlocked] = useState(false);
+  const [spacingCount, setSpacingCount] = useState(0);
+  const [showAssistant, setShowAssistant] = useState(false);
+  const [repeatLabel, setRepeatLabel] = useState('');
+  const [repeatStatus, setRepeatStatus] = useState('');
+  const lastActionRef = useRef<RepeatableDocumentAction | null>(null);
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [tableRows, setTableRows] = useState(3);
   const [tableColumns, setTableColumns] = useState(3);
@@ -640,9 +657,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const selection = activeEditor.state.selection;
     setSpacingBlocked(selection instanceof CellSelection);
     const spacer = selection instanceof NodeSelection && selection.node.type.name === 'documentSpacer';
-    const emptyParagraph = selection.empty && selection.$from.parent.type.name === 'paragraph' && selection.$from.parent.textContent.trim() === '';
-    const pageBreak = selection instanceof NodeSelection && selection.node.type.name === 'documentPageBreak';
-    setSpacingSelected(spacer || emptyParagraph || pageBreak);
+    const positions = selectedSpacingPositions(activeEditor);
+    setSpacingSelected(positions.length > 0);
+    setSpacingCount(positions.length);
     if (spacer && !(document.activeElement instanceof HTMLElement && document.activeElement.closest('.structured-editor__spacing-controls'))) setBlankLineHeight(String(normalizeSpacerHeight(selection.node.attrs.heightPx)));
     const selectedImage = selection instanceof NodeSelection && selection.node.type.name === 'image';
     setImageSelected(selectedImage);
@@ -652,7 +669,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       const element = selectedImageElement(activeEditor);
       const editorStyle = window.getComputedStyle(activeEditor.view.dom);
       const availableWidth = Math.max(1, activeEditor.view.dom.clientWidth - Number.parseFloat(editorStyle.paddingLeft || '0') - Number.parseFloat(editorStyle.paddingRight || '0'));
-      const displayedWidth = Number(attributes.width) || element?.getBoundingClientRect().width || availableWidth;
+      const displayedWidth = Number(attributes.width) || element?.offsetWidth || availableWidth;
       setImageAlignment(alignment);
       setImageWidthPercent(Math.min(100, Math.max(10, Math.round((displayedWidth / availableWidth) * 100))));
     }
@@ -686,7 +703,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true, allowTableNodeSelection: true, View: DocumentTableView } }),
-      Image.configure({
+      ScaledTableResize,
+      ScaledImage.configure({
         allowBase64: false,
         inline: false,
         resize: {
@@ -702,6 +720,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       AiChapterMarker,
       DocumentPageBreak,
       DocumentSpacer,
+      DocumentSpacingSelection,
       DocumentTextStyle,
       DocumentPresentationAttributes,
       ...(collaborationSession ? [
@@ -741,6 +760,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     setTableActive(false);
     setActiveSelection(null);
     selectionRef.current = null;
+    lastActionRef.current = null;
+    setRepeatLabel(''); setRepeatStatus('');
   }, [documentKey]);
 
   useEffect(() => {
@@ -772,40 +793,30 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     return { deleted: true, ...(src ? { src } : {}) };
   };
 
-  const applyTextFormatting = (next: { fontFamily?: string; fontSize?: string; color?: string | null }) => {
-    if (!editor) return;
-    const current = editor.getAttributes('documentTextStyle');
-    const nextFamily = next.fontFamily === undefined ? normalizeFontFamily(current.fontFamily) : normalizeFontFamily(next.fontFamily);
-    const nextSize = next.fontSize === undefined ? normalizeFontSize(current.fontSize) : normalizeFontSize(next.fontSize);
-    const nextColor = next.color === undefined ? normalizeTextColor(current.color) : normalizeTextColor(next.color);
-    const chain = editor.chain().focus();
-    const savedSelection = selectionRef.current;
-    if (savedSelection) chain.setTextSelection({ from: savedSelection.from, to: savedSelection.to });
-    if (!nextFamily && !nextSize && !nextColor) chain.unsetMark('documentTextStyle').run();
-    else chain.setMark('documentTextStyle', { fontFamily: nextFamily, fontSize: nextSize, color: nextColor }).run();
+  const runAction = (action: RepeatableDocumentAction) => {
+    if (!editor || !applyDocumentAction(editor, action)) return false;
+    editor.view.focus();
+    lastActionRef.current = action;
+    setRepeatLabel(documentActionLabel(action));
+    setRepeatStatus('');
+    return true;
   };
-
-  const insertBlankLine = () => {
-    if (!editor) return;
-    const selection = editor.state.selection;
-    // Multi-cell ranges are table operations, not a valid single block insertion point.
-    if (selection instanceof CellSelection) return;
-    const spacer = editor.schema.nodes.documentSpacer.create({ heightPx: normalizeSpacerHeight(blankLineHeight) });
-    const empty = selection.empty && selection.$from.parent.type.name === 'paragraph' && selection.$from.parent.textContent.trim() === '';
-    const position = empty ? selection.$from.before() : selection instanceof NodeSelection ? selection.to : selection.$to.depth > 0 ? selection.$to.after() : selection.to;
-    const tr = empty ? editor.state.tr.replaceWith(position, selection.$from.after(), spacer) : editor.state.tr.insert(position, spacer);
-    tr.setSelection(NodeSelection.create(tr.doc, position));
-    editor.view.dispatch(tr.scrollIntoView()); editor.view.focus();
+  const repeatAction = () => {
+    const action = lastActionRef.current;
+    if (!editor || !action || !applyDocumentAction(editor, action)) {
+      setRepeatStatus(action ? '이 작업을 적용할 위치를 먼저 선택하세요.' : '먼저 서식이나 삽입 작업을 하세요.');
+      return;
+    }
+    setRepeatStatus(`${documentActionLabel(action)} 반복 완료`);
   };
-
-  const applyBlankLineHeight = () => {
-    if (!editor || !spacingSelected) return;
-    const selection = editor.state.selection;
-    if (selection instanceof NodeSelection && ['documentSpacer', 'documentPageBreak'].includes(selection.node.type.name)) {
-      const tr = editor.state.tr.replaceWith(selection.from, selection.to, editor.schema.nodes.documentSpacer.create({ heightPx: normalizeSpacerHeight(blankLineHeight) }));
-      tr.setSelection(NodeSelection.create(tr.doc, selection.from)); editor.view.dispatch(tr); editor.view.focus();
-    } else insertBlankLine();
-  };
+  const applyTextFormatting = (next: { fontFamily?: string; fontSize?: string; color?: string | null }) => runAction({ kind: 'text', attrs: {
+    ...(next.fontFamily !== undefined ? { fontFamily: normalizeFontFamily(next.fontFamily) } : {}),
+    ...(next.fontSize !== undefined ? { fontSize: normalizeFontSize(next.fontSize) } : {}),
+    ...(next.color !== undefined ? { color: normalizeTextColor(next.color) } : {})
+  } });
+  const toggleFormatting = (name: 'bold' | 'italic' | 'underline' | 'strike' | 'highlight') => runAction({ kind: 'mark', name, enabled: !editor?.isActive(name) });
+  const insertBlankLine = () => runAction({ kind: 'insertSpacer', height: normalizeSpacerHeight(blankLineHeight) });
+  const applyBlankLineHeight = () => runAction({ kind: 'spacing', height: normalizeSpacerHeight(blankLineHeight) });
 
   const applyImageWidth = (percentage: number) => {
     if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
@@ -813,8 +824,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const element = selectedImageElement(editor);
     const style = window.getComputedStyle(editor.view.dom);
     const availableWidth = Math.max(80, editor.view.dom.clientWidth - Number.parseFloat(style.paddingLeft || '0') - Number.parseFloat(style.paddingRight || '0'));
-    const currentWidth = Number(editor.state.selection.node.attrs.width) || element?.getBoundingClientRect().width || element?.naturalWidth || availableWidth;
-    const currentHeight = Number(editor.state.selection.node.attrs.height) || element?.getBoundingClientRect().height || element?.naturalHeight || currentWidth;
+    const currentWidth = Number(editor.state.selection.node.attrs.width) || element?.offsetWidth || element?.naturalWidth || availableWidth;
+    const currentHeight = Number(editor.state.selection.node.attrs.height) || element?.offsetHeight || element?.naturalHeight || currentWidth;
     const aspectRatio = currentWidth > 0 && currentHeight > 0 ? currentWidth / currentHeight : 1;
     const width = Math.max(80, Math.round((availableWidth * normalized) / 100));
     const height = Math.max(40, Math.round(width / aspectRatio));
@@ -823,13 +834,13 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       element.style.width = `${width}px`;
       element.style.height = `${height}px`;
     }
-    editor.chain().focus().updateAttributes('image', { width, height }).run();
+    runAction({ kind: 'attributes', target: 'image', attrs: { width, height } });
   };
 
   const applyImageAlignment = (alignment: 'left' | 'center' | 'right') => {
     if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
     setImageAlignment(alignment);
-    editor.chain().focus().updateAttributes('image', { alignment }).run();
+    runAction({ kind: 'attributes', target: 'image', attrs: { alignment } });
   };
 
   const applyTablePresentation = (attributes: { tableWidth?: number; tableAlignment?: 'left' | 'center' | 'right'; tableDensity?: 'compact' | 'normal' | 'comfortable' }) => {
@@ -837,46 +848,19 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     if (attributes.tableWidth !== undefined) setTableWidthPercent(attributes.tableWidth);
     if (attributes.tableAlignment) setTableAlignment(attributes.tableAlignment);
     if (attributes.tableDensity) setTableDensity(attributes.tableDensity);
-    editor.chain().focus().updateAttributes('table', attributes).run();
+    runAction({ kind: 'attributes', target: 'table', attrs: attributes });
   };
 
   const applyCellVerticalAlignment = (alignment: 'top' | 'middle' | 'bottom') => {
-    if (!editor?.isActive('table')) return;
-    const rect = selectedRect(editor.state);
-    let transaction = editor.state.tr;
-    for (const relativePosition of rect.map.cellsInRect({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })) {
-      const position = rect.tableStart + relativePosition;
-      const node = transaction.doc.nodeAt(position);
-      if (node && (node.type.name === 'tableCell' || node.type.name === 'tableHeader')) transaction = transaction.setNodeMarkup(position, undefined, { ...node.attrs, verticalAlignment: alignment });
-    }
-    editor.view.dispatch(transaction.scrollIntoView());
-    editor.commands.focus();
-    setCellVerticalAlignment(alignment);
+    if (runAction({ kind: 'cellAlign', alignment })) setCellVerticalAlignment(alignment);
   };
 
   const applySelectedTableMeasurements = () => {
-    if (!editor?.isActive('table')) return;
-    const rect = selectedRect(editor.state);
-    const widthPx = Math.round(clampMeasurement(columnWidthMm, 10, 180, 35) * 96 / 25.4);
-    const normalizedRowHeight = rowHeightMm.trim() ? clampMeasurement(rowHeightMm, 6, 100, 12) : null;
-    let transaction = editor.state.tr;
-    for (const relativePosition of rect.map.cellsInRect({ left: rect.left, right: rect.right, top: 0, bottom: rect.map.height })) {
-      const position = rect.tableStart + relativePosition;
-      const node = transaction.doc.nodeAt(position);
-      if (!node || (node.type.name !== 'tableCell' && node.type.name !== 'tableHeader')) continue;
-      const span = Math.max(1, Number(node.attrs.colspan) || 1);
-      transaction = transaction.setNodeMarkup(position, undefined, { ...node.attrs, colwidth: Array.from({ length: span }, () => widthPx) });
+    const width = clampMeasurement(columnWidthMm, 10, 180, 35);
+    const height = rowHeightMm.trim() ? clampMeasurement(rowHeightMm, 6, 100, 12) : null;
+    if (runAction({ kind: 'measurements', width, height })) {
+      setColumnWidthMm(String(width)); setRowHeightMm(height === null ? '' : String(height));
     }
-    let rowPosition = rect.tableStart;
-    for (let rowIndex = 0; rowIndex < rect.table.childCount; rowIndex += 1) {
-      const row = rect.table.child(rowIndex);
-      if (rowIndex >= rect.top && rowIndex < rect.bottom) transaction = transaction.setNodeMarkup(rowPosition, undefined, { ...row.attrs, rowHeightMm: normalizedRowHeight });
-      rowPosition += row.nodeSize;
-    }
-    editor.view.dispatch(transaction.scrollIntoView());
-    editor.commands.focus();
-    setColumnWidthMm(String(clampMeasurement(columnWidthMm, 10, 180, 35)));
-    setRowHeightMm(normalizedRowHeight === null ? '' : String(normalizedRowHeight));
   };
 
   useImperativeHandle(ref, () => ({
@@ -895,14 +879,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         setTableDialogOpen(true);
         return;
       }
-      editor?.chain().focus().insertTable({ rows, cols: columns, withHeaderRow: true }).run();
+      runAction({ kind: 'table', rows, columns });
     },
     insertImage: ({ src, alt, title }) => {
       editor?.chain().focus().setImage({ src, alt, title: title ?? alt }).run();
     },
     deleteSelectedTable: () => {
       if (!editor?.isActive('table')) return false;
-      editor.chain().focus().deleteTable().run();
+      runAction({ kind: 'command', command: 'deleteTable' });
       return true;
     },
     deleteSelectedImage: () => {
@@ -999,8 +983,16 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
 
   return <>
-    {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{editor?.chain().focus().insertTable({rows:tableRows,cols:tableColumns,withHeaderRow:true}).run();setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
-    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${pageMode === 'a4-portrait' ? ' is-a4-portrait' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label}>
+    {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{runAction({ kind: 'table', rows: tableRows, columns: tableColumns });setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
+    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${pageMode === 'a4-portrait' ? ' is-a4-portrait' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label} onKeyDownCapture={event => {
+      if (readOnly || preview || event.altKey || event.nativeEvent.isComposing || (event.target instanceof HTMLElement && event.target.closest('input,select,textarea'))) return;
+      if (event.key === 'F4' && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); requestAnimationFrame(() => repeatAction()); }
+      else if ((event.ctrlKey || event.metaKey) && !event.shiftKey && ['b','i','u'].includes(event.key.toLowerCase())) {
+        event.preventDefault(); event.stopPropagation();
+        toggleFormatting(({ b:'bold', i:'italic', u:'underline' } as const)[event.key.toLowerCase() as 'b'|'i'|'u']);
+      }
+    }}>
+    <div className="structured-editor__top-tools" onMouseDownCapture={() => { if (editor) preserveSpacingSelection(editor); }}>
     <header className="structured-editor__header">
       <div><strong>{label}</strong><span>{readOnly ? '읽기 전용' : collaborationSession ? '실시간 공동 편집 + 자동 저장' : '자동 저장 호환 편집기'}</span></div>
       {collaborationSession && <div className="structured-editor__collaboration" data-status={collaborationStatus}>
@@ -1020,6 +1012,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <div className="structured-editor__toolbar-group" data-label="실행">
         <ToolbarButton label="실행 취소" disabled={!editor?.can().undo()} onClick={() => editor?.chain().focus().undo().run()}>↶</ToolbarButton>
         <ToolbarButton label="다시 실행" disabled={!editor?.can().redo()} onClick={() => editor?.chain().focus().redo().run()}>↷</ToolbarButton>
+        <ToolbarButton label={repeatLabel ? `F4 반복: ${repeatLabel}` : 'F4 이전 작업 반복'} disabled={!repeatLabel} onClick={repeatAction}>F4 반복</ToolbarButton>
       </div>
       <div className="structured-editor__toolbar-group structured-editor__text-controls" data-label="글자">
         <label><span>글꼴</span><select aria-label="선택 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{['기본','한글 기본·시스템','무료 한글 글꼴','영문 글꼴'].map((group) => <optgroup key={group} label={group}>{FONT_FAMILIES.filter((font) => font.group === group).map((font) => <option key={font.label} value={font.value} style={font.value ? { fontFamily: font.value } : undefined}>{font.label}</option>)}</optgroup>)}</select></label>
@@ -1028,31 +1021,32 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="글자 색상 기본값" disabled={!normalizeTextColor(editor?.getAttributes('documentTextStyle').color)} onClick={() => applyTextFormatting({ color: null })}>색상 해제</ToolbarButton>
       </div>
       <div className="structured-editor__toolbar-group" data-label="강조">
-        <ToolbarButton label="굵게" active={editor?.isActive('bold')} onClick={() => editor?.chain().focus().toggleBold().run()}><b>B</b></ToolbarButton>
-        <ToolbarButton label="기울임" active={editor?.isActive('italic')} onClick={() => editor?.chain().focus().toggleItalic().run()}><i>I</i></ToolbarButton>
-        <ToolbarButton label="밑줄" active={editor?.isActive('underline')} onClick={() => editor?.chain().focus().toggleUnderline().run()}><u>U</u></ToolbarButton>
-        <ToolbarButton label="취소선" active={editor?.isActive('strike')} onClick={() => editor?.chain().focus().toggleStrike().run()}><s>S</s></ToolbarButton>
-        <ToolbarButton label="형광펜" active={editor?.isActive('highlight')} onClick={() => editor?.chain().focus().toggleHighlight().run()}>강조</ToolbarButton>
+        <ToolbarButton label="굵게" active={editor?.isActive('bold')} onClick={() => toggleFormatting('bold')}><b>B</b></ToolbarButton>
+        <ToolbarButton label="기울임" active={editor?.isActive('italic')} onClick={() => toggleFormatting('italic')}><i>I</i></ToolbarButton>
+        <ToolbarButton label="밑줄" active={editor?.isActive('underline')} onClick={() => toggleFormatting('underline')}><u>U</u></ToolbarButton>
+        <ToolbarButton label="취소선" active={editor?.isActive('strike')} onClick={() => toggleFormatting('strike')}><s>S</s></ToolbarButton>
+        <ToolbarButton label="형광펜" active={editor?.isActive('highlight')} onClick={() => toggleFormatting('highlight')}>강조</ToolbarButton>
       </div>
       <div className="structured-editor__toolbar-group" data-label="정렬">
-        <ToolbarButton label="왼쪽 정렬" active={editor?.isActive({ textAlign: 'left' })} onClick={() => editor?.chain().focus().setTextAlign('left').run()}>왼쪽</ToolbarButton>
-        <ToolbarButton label="가운데 정렬" active={editor?.isActive({ textAlign: 'center' })} onClick={() => editor?.chain().focus().setTextAlign('center').run()}>가운데</ToolbarButton>
-        <ToolbarButton label="오른쪽 정렬" active={editor?.isActive({ textAlign: 'right' })} onClick={() => editor?.chain().focus().setTextAlign('right').run()}>오른쪽</ToolbarButton>
+        <ToolbarButton label="왼쪽 정렬" active={editor?.isActive({ textAlign: 'left' })} onClick={() => runAction({ kind: 'align', alignment: 'left' })}>왼쪽</ToolbarButton>
+        <ToolbarButton label="가운데 정렬" active={editor?.isActive({ textAlign: 'center' })} onClick={() => runAction({ kind: 'align', alignment: 'center' })}>가운데</ToolbarButton>
+        <ToolbarButton label="오른쪽 정렬" active={editor?.isActive({ textAlign: 'right' })} onClick={() => runAction({ kind: 'align', alignment: 'right' })}>오른쪽</ToolbarButton>
       </div>
       <div className="structured-editor__toolbar-group structured-editor__toolbar-table" data-label="표">
         <ToolbarButton label="표 삽입" onClick={() => onRequestInsertTable ? onRequestInsertTable() : setTableDialogOpen(true)}>표 +</ToolbarButton>
-        <ToolbarButton label="표 행 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addRowAfter().run()}>행 +</ToolbarButton>
-        <ToolbarButton label="표 열 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addColumnAfter().run()}>열 +</ToolbarButton>
-        <ToolbarButton label="표 행 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteRow().run()}>행 −</ToolbarButton>
-        <ToolbarButton label="표 열 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteColumn().run()}>열 −</ToolbarButton>
-        <ToolbarButton label="표 셀 병합" disabled={!editor?.can().mergeCells()} onClick={() => editor?.chain().focus().mergeCells().run()}>셀 병합</ToolbarButton>
-        <ToolbarButton label="표 셀 분할" disabled={!editor?.can().splitCell()} onClick={() => editor?.chain().focus().splitCell().run()}>셀 분할</ToolbarButton>
-        <ToolbarButton label="표 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
+        {tableActive && <><ToolbarButton label="표 행 추가" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'addRowAfter' })}>행 +</ToolbarButton>
+        <ToolbarButton label="표 열 추가" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'addColumnAfter' })}>열 +</ToolbarButton>
+        <ToolbarButton label="표 행 삭제" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'deleteRow' })}>행 −</ToolbarButton>
+        <ToolbarButton label="표 열 삭제" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'deleteColumn' })}>열 −</ToolbarButton>
+        <ToolbarButton label="표 셀 병합" disabled={!editor?.can().mergeCells()} onClick={() => runAction({ kind: 'command', command: 'mergeCells' })}>셀 병합</ToolbarButton>
+        <ToolbarButton label="표 셀 분할" disabled={!editor?.can().splitCell()} onClick={() => runAction({ kind: 'command', command: 'splitCell' })}>셀 분할</ToolbarButton>
+        <ToolbarButton label="표 삭제" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'deleteTable' })}>표 삭제</ToolbarButton></>}
       </div>
       <div className="structured-editor__toolbar-group structured-editor__toolbar-insert" data-label="삽입·정리">
         <ToolbarButton label="링크" active={editor?.isActive('link')} onClick={addLink}>링크</ToolbarButton>
-        <ToolbarButton label="이미지" onClick={addImage}>이미지</ToolbarButton>
-        <ToolbarButton label="선택 이미지 위로 이동" disabled={!imageSelected} onClick={() => {
+        <ToolbarButton label="이미지" disabled={selectionAssistant?.busy} onClick={onRequestInsertImage ?? addImage}>이미지</ToolbarButton>
+        {selectionAssistant && <ToolbarButton label="AI 문장 개선" active={showAssistant} onClick={() => setShowAssistant(current => !current)}>AI 문장 개선</ToolbarButton>}
+        {imageSelected && <><ToolbarButton label="선택 이미지 위로 이동" disabled={!imageSelected} onClick={() => {
           if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
           const parent = editor.state.selection.$from.parent; const index = editor.state.selection.$from.index(); if (index < 1) return;
           const previous = parent.child(index - 1); const image = editor.state.selection.node; const from = editor.state.selection.from; const nextPosition = from - previous.nodeSize;
@@ -1064,18 +1058,26 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           const next = parent.child(index + 1); const image = editor.state.selection.node; const from = editor.state.selection.from; const nextPosition = from + next.nodeSize;
           const transaction = editor.state.tr.delete(from, from + image.nodeSize).insert(nextPosition, image); transaction.setSelection(NodeSelection.create(transaction.doc, nextPosition)); editor.view.dispatch(transaction.scrollIntoView());
         }}>이미지 ↓</ToolbarButton>
-        <ToolbarButton label="선택 이미지 삭제" disabled={!imageSelected} onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
-        <ToolbarButton label="현재 위치에서 다음 A4 쪽 시작" onClick={() => editor?.chain().focus().insertContent({ type: 'documentPageBreak' }).run()}>쪽 나누기</ToolbarButton>
-        <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>구분선</ToolbarButton>
-        <ToolbarButton label="서식 지우기" onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}>서식 지우기</ToolbarButton>
+        <ToolbarButton label="선택 이미지 삭제" disabled={!imageSelected} onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton></>}
+        <ToolbarButton label="현재 위치에서 다음 A4 쪽 시작" onClick={() => runAction({ kind: 'pageBreak' })}>쪽 나누기</ToolbarButton>
+        <ToolbarButton label="구분선" onClick={() => runAction({ kind: 'command', command: 'setHorizontalRule' })}>구분선</ToolbarButton>
+        <ToolbarButton label="서식 지우기" onClick={() => runAction({ kind: 'clearFormat' })}>서식 지우기</ToolbarButton>
       </div>
+    </div>}
+    {!readOnly && !preview && showAssistant && selectionAssistant && <div className="structured-editor__assistant" aria-label="AI 문장 개선 도구">
+      <span>{activeSelection ? `${activeSelection.text.length}자 선택` : '문장을 먼저 드래그하세요.'}</span>
+      <ToolbarButton label="선택 문장 전문적으로 개선" disabled={!activeSelection || selectionAssistant.disabled || selectionAssistant.busy} onClick={() => runSelectionImprovement('professional')}>전문적으로</ToolbarButton>
+      <ToolbarButton label="선택 문장 간결하게 개선" disabled={!activeSelection || selectionAssistant.disabled || selectionAssistant.busy} onClick={() => runSelectionImprovement('concise')}>간결하게</ToolbarButton>
+      <label>요청 <input aria-label="문장 개선 요청" value={selectionAssistant.instruction ?? ''} maxLength={2000} onChange={event => selectionAssistant.onInstructionChange?.(event.target.value)} placeholder="원하는 수정 내용"/></label>
+      <ToolbarButton label="맞춤 문장 개선" disabled={!activeSelection || selectionAssistant.disabled || selectionAssistant.busy || (selectionAssistant.instruction?.trim().length ?? 0) < 3} onClick={() => runSelectionImprovement('custom')}>{selectionAssistant.busy ? '개선 중…' : '요청 적용'}</ToolbarButton>
+      {selectionAssistant.extraControls}
     </div>}
     {!readOnly && !preview && <div className="structured-editor__spacing-controls" role="group" aria-label="빈 줄 간격 편집">
       <label>빈 줄 간격 <input aria-label="빈 줄 간격 픽셀" type="number" min="1" max="240" step="1" value={blankLineHeight} onChange={event => setBlankLineHeight(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); applyBlankLineHeight(); } }}/><span>px</span></label>
       <ToolbarButton label="현재 위치에 빈 줄 삽입" onClick={insertBlankLine} disabled={!blankLineHeight || spacingBlocked}>빈 줄 삽입</ToolbarButton>
       <ToolbarButton label="선택한 빈 줄 간격 적용" onClick={applyBlankLineHeight} disabled={!spacingSelected || !blankLineHeight}>선택 간격 적용</ToolbarButton>
-      <ToolbarButton label="선택한 빈 줄 또는 쪽 나누기 삭제" disabled={!spacingSelected} onClick={() => { if (!editor) return; if (editor.state.selection instanceof NodeSelection) editor.chain().focus().deleteSelection().run(); else editor.chain().focus().selectParentNode().deleteSelection().run(); }}>간격 삭제</ToolbarButton>
-      <small>{spacingBlocked?'여러 셀 선택을 해제하고 빈 줄을 넣을 위치에 커서를 놓으세요.':'빈 줄 클릭 → 간격 적용. 쪽 나누기를 선택해 적용하면 빈 줄로 바뀝니다.'}</small>
+      <ToolbarButton label="선택한 빈 줄 또는 쪽 나누기 삭제" disabled={!spacingSelected} onClick={() => runAction({ kind: 'deleteSpacing' })}>간격 삭제</ToolbarButton>
+      <small role="status">{spacingBlocked ? '셀 선택을 해제하고 위치를 선택하세요.' : spacingCount ? `빈 줄 ${spacingCount}개 선택 · Ctrl+클릭으로 추가/해제` : 'Ctrl+빈 줄 클릭: 여러 간격 선택'}</small>
     </div>}
     {!readOnly && !preview && imageSelected && <div className="structured-editor__object-controls is-image" role="group" aria-label="선택 이미지 크기와 정렬">
       <strong>선택 이미지</strong>
@@ -1094,9 +1096,12 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <div><span>셀 간격</span>{(['compact', 'normal', 'comfortable'] as const).map((density) => <ToolbarButton key={density} label={`표 ${density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}`} active={tableDensity === density} onClick={() => applyTablePresentation({ tableDensity: density })}>{density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}</ToolbarButton>)}</div>
       <div className="structured-editor__table-measurements"><label><span>선택 열 너비</span><input aria-label="선택 열 너비 밀리미터" type="number" min="10" max="180" step="1" value={columnWidthMm} onChange={(event) => setColumnWidthMm(event.target.value)}/><output>mm</output></label><label><span>선택 행 높이</span><input aria-label="선택 행 높이 밀리미터" type="number" min="6" max="100" step="1" value={rowHeightMm} placeholder="자동" onChange={(event) => setRowHeightMm(event.target.value)}/><output>{rowHeightMm ? 'mm' : '자동'}</output></label><ToolbarButton label="선택 행 높이를 내용에 맞게 자동 조정" onClick={()=>setRowHeightMm('')}>행높이 자동</ToolbarButton><ToolbarButton label="선택한 표 셀의 열 너비와 행 높이 적용" onClick={applySelectedTableMeasurements}>치수 적용</ToolbarButton></div>
       <small>셀을 선택한 뒤 상하 정렬과 열·행 치수를 적용할 수 있습니다. 열 경계선 드래그도 그대로 지원합니다.</small>
-      <ToolbarButton label="표 삭제" onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
+      <ToolbarButton label="표 삭제" onClick={() => runAction({ kind: 'command', command: 'deleteTable' })}>표 삭제</ToolbarButton>
     </div>}
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
+    <span className="structured-editor__repeat-status" role="status">{repeatStatus}</span>
+    </div>
+    <DocumentReviewPages previewContent={previewContent} width={previewWidth}>
     <div className="structured-editor__canvas">
       {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(editor?.getHTML() ?? '') }} /> : <>
         {editor && <BubbleMenu
@@ -1117,13 +1122,13 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           <label className="structured-editor__selection-format"><span>글꼴</span><select aria-label="선택 영역 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontFamily:event.target.value})}>{FONT_FAMILIES.map((font)=><option key={font.label} value={font.value} style={font.value?{fontFamily:font.value}:undefined}>{font.label}</option>)}</select></label>
           <label className="structured-editor__selection-format is-size"><span>크기</span><select aria-label="선택 영역 글자 크기" value={fontSize} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontSize:event.target.value})}>{FONT_SIZES.map((size)=><option key={size||'default'} value={size}>{size?`${size}px`:'기본'}</option>)}</select></label>
           <label className="structured-editor__selection-color"><span>색상</span><input aria-label="선택 영역 글자 색상" type="color" value={textColor} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({color:event.target.value})}/></label>
-          <button type="button" onMouseDown={(event)=>event.preventDefault()} className={editor.isActive('bold')?'is-active':''} onClick={()=>editor.chain().focus().toggleBold().run()} aria-label="굵게">굵게</button>
-          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('left').run()}>왼쪽</button>
-          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('center').run()}>가운데</button>
-          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().setTextAlign('right').run()}>오른쪽</button>
-          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().insertContent({type:'documentPageBreak'}).run()}>쪽 나누기</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} className={editor.isActive('bold')?'is-active':''} onClick={()=>toggleFormatting('bold')} aria-label="굵게">굵게</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'align', alignment: 'left' })}>왼쪽</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'align', alignment: 'center' })}>가운데</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'align', alignment: 'right' })}>오른쪽</button>
+          <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'pageBreak' })}>쪽 나누기</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={insertBlankLine}>빈 줄</button>
-          {tableActive&&<><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addRowAfter().run()}>행 +</button><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>editor.chain().focus().addColumnAfter().run()}>열 +</button></>}
+          {tableActive&&<><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'command', command: 'addRowAfter' })}>행 +</button><button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'command', command: 'addColumnAfter' })}>열 +</button></>}
           {selectionAssistant&&<>
           <span aria-hidden="true" />
           <button type="button" className="is-ai" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('professional')}>✦ 전문적으로</button>
@@ -1134,6 +1139,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <EditorContent editor={editor} />
       </>}
     </div>
+    </DocumentReviewPages>
     <footer>{pageMode==='a4-portrait'&&<span className="structured-editor__a4-guide">연속 편집 영역 · 머리글 포함 실제 페이지는 출력 미리보기에서 확인</span>}{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? '실시간 공동편집 연결' : 'Ctrl+Z 실행 취소 · 검수 완료 시 버전 저장'}</span></footer>
     </section>
   </>;

@@ -3,12 +3,12 @@ import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { JSONContent } from '@tiptap/core';
 import { StructuredDocumentEditor, renderStructuredDocumentHtml, editorHtmlToMarkdown, markdownToEditorHtml } from '../src/documents/StructuredDocumentEditor';
-import { DocumentPreviewPane } from '../src/documents/DocumentPreviewPane';
 import { ProposalFinalChapterPages } from '../src/proposals/ProposalView';
 import { ReportFinalDocumentPreview } from '../src/routes/PreviewReportStudio';
 import '../src/theme-system.css';
 import '../src/documents/StructuredDocumentEditor.css';
 import '../src/routes/PreviewReportStudio.css';
+import { editingContracts } from './document-editing-contracts';
 
 const p = (text:string):JSONContent => ({type:'paragraph',content:[{type:'text',text}]});
 const sample:JSONContent={type:'doc',content:[{type:'heading',attrs:{level:2},content:[{type:'text',text:'편집·출력 간격 검증'}]},p('이 문단 다음의 빈 줄을 클릭하여 간격을 바꾸세요.'),{type:'documentSpacer',attrs:{heightPx:24}},p('이 문장은 빈 줄 다음에 오는 본문입니다.'),{type:'paragraph'},{type:'paragraph'},{type:'paragraph'},p('연속 빈 문단은 자동 쪽 나누기가 아닙니다.'),{type:'table',attrs:{tableWidth:100},content:[{type:'tableRow',content:['업무','금액'].map(text=>({type:'tableHeader',attrs:{colwidth:[330]},content:[p(text)]}))},{type:'tableRow',content:['검토','1,000'].map(text=>({type:'tableCell',attrs:{colwidth:[330]},content:[p(text)]}))}]}]};
@@ -49,18 +49,19 @@ function contracts():string[]{
   const restored=parse(markdownToEditorHtml(editorHtmlToMarkdown(html)));
   assert(restored.querySelectorAll('td').length===2,'표 셀 유실');assert(restored.querySelectorAll('col').length===2,'열 치수 유실');assert(restored.querySelector('img')?.getAttribute('width')==='300','이미지 크기 유실');
  });
- return results;
+ return [...results, ...editingContracts()];
 }
 function Fixture(){
- const [mode,setMode]=useState('proposal');const [json,setJson]=useState<JSONContent|null>(sample);const [body,setBody]=useState(()=>markdown(sample));const [epoch,setEpoch]=useState(0);const [results,setResults]=useState<string[]>([]);const [width,setWidth]=useState('100%');
+ const [showOutput,setShowOutput]=useState(false);const [mode,setMode]=useState('proposal');const [json,setJson]=useState<JSONContent|null>(sample);const [body,setBody]=useState(()=>markdown(sample));const [epoch,setEpoch]=useState(0);const [results,setResults]=useState<string[]>([]);const [width,setWidth]=useState('100%');
  const chapter={number:1,title:'간격 검수',kind:'VARIABLE' as const,body,editorJson:json};
  return <main style={{padding:16,maxWidth:width,margin:'auto',background:'#f1f5f9',color:'#17253a'}}>
   <header style={{display:'flex',gap:12,flexWrap:'wrap',padding:12}}><strong>CF96 로컬 회귀 · 업무 데이터와 연결 없음</strong><button onClick={()=>setResults(contracts())}>왕복 검증 실행</button><button onClick={()=>setMode('proposal')}>제안서</button><button onClick={()=>setMode('report')}>보고서</button><button onClick={()=>{setJson(null);setEpoch(x=>x+1);}}>Markdown으로 다시 열기</button><button onClick={()=>{setJson(sample);setBody(markdown(sample));setEpoch(x=>x+1);}}>샘플 초기화</button><select aria-label="검증 화면 폭" value={width} onChange={e=>setWidth(e.target.value)}>{['100%','1920px','1440px','1280px','800px','390px'].map(v=><option key={v}>{v}</option>)}</select></header>
+  <div><button onClick={()=>setShowOutput(current=>!current)}>4단계 렌더 비교</button><button onClick={()=>{setJson({type:'doc',content:[p('크기 조절 검증'),{type:'image',attrs:{src:'/qa/resize.svg',alt:'Resize QA',width:360,height:180}},...sample.content!]});setEpoch(x=>x+1);}}>이미지 크기 샘플</button></div>
   <output style={{whiteSpace:'pre-wrap',display:'block'}} aria-label="회귀 결과">{results.join('\n')}</output>
   <div className="document-review-split">
-   <StructuredDocumentEditor key={`${mode}-${epoch}`} documentKey={`qa-${epoch}`} pageMode={mode==='proposal'?'a4-portrait':'standard'} label="회귀 편집기" value={body} editorJson={json} onChange={(md,doc)=>{setBody(md);setJson(doc);}}/>
-   <DocumentPreviewPane width={mode==='proposal'?794:1123} title="출력 미리보기">{mode==='proposal'?<ProposalFinalChapterPages item={chapter} startPage={3} onPageCount={noCount}/>:<ReportFinalDocumentPreview title="보고서 검증" caseNumber="QA-96" caseTitle="로컬 검증" content={body} editorJson={json}/>}</DocumentPreviewPane>
+   <StructuredDocumentEditor key={`${mode}-${epoch}`} documentKey={`qa-${epoch}`} pageMode={mode==='proposal'?'a4-portrait':'standard'} label="회귀 편집기" selectionAssistant={{onImprove:()=>undefined, instruction:'원문 보존',onInstructionChange:()=>undefined}} previewWidth={mode==='proposal'?794:1123} previewContent={mode==='proposal'?<ProposalFinalChapterPages item={chapter} startPage={3} onPageCount={noCount}/>:<ReportFinalDocumentPreview title="보고서 검증" caseNumber="QA-96" caseTitle="로컬 검증" content={body} editorJson={json}/>} value={body} editorJson={json} onChange={(md,doc)=>{setBody(md);setJson(doc);}}/>
   </div>
+  {showOutput&&<section className="qa-final-compare" style={{width:mode==='proposal'?794:1123}}>{mode==='proposal'?<ProposalFinalChapterPages item={chapter} startPage={3} onPageCount={noCount}/>:<ReportFinalDocumentPreview title="보고서 검증" caseNumber="QA-96" caseTitle="로컬 검증" content={body} editorJson={json}/>}</section>}
   <details><summary>저장될 Markdown</summary><pre aria-label="저장 본문">{body}</pre></details>
  </main>;
 }

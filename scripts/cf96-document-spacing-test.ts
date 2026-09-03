@@ -16,22 +16,24 @@ test('CF96 expands only explicit spacing markers in stable order',()=>{
   assert.equal(expandDocumentSpacingMarkers('앞\n\n\n\n\n뒤'),'앞\n\n\n\n\n뒤');
   assert.equal(expandDocumentSpacingMarkers(html),html);
 });
-test('CF96 reviewer and preview share output renderer without scaling editable hit testing',()=>{
+test('CF96 reviewer and preview share output renderer and preserve explicit spacing',()=>{
   const read=(p:string)=>readFileSync(p,'utf8');
   const proposal=read('apps/web/src/proposals/ProposalView.tsx');
   const report=read('apps/web/src/routes/PreviewReportStudio.tsx');
   const editor=read('apps/web/src/documents/StructuredDocumentEditor.tsx');
   const pane=read('apps/web/src/documents/DocumentPreviewPane.tsx');
+  const actions=read('apps/web/src/documents/document-editing-actions.ts');
   assert.match(proposal,/<details className="proposal-module-controls">/u);
-  assert.match(proposal,/<DocumentPreviewPane[^>]+>[\s\S]*?<ProposalFinalChapterPages/u);
+  assert.match(proposal,/previewContent=\{<ProposalFinalChapterPages/u);
   assert.doesNotMatch(proposal,/<section className="proposal-review-page-parity"/u);
-  assert.equal((report.match(/<DocumentPreviewPane width=\{1123\}/gu)??[]).length,2);
+  assert.equal((report.match(/previewWidth=\{1123\} previewContent=\{<ReportFinalDocumentPreview/gu)??[]).length,2);
   assert.match(report,/JSON\.stringify\(editorJsonRef\.current\) !== JSON\.stringify\(requestEditorJson\)/u);
   assert.match(report,/marked\.parse\(expandDocumentSpacingMarkers\(content\)/u);
   assert.match(editor,/blankReplacement:[\s\S]*?data-document-spacer/u);
   assert.match(editor,/addRule\('emptyParagraph'/u);
-  assert.match(editor,/selection instanceof NodeSelection \? selection\.to/u);
+  assert.match(actions,/selection instanceof NodeSelection \? selection\.to/u);
   assert.doesNotMatch(editor,/runLength >= 3/u);
   assert.doesNotMatch(pane,/contentEditable|StructuredDocumentEditor/u);
   assert.match(pane,/transform: `scale/u);
+  assert.match(pane,/export function DocumentReviewPages/u);
 });

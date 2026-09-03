@@ -26,7 +26,7 @@ test('CF95 keeps every reviewed proposal sheet inside one visible A4 page', () =
   assert.match(proposal, /proposal-content-keep-together/u);
   assert.match(proposal, /PROPOSAL_PAGE_BODY_HEIGHT=913/u);
   assert.match(proposal, /child\.hasAttribute\('data-document-page-break'\)\)\{commit\(\);continue;\}/u);
-  assert.match(proposal, /4단계와 동일한 현재 장 페이지/u);
+  assert.match(proposal, /previewContent=\{<ProposalFinalChapterPages/u);
   assert.match(proposal, /<ProposalFinalChapterPages item=\{chapter\}/u);
   assert.match(proposal, /data-export-document-revision/u);
   assert.match(theme, /height:1123px;min-height:1123px[^}]*overflow:hidden/u);
