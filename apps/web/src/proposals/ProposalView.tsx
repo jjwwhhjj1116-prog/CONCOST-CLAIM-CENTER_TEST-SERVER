@@ -10,7 +10,7 @@ import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { DocumentPreviewPane } from '../documents/DocumentPreviewPane';
 import { expandDocumentSpacingMarkers } from '../documents/document-spacing';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
-import { StructuredDocumentEditor, normalizeStructuredDocumentHtml, renderStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { StructuredDocumentEditor, markdownToEditorHtml, normalizeStructuredDocumentHtml, renderStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import {
   proposalChapterWorkbook,
@@ -37,6 +37,8 @@ interface StudioInputs { clientName:string;projectTitle:string;subtitle:string;s
 const chapterTitles=['제안(용역)의 목적','당 현장의 핵심 쟁점 분석','업무 수행 내용 및 추진 계획','전문가 현황','당사의 강점','조직도 및 업무 영역','도시정비사업 공사비검증 실적','한국부동산원 공사비검증 실적','건설 클레임·소송·기술감정 실적','자격 증명자료','용역 조건 및 제안 범위','맺음말'];
 const blankChapters=():ProposalChapter[]=>chapterTitles.map((title,index)=>({number:index+1,title,kind:index>=3?'FIXED':'VARIABLE',body:'[작성 필요]'}));
 const repairLegacyProposalChapterMixup=(chapters:ProposalChapter[],objective:string,keyIssues:string,planNotes:string):ProposalChapter[]=>{
+  // Structured revisions are intentional user edits, not the old plain-text copy bug.
+  if(chapters.slice(0,3).some(chapter=>chapter.editorJson))return chapters;
   const variableBodies=[objective,keyIssues,planNotes].map((value)=>value.trim()).filter(Boolean);
   const firstThree=chapters.slice(0,3).map((chapter)=>chapter.body.trim());
   const comparable=(value:string)=>value.toLocaleLowerCase('ko-KR').replace(/[\s\p{P}\p{S}]+/gu,'');
@@ -279,6 +281,27 @@ function ProposalFinalDocumentPreview({projectTitle,subtitle,clientName,submissi
   </article>;
 }
 
+export function proposalChapterHasContent(chapter:Pick<ProposalChapter,'body'|'editorJson'>):boolean {
+  const meaningful=(text:string)=>Boolean(text.replace(/\u00a0/gu,' ').trim()&&text.trim()!=='[작성 필요]');
+  if(chapter.editorJson){
+    const hasContent=(node:import('@tiptap/core').JSONContent):boolean=>node.type==='text'&&meaningful(node.text??'')||node.type==='image'&&typeof node.attrs?.src==='string'&&Boolean(node.attrs.src.trim())||Boolean(node.content?.some(hasContent));
+    return hasContent(chapter.editorJson);
+  }
+  const document=new DOMParser().parseFromString(markdownToEditorHtml(chapter.body),'text/html');
+  return meaningful(document.body.textContent??'')||Array.from(document.images).some(image=>Boolean(image.getAttribute('src')?.trim()));
+}
+
+export function ProposalManualDraft({chapters,documentKey,readOnly,onChange}:{chapters:ProposalChapter[];documentKey:string;readOnly:boolean;onChange:(number:number,body:string,json:import('@tiptap/core').JSONContent)=>void}){
+  const [selected,setSelected]=useState(1);
+  const item=chapters.find(chapter=>chapter.number===selected)??chapters[0];
+  if(!item)return null;
+  return <section className="proposal-manual-draft proposal-manual-document">
+    <header><div><b>1~3장 직접 작성</b><span>초안의 글과 표를 직접 수정하거나 외부 문서 내용을 붙여넣으세요. 작성 내용은 3단계로 그대로 이어집니다.</span></div></header>
+    <nav className="proposal-manual-document__chapters" aria-label="직접 작성할 장 선택">{chapters.map(chapter=><button type="button" key={chapter.number} aria-pressed={chapter.number===item.number} onClick={()=>setSelected(chapter.number)}>{chapter.number}. {chapter.title}</button>)}</nav>
+    <StructuredDocumentEditor key={`${documentKey}-${item.number}`} documentKey={`${documentKey}-${item.number}`} pageMode="a4-portrait" label={`${item.number}. ${item.title}`} value={item.body==='[작성 필요]'?'':item.body} editorJson={item.editorJson} readOnly={readOnly} parsePastedMarkup onChange={(body,json)=>onChange(item.number,body,json)}/>
+  </section>;
+}
+
 export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail='',onNavigate})=>{
   const requestedCaseId=new URLSearchParams(window.location.search).get('caseId')??'';
   const fromIntake=new URLSearchParams(window.location.search).get('from')==='intake';
@@ -338,9 +361,10 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
 
   const createProposal=async()=>{if(!selectedCaseId||!selectedTemplateId||!selectedTemplateSourceId)return;setBusy(true);setErrorMessage(null);try{const result=await apiRequest<{proposal:Proposal}>(`/api/cases/${selectedCaseId}/proposals`,{method:'POST',body:JSON.stringify({templateId:selectedTemplateId,sourceId:selectedTemplateSourceId})});await loadCaseData(selectedCaseId);await loadProposalDetail(selectedCaseId,result.proposal.id);setStep(1);setSuccessMessage('선택한 실무 템플릿으로 12개 챕터 제안서 작업공간을 만들었습니다. 1단계 입력부터 진행하세요.');onNavigate(`/proposals/editor?caseId=${encodeURIComponent(selectedCaseId)}`);}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'제안서를 만들지 못했습니다.');}finally{setBusy(false);}};
   const preparedChapters=()=>chapters.map((chapter)=>chapter.number===1?{...chapter,body:objective}:chapter.number===2?{...chapter,body:keyIssues}:chapter.number===3?{...chapter,body:planNotes}:chapter);
-  const chooseDraftMethod=(method:'AI'|'MANUAL')=>{setDraftMethod(method);if(method==='MANUAL')setChapters((current)=>current.map((chapter)=>{if(chapter.number===1&&(!chapter.body.trim()||chapter.body==='[작성 필요]'))return{...chapter,body:objective};if(chapter.number===2&&(!chapter.body.trim()||chapter.body==='[작성 필요]'))return{...chapter,body:keyIssues};if(chapter.number===3&&(!chapter.body.trim()||chapter.body==='[작성 필요]'))return{...chapter,body:planNotes};return chapter;}));};
+  const chooseDraftMethod=(method:'AI'|'MANUAL')=>{setDraftMethod(method);if(method==='MANUAL')setChapters((current)=>current.map((chapter)=>{if(chapter.editorJson)return chapter;if(chapter.number===1&&(!chapter.body.trim()||chapter.body==='[작성 필요]'))return{...chapter,body:objective};if(chapter.number===2&&(!chapter.body.trim()||chapter.body==='[작성 필요]'))return{...chapter,body:keyIssues};if(chapter.number===3&&(!chapter.body.trim()||chapter.body==='[작성 필요]'))return{...chapter,body:planNotes};return chapter;}));};
   const saveVersion=async(generationMode:'MANUAL'|'AI',nextStep:3|4=4)=>{
     if(!activeProposal||!selectedCaseId)return;
+    if(generationMode==='MANUAL'&&nextStep===3&&!chapters.slice(0,3).every(proposalChapterHasContent)){setErrorMessage('1~3장에 실제 내용을 작성한 뒤 담당자 검수로 이동하세요.');return;}
     if(![clientName,projectTitle,subtitle,submissionDate,keyIssues,objective,planNotes].every((value)=>value.trim())){setErrorMessage('1단계의 클라이언트·프로젝트 정보, 당 현장의 핵심 쟁점 분석, 제안 목적, 업무 수행 내용을 모두 입력하세요.');return;}
     setBusy(true);setErrorMessage(null);if(generationMode==='AI')setAiGeneration({kind:'draft',status:'running'});
     try{
@@ -376,7 +400,7 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
   const selectedCase=cases.find((item)=>item.id===selectedCaseId);const currentVersion=activeProposal?.versions?.[0];const hasAiDraft=Boolean(activeProposal?.versions?.some((version)=>version.generationMode==='AI'));const chapter=chapters[selectedChapter-1]??chapters[0];const selectedTemplateSource=sources.find((source)=>source.id===selectedTemplateSourceId);const selectedProposalType=templateTypes.find((item)=>item.id===selectedTemplateType);
   const step1Fields=[['클라이언트명',clientName],['프로젝트 제목',projectTitle],['제안서 부제',subtitle],['제출일',submissionDate],['당 현장의 핵심 쟁점 분석',keyIssues],['제안 목적·의뢰 배경',objective],['업무 수행 내용',planNotes]] as const;
   const step1Missing=step1Fields.filter(([,value])=>!value.trim()).map(([label])=>label);
-  const firstThreeComplete=chapters.slice(0,3).every((item)=>item.body.trim()&&item.body.trim()!=='[작성 필요]');
+  const firstThreeComplete=chapters.slice(0,3).every(proposalChapterHasContent);
   const allChaptersComplete=chapters.every((item)=>item.body.trim()&&item.body.trim()!=='[작성 필요]');
   const goToProposalStep=(target:number)=>{if(target<step){setStep(target);setStepValidationMessage('');return;}if(target>=2&&step1Missing.length){setStepValidationMessage(`1단계 필수 입력을 완료하세요: ${step1Missing.join(', ')}`);setStep(1);return;}if(target>=3&&(!firstThreeComplete||(dirty&&!currentVersion))){setStepValidationMessage(firstThreeComplete?'최초 초안을 저장해야 담당자 검수로 이동할 수 있습니다.':'1~3장 초안을 작성하고 저장해야 담당자 검수로 이동할 수 있습니다.');setStep(2);return;}if(target>=4&&(!allChaptersComplete||dirty||!currentVersion)){setStepValidationMessage(allChaptersComplete?'담당자 검수의 변경 내용을 저장한 뒤 전체 미리보기로 이동하세요.':'1~12장 내용을 모두 확인·작성해야 전체 미리보기로 이동할 수 있습니다.');setStep(3);return;}setStepValidationMessage('');setStep(target);};
   const chooseProposalType=(category:ProposalTemplateCategory)=>{const type=templateTypes.find((item)=>item.id===category);if(!type)return;setSelectedTemplateType(category);setSelectedTemplateSourceId(type.representativeSourceId);setSuccessMessage(`${type.label} 대표 템플릿과 유형별 1~3장 작성 지침을 적용했습니다.`);};
@@ -434,8 +458,8 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
           <button type="button" role="radio" aria-checked={draftMethod==='AI'} className={draftMethod==='AI'?'is-selected is-ai':''} onClick={()=>chooseDraftMethod('AI')}><span>✦ AI 자동작성</span><b>Gemini로 1~3장 초안 생성</b><small>1단계 입력과 프로젝트 근거를 사용합니다. API 연결이 필요합니다.</small></button>
           <button type="button" role="radio" aria-checked={draftMethod==='MANUAL'} className={draftMethod==='MANUAL'?'is-selected is-manual':''} onClick={()=>chooseDraftMethod('MANUAL')}><span>⌨ 수동·외부 LLM</span><b>직접 작성 또는 결과 붙여넣기</b><small>API 키 없이 작성하며 HWP·ChatGPT·Claude 등 외부 초안도 사용할 수 있습니다.</small></button>
         </div>
-        {draftMethod==='AI'?<><div className="proposal-ai-map"><div><b>Gemini 최초 초안</b><strong>01 · 02 · 03장</strong><span>목적, 핵심 쟁점, 수행계획 · 프로젝트당 1회</span></div><div><b>회사 공통 기본 모듈 병합</b><strong>04 ~ 12장</strong><span>전문가, 강점, 조직, 실적, 자격, 용역조건, 맺음말</span></div><div><b>보안 검증</b><strong>금액 마스킹</strong><span>AI 응답과 저장값의 민감정보 검증</span></div></div><label className="proposal-field"><span>근거 자료 버전 ID (선택, 쉼표 구분)</span><textarea value={sourceDocumentVersionIds} onChange={(event)=>{setSourceDocumentVersionIds(event.target.value);setDirty(true);}} placeholder="DOCVER-..."/></label>{hasAiDraft&&<p className="proposal-ai-once-complete" role="status"><b>✓ 최초 AI 초안 생성 완료</b><span>이제 3단계에서 사람이 직접 수정하세요. 기존 초안은 AI로 다시 덮어쓸 수 없습니다.</span></p>}</>:<section className="proposal-manual-draft"><header><div><b>API 없이 초안 작성</b><span>아래 1~3장을 직접 쓰거나 다른 LLM 결과를 붙여넣으세요. 저장 후 구조화 편집기로 이어집니다.</span></div></header>{chapters.slice(0,3).map((item)=><label key={item.number} className="proposal-field"><span>{item.number}. {item.title}</span><textarea value={item.body==='[작성 필요]'?'':item.body} onChange={(event)=>{setChapters((current)=>current.map((chapter)=>chapter.number===item.number?{...chapter,body:event.target.value,editorJson:null}:chapter));setDirty(true);}} placeholder={`${item.title} 내용을 직접 작성하거나 외부 LLM 결과를 붙여넣으세요.`}/></label>)}</section>}
-        <div className="proposal-next"><Button variant="secondary" onClick={()=>goToProposalStep(1)}>← 입력 수정</Button>{draftMethod==='AI'?(hasAiDraft?<Button className="workflow-next-action" onClick={()=>goToProposalStep(3)}>담당자 검수·편집으로 →</Button>:<Button className="gemini-action-button" onClick={()=>void saveVersion('AI')} disabled={busy||!canEdit}><span className="gemini-button-star" aria-hidden="true">✦</span> AI 자동작성 시작 · Gemini</Button>):<Button className="proposal-action-confirm workflow-next-action" onClick={()=>void saveVersion('MANUAL',3)} disabled={busy||!canEdit||chapters.slice(0,3).some((item)=>!item.body.trim()||item.body==='[작성 필요]')}>수동 초안 저장 · 담당자 검수로 →</Button>}</div>
+        {draftMethod==='AI'?<><div className="proposal-ai-map"><div><b>Gemini 최초 초안</b><strong>01 · 02 · 03장</strong><span>목적, 핵심 쟁점, 수행계획 · 프로젝트당 1회</span></div><div><b>회사 공통 기본 모듈 병합</b><strong>04 ~ 12장</strong><span>전문가, 강점, 조직, 실적, 자격, 용역조건, 맺음말</span></div><div><b>보안 검증</b><strong>금액 마스킹</strong><span>AI 응답과 저장값의 민감정보 검증</span></div></div><label className="proposal-field"><span>근거 자료 버전 ID (선택, 쉼표 구분)</span><textarea value={sourceDocumentVersionIds} onChange={(event)=>{setSourceDocumentVersionIds(event.target.value);setDirty(true);}} placeholder="DOCVER-..."/></label>{hasAiDraft&&<p className="proposal-ai-once-complete" role="status"><b>✓ 최초 AI 초안 생성 완료</b><span>이제 3단계에서 사람이 직접 수정하세요. 기존 초안은 AI로 다시 덮어쓸 수 없습니다.</span></p>}</>:<ProposalManualDraft chapters={chapters.slice(0,3)} documentKey={`proposal-manual-${activeProposal.id}`} readOnly={!canEdit||busy} onChange={(number,body,editorJson)=>{setChapters(current=>current.map(chapter=>chapter.number===number?{...chapter,body,editorJson}:chapter));setDirty(true);}}/>}
+        <div className="proposal-next"><Button variant="secondary" onClick={()=>goToProposalStep(1)}>← 입력 수정</Button>{draftMethod==='AI'?(hasAiDraft?<Button className="workflow-next-action" onClick={()=>goToProposalStep(3)}>담당자 검수·편집으로 →</Button>:<Button className="gemini-action-button" onClick={()=>void saveVersion('AI')} disabled={busy||!canEdit}><span className="gemini-button-star" aria-hidden="true">✦</span> AI 자동작성 시작 · Gemini</Button>):<Button className="proposal-action-confirm workflow-next-action" onClick={()=>void saveVersion('MANUAL',3)} disabled={busy||!canEdit||!firstThreeComplete}>수동 초안 저장 · 담당자 검수로 →</Button>}</div>
       </div>}
       {step===3&&<div className="proposal-stage proposal-editor-stage">
         <header className="workflow-stage-title"><div><b>STEP 3</b><h3>갑지·목차와 1~12장 전체를 직접 검수·수정하세요.</h3><p>갑지의 가변 제목과 제출 정보, 목차 제목, 본문 글꼴·크기·색상·표·원본 이미지를 모두 확인합니다. 최종 출력은 전 페이지 A4 세로형으로 고정됩니다.</p></div>{stepThreeDocumentTools}</header>

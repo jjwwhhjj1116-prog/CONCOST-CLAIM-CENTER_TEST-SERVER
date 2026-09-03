@@ -928,14 +928,6 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .erp-sync-banner{display:flex;align-items:center;gap:16px;margin:14px 0;padding:15px 18px;border:2px solid #0f9f73;border-radius:14px;background:#e9fff7;color:#073b2d}.erp-sync-banner strong{font-size:1rem}.erp-sync-banner span{font-size:.875rem;color:#174e40;flex:1}.erp-sync-banner button{min-height:40px;padding:0 16px;border:0;border-radius:10px;background:#075985;color:#fff;font-weight:800;cursor:pointer}.erp-sync-banner button:disabled{opacity:.55;cursor:wait}.erp-sync-banner.is-pending,.erp-sync-banner.is-failed{border-color:#f59e0b;background:#fff8e7;color:#713f12}.erp-sync-banner.is-pending span,.erp-sync-banner.is-failed span{color:#854d0e}
 .proposal-reception-summary{display:flex;flex-direction:column;gap:6px;margin-top:14px;padding:18px;border:2px solid #2563eb;border-radius:14px;background:#eff6ff;color:#172554}.proposal-reception-summary strong{font-size:1.25rem}.proposal-reception-summary span{font-size:.875rem;line-height:1.6}
 
-/* CF66: keep the document text controls compact without hiding useful formatting. */
-.structured-editor__text-controls { min-width: 270px; }
-.structured-editor__text-controls label > span { position: absolute; width: 0; height: 0; overflow: hidden; font-size: 0; }
-.structured-editor__text-controls select { max-width: 122px; }
-.structured-editor__text-controls label:nth-of-type(2) select { max-width: 70px; }
-.structured-editor__color-control input[type="color"] { width: 36px; }
-@media (max-width: 760px) { .structured-editor__text-controls { grid-template-columns: 1fr 84px 44px auto; } }
-
 /* CF67 · required fields must read as data-entry controls at a glance. */
 .ui-required-mark { color: #a54a00; font-style: normal; font-weight: 950; }
 .ui-field--required { --field-bg: #fff7cf; --border-strong: #d3a214; box-shadow: inset 4px 0 0 #f2c744; }

@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { JSONContent } from '@tiptap/core';
 import { StructuredDocumentEditor, renderStructuredDocumentHtml, editorHtmlToMarkdown, markdownToEditorHtml } from '../src/documents/StructuredDocumentEditor';
-import { ProposalFinalChapterPages } from '../src/proposals/ProposalView';
+import { ProposalFinalChapterPages, ProposalManualDraft, proposalChapterHasContent } from '../src/proposals/ProposalView';
 import { ReportFinalDocumentPreview } from '../src/routes/PreviewReportStudio';
 import '../src/theme-system.css';
 import '../src/documents/StructuredDocumentEditor.css';
@@ -49,18 +49,36 @@ function contracts():string[]{
   const restored=parse(markdownToEditorHtml(editorHtmlToMarkdown(html)));
   assert(restored.querySelectorAll('td').length===2,'표 셀 유실');assert(restored.querySelectorAll('col').length===2,'열 치수 유실');assert(restored.querySelector('img')?.getAttribute('width')==='300','이미지 크기 유실');
  });
+ check('수동 초안 내용 판정',()=>{
+  for(const body of ['[작성 필요]','<p><br></p>','<p>&nbsp;</p>','<table><tr><td></td></tr></table>','<!--DOCUMENT-SPACER:24-->']) assert(!proposalChapterHasContent({body}),'빈 HTML 통과');
+  assert(proposalChapterHasContent({body:'<table><tr><td>업무</td></tr></table>'}),'내용 있는 표 거절');
+  assert(!proposalChapterHasContent({body:'과거 본문',editorJson:{type:'doc',content:[{type:'paragraph'},{type:'documentSpacer',attrs:{heightPx:24}}]}}),'삭제된 JSON 정본 무시');
+  assert(proposalChapterHasContent({body:'',editorJson:{type:'doc',content:[{type:'image',attrs:{src:'/qa/resize.svg'}}]}}),'HWP 이미지 JSON 거절');
+  assert(proposalChapterHasContent({body:'<img src="/qa/resize.svg">'}),'HWP 이미지 HTML 거절');
+ });
+ check('글자 색상 HTML·Markdown 3회 왕복',()=>{
+  let html='<p><span style="color:#ff0000;font-size:13px">붉은 문장</span></p>';
+  for(let i=0;i<3;i++){
+   html=markdownToEditorHtml(editorHtmlToMarkdown(html));
+   assert(parse(html).querySelector('span')?.style.color==='rgb(255, 0, 0)','색상 유실');
+  }
+ });
  return [...results, ...editingContracts()];
 }
 function Fixture(){
+ const [manualChapters,setManualChapters]=useState(()=>[1,2,3].map(number=>({number,title:`직접 작성 ${number}장`,kind:'VARIABLE' as const,body:markdown(sample),editorJson:sample as JSONContent|null})));
  const [showOutput,setShowOutput]=useState(false);const [mode,setMode]=useState('proposal');const [json,setJson]=useState<JSONContent|null>(sample);const [body,setBody]=useState(()=>markdown(sample));const [epoch,setEpoch]=useState(0);const [results,setResults]=useState<string[]>([]);const [width,setWidth]=useState('100%');
  const chapter={number:1,title:'간격 검수',kind:'VARIABLE' as const,body,editorJson:json};
  return <main style={{padding:16,maxWidth:width,margin:'auto',background:'#f1f5f9',color:'#17253a'}}>
   <header style={{display:'flex',gap:12,flexWrap:'wrap',padding:12}}><strong>CF96 로컬 회귀 · 업무 데이터와 연결 없음</strong><button onClick={()=>setResults(contracts())}>왕복 검증 실행</button><button onClick={()=>setMode('proposal')}>제안서</button><button onClick={()=>setMode('report')}>보고서</button><button onClick={()=>{setJson(null);setEpoch(x=>x+1);}}>Markdown으로 다시 열기</button><button onClick={()=>{setJson(sample);setBody(markdown(sample));setEpoch(x=>x+1);}}>샘플 초기화</button><select aria-label="검증 화면 폭" value={width} onChange={e=>setWidth(e.target.value)}>{['100%','1920px','1440px','1280px','800px','390px'].map(v=><option key={v}>{v}</option>)}</select></header>
   <div><button onClick={()=>setShowOutput(current=>!current)}>4단계 렌더 비교</button><button onClick={()=>{setJson({type:'doc',content:[p('크기 조절 검증'),{type:'image',attrs:{src:'/qa/resize.svg',alt:'Resize QA',width:360,height:180}},...sample.content!]});setEpoch(x=>x+1);}}>이미지 크기 샘플</button></div>
   <output style={{whiteSpace:'pre-wrap',display:'block'}} aria-label="회귀 결과">{results.join('\n')}</output>
+  <div><button onClick={()=>setMode('manual')}>2단계 직접 작성</button><button disabled={!manualChapters.every(proposalChapterHasContent)} onClick={()=>{setBody(manualChapters[0].body);setJson(manualChapters[0].editorJson);setMode('proposal');setEpoch(x=>x+1);}}>직접 초안 3단계로 확인</button><button onClick={()=>void navigator.clipboard.writeText('## 붙여넣기 제목\n\n**굵은 문장**\n\n| 업무 | 금액 |\n| --- | --- |\n| 검토 | 1000 |')}>Markdown 예시 복사</button></div>
+  {mode==='manual'?<ProposalManualDraft chapters={manualChapters} documentKey="qa-manual" readOnly={false} onChange={(number,body,editorJson)=>setManualChapters(current=>current.map(chapter=>chapter.number===number?{...chapter,body,editorJson}:chapter))}/>:<>
   <div className="document-review-split">
    <StructuredDocumentEditor key={`${mode}-${epoch}`} documentKey={`qa-${epoch}`} pageMode={mode==='proposal'?'a4-portrait':'standard'} label="회귀 편집기" selectionAssistant={{onImprove:()=>undefined, instruction:'원문 보존',onInstructionChange:()=>undefined}} previewWidth={mode==='proposal'?794:1123} previewContent={mode==='proposal'?<ProposalFinalChapterPages item={chapter} startPage={3} onPageCount={noCount}/>:<ReportFinalDocumentPreview title="보고서 검증" caseNumber="QA-96" caseTitle="로컬 검증" content={body} editorJson={json}/>} value={body} editorJson={json} onChange={(md,doc)=>{setBody(md);setJson(doc);}}/>
   </div>
+  </>}
   {showOutput&&<section className="qa-final-compare" style={{width:mode==='proposal'?794:1123}}>{mode==='proposal'?<ProposalFinalChapterPages item={chapter} startPage={3} onPageCount={noCount}/>:<ReportFinalDocumentPreview title="보고서 검증" caseNumber="QA-96" caseTitle="로컬 검증" content={body} editorJson={json}/>}</section>}
   <details><summary>저장될 Markdown</summary><pre aria-label="저장 본문">{body}</pre></details>
  </main>;

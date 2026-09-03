@@ -10,7 +10,7 @@ import TextAlign from '@tiptap/extension-text-align';
 import { Extension, Mark, Node, generateHTML, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { DOMParser as ProseMirrorDOMParser, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
 import { CellSelection } from '@tiptap/pm/tables';
 import type { EditorView } from '@tiptap/pm/view';
@@ -67,6 +67,7 @@ interface StructuredDocumentEditorProps {
   placeholder?: string;
   readOnly?: boolean;
   compact?: boolean;
+  parsePastedMarkup?: boolean;
   pageMode?: 'standard' | 'a4-portrait';
   documentKey?: string;
   collaboration?: {
@@ -187,6 +188,8 @@ const normalizeTextColor = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLocaleLowerCase('en-US');
   if (/^#[0-9a-f]{6}$/u.test(normalized)) return normalized;
+  const rgb = normalized.match(/^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/u);
+  if (rgb && rgb.slice(1).every(channel => Number(channel) <= 255)) return `#${rgb.slice(1).map(channel => Number(channel).toString(16).padStart(2, '0')).join('')}`;
   const shortHex = normalized.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/u);
   return shortHex ? `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}` : null;
 };
@@ -555,8 +558,8 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: 
   }
 };
 
-const ToolbarButton = ({ active = false, disabled = false, label, onClick, children }: { active?: boolean; disabled?: boolean; label: string; onClick: () => void; children: React.ReactNode }) => (
-  <button type="button" className={active ? 'is-active' : ''} disabled={disabled} title={label} aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick}>{children}</button>
+const ToolbarButton = ({ active = false, disabled = false, label, tone, onClick, children }: { active?: boolean; disabled?: boolean; label: string; tone?: 'table' | 'image' | 'ai'; onClick: () => void; children: React.ReactNode }) => (
+  <button type="button" className={active ? 'is-active' : ''} data-tone={tone} disabled={disabled} title={label} aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick}>{children}</button>
 );
 
 const findMatches = (editor: Editor, query: string): Array<{ from: number; to: number }> => {
@@ -593,6 +596,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   placeholder = '내용을 입력하세요.',
   readOnly = false,
   compact = false,
+  parsePastedMarkup = false,
   pageMode = 'standard',
   documentKey,
   collaborationSession = null,
@@ -627,6 +631,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [rowHeightMm, setRowHeightMm] = useState('');
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState('');
+  const [inheritedFontSize, setInheritedFontSize] = useState('16');
   const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
   const [copyStatus, setCopyStatus] = useState('');
   const [blankLineHeight, setBlankLineHeight] = useState('16');
@@ -694,6 +699,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const textAttributes = activeEditor.getAttributes('documentTextStyle');
     setFontFamily(normalizeFontFamily(textAttributes.fontFamily) ?? '');
     setFontSize(normalizeFontSize(textAttributes.fontSize)?.toString() ?? '');
+    const selectionDom = activeEditor.view.domAtPos(selection.from).node;
+    const textElement = selectionDom instanceof HTMLElement ? selectionDom : selectionDom.parentElement;
+    if (textElement) setInheritedFontSize(String(parseFloat(getComputedStyle(textElement).fontSize) || 16));
     setTextColor(normalizeTextColor(textAttributes.color) ?? DEFAULT_TEXT_COLOR);
   };
 
@@ -730,6 +738,16 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     ],
     content: initialContent,
     editable: !readOnly,
+    editorProps: {
+      handlePaste: (_view, event) => {
+        if (!parsePastedMarkup || readOnly || event.clipboardData?.getData('text/html')) return false;
+        const text = (event.clipboardData?.getData('text/plain') ?? '').replace(/^\s*```(?:html|markdown|md)\s*\n([\s\S]*?)\n```\s*$/iu, '$1');
+        if (!/(^#{1,6}\s|^\s*(?:[-*+] |\d+\. )|^\s*\|.+\||<(?:p|table|h[1-6]|span|ul|ol)\b|\*\*[^*]+\*\*)/imu.test(text)) return false;
+        const dom = new DOMParser().parseFromString(markdownToEditorHtml(text), 'text/html');
+        _view.dispatch(_view.state.tr.replaceSelection(ProseMirrorDOMParser.fromSchema(_view.state.schema).parseSlice(dom.body)).scrollIntoView());
+        return true;
+      }
+    },
     immediatelyRender: false,
     onUpdate: ({ editor: activeEditor }) => {
       const nextMarkdown = editorHtmlToMarkdown(activeEditor.getHTML());
@@ -980,6 +998,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   };
 
   const wordCount = editor?.getText().trim().split(/\s+/u).filter(Boolean).length ?? 0;
+  const availableFontSizes = fontSize && !FONT_SIZES.some(size => size === fontSize) ? [...FONT_SIZES, fontSize] : FONT_SIZES;
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
 
   return <>
@@ -1009,14 +1028,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       </div>
     </header>
     {!readOnly && !preview && <div className="structured-editor__toolbar" role="toolbar" aria-label="문서 서식 도구">
-      <div className="structured-editor__toolbar-group" data-label="실행">
-        <ToolbarButton label="실행 취소" disabled={!editor?.can().undo()} onClick={() => editor?.chain().focus().undo().run()}>↶</ToolbarButton>
-        <ToolbarButton label="다시 실행" disabled={!editor?.can().redo()} onClick={() => editor?.chain().focus().redo().run()}>↷</ToolbarButton>
-        <ToolbarButton label={repeatLabel ? `F4 반복: ${repeatLabel}` : 'F4 이전 작업 반복'} disabled={!repeatLabel} onClick={repeatAction}>F4 반복</ToolbarButton>
-      </div>
+      <div className="structured-editor__format-ribbon" role="group" aria-label="글자 서식">
       <div className="structured-editor__toolbar-group structured-editor__text-controls" data-label="글자">
-        <label><span>글꼴</span><select aria-label="선택 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{['기본','한글 기본·시스템','무료 한글 글꼴','영문 글꼴'].map((group) => <optgroup key={group} label={group}>{FONT_FAMILIES.filter((font) => font.group === group).map((font) => <option key={font.label} value={font.value} style={font.value ? { fontFamily: font.value } : undefined}>{font.label}</option>)}</optgroup>)}</select></label>
-        <label><span>크기</span><select aria-label="선택 글자 크기" value={fontSize} onChange={(event) => applyTextFormatting({ fontSize: event.target.value })}>{FONT_SIZES.map((size) => <option key={size || 'default'} value={size}>{size ? `${size}px` : '기본'}</option>)}</select></label>
+        <label><span>기본 글꼴</span><select aria-label="선택 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{['기본','한글 기본·시스템','무료 한글 글꼴','영문 글꼴'].map((group) => <optgroup key={group} label={group}>{FONT_FAMILIES.filter((font) => font.group === group).map((font) => <option key={font.label} value={font.value} style={font.value ? { fontFamily: font.value } : undefined}>{font.label}</option>)}</optgroup>)}</select></label>
+        <label><span>크기</span><select aria-label="선택 글자 크기" value={fontSize} onChange={(event) => applyTextFormatting({ fontSize: event.target.value })}>{availableFontSizes.map((size) => <option key={size || 'default'} value={size}>{size ? `${size}px` : `${inheritedFontSize}px (기본)`}</option>)}</select></label>
         <label className="structured-editor__color-control"><span>색상</span><input aria-label="선택 글자 색상" type="color" value={textColor} onChange={(event) => applyTextFormatting({ color: event.target.value })}/></label>
         <ToolbarButton label="글자 색상 기본값" disabled={!normalizeTextColor(editor?.getAttributes('documentTextStyle').color)} onClick={() => applyTextFormatting({ color: null })}>색상 해제</ToolbarButton>
       </div>
@@ -1032,8 +1047,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="가운데 정렬" active={editor?.isActive({ textAlign: 'center' })} onClick={() => runAction({ kind: 'align', alignment: 'center' })}>가운데</ToolbarButton>
         <ToolbarButton label="오른쪽 정렬" active={editor?.isActive({ textAlign: 'right' })} onClick={() => runAction({ kind: 'align', alignment: 'right' })}>오른쪽</ToolbarButton>
       </div>
+      </div>
+      <div className="structured-editor__toolbar-group" data-label="실행">
+        <ToolbarButton label="실행 취소" disabled={!editor?.can().undo()} onClick={() => editor?.chain().focus().undo().run()}>↶</ToolbarButton>
+        <ToolbarButton label="다시 실행" disabled={!editor?.can().redo()} onClick={() => editor?.chain().focus().redo().run()}>↷</ToolbarButton>
+        <ToolbarButton label={repeatLabel ? `F4 반복: ${repeatLabel}` : 'F4 이전 작업 반복'} disabled={!repeatLabel} onClick={repeatAction}>F4 반복</ToolbarButton>
+      </div>
       <div className="structured-editor__toolbar-group structured-editor__toolbar-table" data-label="표">
-        <ToolbarButton label="표 삽입" onClick={() => onRequestInsertTable ? onRequestInsertTable() : setTableDialogOpen(true)}>표 +</ToolbarButton>
+        <ToolbarButton label="표 삽입" tone="table" onClick={() => onRequestInsertTable ? onRequestInsertTable() : setTableDialogOpen(true)}>표 삽입</ToolbarButton>
         {tableActive && <><ToolbarButton label="표 행 추가" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'addRowAfter' })}>행 +</ToolbarButton>
         <ToolbarButton label="표 열 추가" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'addColumnAfter' })}>열 +</ToolbarButton>
         <ToolbarButton label="표 행 삭제" disabled={!editor?.isActive('table')} onClick={() => runAction({ kind: 'command', command: 'deleteRow' })}>행 −</ToolbarButton>
@@ -1044,8 +1065,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       </div>
       <div className="structured-editor__toolbar-group structured-editor__toolbar-insert" data-label="삽입·정리">
         <ToolbarButton label="링크" active={editor?.isActive('link')} onClick={addLink}>링크</ToolbarButton>
-        <ToolbarButton label="이미지" disabled={selectionAssistant?.busy} onClick={onRequestInsertImage ?? addImage}>이미지</ToolbarButton>
-        {selectionAssistant && <ToolbarButton label="AI 문장 개선" active={showAssistant} onClick={() => setShowAssistant(current => !current)}>AI 문장 개선</ToolbarButton>}
+        <ToolbarButton label="이미지" tone="image" disabled={selectionAssistant?.busy} onClick={onRequestInsertImage ?? addImage}>이미지</ToolbarButton>
+        {selectionAssistant && <ToolbarButton label="AI 문장 개선" tone="ai" active={showAssistant} onClick={() => setShowAssistant(current => !current)}>AI 문장 개선</ToolbarButton>}
         {imageSelected && <><ToolbarButton label="선택 이미지 위로 이동" disabled={!imageSelected} onClick={() => {
           if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
           const parent = editor.state.selection.$from.parent; const index = editor.state.selection.$from.index(); if (index < 1) return;
@@ -1108,6 +1129,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           editor={editor}
           pluginKey={`structured-selection-assistant-${documentKey ?? label}`}
           updateDelay={80}
+          appendTo={() => document.body}
+          options={{ strategy: 'fixed', placement: 'top', shift: { padding: 12 }, flip: { padding: 12 }, scrollTarget: editor.view.dom.closest<HTMLElement>('.document-review-pages__side') ?? editor.view.dom.closest<HTMLElement>('.structured-editor__canvas') ?? window }}
           shouldShow={({ editor: activeEditor, from, to }) => {
             const menuFocused = document.activeElement instanceof HTMLElement && Boolean(document.activeElement.closest('.structured-editor__selection-menu'));
             return !readOnly && activeEditor.isEditable && (activeEditor.isFocused || menuFocused) && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim());
@@ -1120,7 +1143,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           <button type="button" onMouseDown={(event)=>event.preventDefault()} disabled={!editor.can().undo()} onClick={()=>editor.chain().focus().undo().run()} aria-label="실행 취소">↶ 실행취소</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} disabled={!editor.can().redo()} onClick={()=>editor.chain().focus().redo().run()} aria-label="다시 실행">↷ 다시실행</button>
           <label className="structured-editor__selection-format"><span>글꼴</span><select aria-label="선택 영역 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontFamily:event.target.value})}>{FONT_FAMILIES.map((font)=><option key={font.label} value={font.value} style={font.value?{fontFamily:font.value}:undefined}>{font.label}</option>)}</select></label>
-          <label className="structured-editor__selection-format is-size"><span>크기</span><select aria-label="선택 영역 글자 크기" value={fontSize} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontSize:event.target.value})}>{FONT_SIZES.map((size)=><option key={size||'default'} value={size}>{size?`${size}px`:'기본'}</option>)}</select></label>
+          <label className="structured-editor__selection-format is-size"><span>크기</span><select aria-label="선택 영역 글자 크기" value={fontSize} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({fontSize:event.target.value})}>{availableFontSizes.map((size)=><option key={size||'default'} value={size}>{size?`${size}px`:`${inheritedFontSize}px (기본)`}</option>)}</select></label>
           <label className="structured-editor__selection-color"><span>색상</span><input aria-label="선택 영역 글자 색상" type="color" value={textColor} onMouseDown={(event)=>event.stopPropagation()} onChange={(event)=>applyTextFormatting({color:event.target.value})}/></label>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} className={editor.isActive('bold')?'is-active':''} onClick={()=>toggleFormatting('bold')} aria-label="굵게">굵게</button>
           <button type="button" onMouseDown={(event)=>event.preventDefault()} onClick={()=>runAction({ kind: 'align', alignment: 'left' })}>왼쪽</button>
