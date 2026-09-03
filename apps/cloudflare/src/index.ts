@@ -32,6 +32,7 @@ import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, ty
 import { extractIntakeSource, IntakeSourceError, type IntakeSource } from './intake-source';
 import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './proposal-company-content';
 import { ErpBridgeError, registerProjectInErp } from './erp-bridge';
+import { normalizeMinutesFields } from './company-minutes';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -855,6 +856,7 @@ async function handlePreviewPasswordChange(request: Request, env: CloudflareEnv)
 }
 
 interface PreviewKickoffRow {
+  minutesFieldsJson: string;
   caseId: string;
   meetingAt: string;
   location: string | null;
@@ -1103,6 +1105,7 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     env.DB.prepare(
       'SELECT k.case_id AS caseId, k.meeting_at AS meetingAt, k.location, k.agenda, k.participant_units_json AS participantUnitsJson, ' +
       'k.raw_notes AS rawNotes, k.summary_text AS summaryText, k.timeline_json AS timelineJson, k.status, k.version, k.updated_at AS updatedAt, ' +
+      "(SELECT json_extract(e.detail_json,'$.minutesFields') FROM preview_workflow_events e WHERE e.case_id=k.case_id AND e.entity_id=k.case_id AND e.event_type='KICKOFF_SAVED' AND json_type(e.detail_json,'$.minutesFields')='object' ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1) AS minutesFieldsJson, " +
       'u.display_name AS updatedByName FROM preview_workflow_kickoffs k JOIN preview_users u ON u.id = k.updated_by WHERE k.case_id = ? AND k.organization_id = ?'
     ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<PreviewKickoffRow>(),
     env.DB.prepare(
@@ -1110,6 +1113,7 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
       's.photo_count AS photoCount, s.audio_count AS audioCount, s.document_count AS documentCount, s.status, s.version, s.updated_at AS updatedAt, ' +
       "COALESCE(o.source_notes,'') AS rawNotes, COALESCE(o.summary_text,'') AS summaryText, COALESCE(o.timeline_json,'[]') AS timelineJson, " +
       "COALESCE(o.status,'DRAFTED') AS outputStatus, COALESCE(o.version,0) AS outputVersion, " +
+      "(SELECT json_extract(e.detail_json,'$.minutesFields') FROM preview_workflow_events e WHERE e.case_id=s.case_id AND e.entity_id=s.id AND e.event_type='SITE_SURVEY_SAVED' AND json_type(e.detail_json,'$.minutesFields')='object' ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1) AS minutesFieldsJson, " +
       'u.display_name AS updatedByName FROM preview_site_surveys s LEFT JOIN preview_site_survey_outputs o ON o.survey_id=s.id JOIN preview_users u ON u.id = s.updated_by WHERE s.case_id = ? AND s.organization_id = ? ORDER BY s.survey_date DESC LIMIT 100'
     ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
     env.DB.prepare(
@@ -1128,6 +1132,8 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     case: previewCaseProjection(caseRow),
     kickoff: kickoff ? {
       ...kickoff,
+      minutesFields: normalizeMinutesFields(JSON.parse(kickoff.minutesFieldsJson || 'null')) ?? normalizeMinutesFields({ author: kickoff.updatedByName, clientName: caseRow.clientName ?? '' }),
+      minutesFieldsJson: undefined,
       participantUnits: workflowJsonArray<string>(kickoff.participantUnitsJson),
       timeline: workflowJsonArray<{ order: number; title: string; detail: string }>(kickoff.timelineJson),
       participantUnitsJson: undefined,
@@ -1135,6 +1141,8 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     } : null,
     siteSurveys: surveys.results.map((survey) => ({
       ...survey,
+      minutesFields: normalizeMinutesFields(JSON.parse(String(survey.minutesFieldsJson || 'null'))) ?? normalizeMinutesFields({ author: survey.updatedByName, clientName: caseRow.clientName ?? '' }),
+      minutesFieldsJson: undefined,
       timeline: workflowJsonArray<{ order: number; title: string; detail: string }>(String(survey.timelineJson ?? '[]')),
       timelineJson: undefined
     })),
@@ -1222,7 +1230,9 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
   const now = new Date().toISOString();
 
   if (action === 'kickoff' && request.method === 'PUT') {
-    if (!exactObjectKeys(body, ['meetingAt', 'location', 'agenda', 'participantUnits', 'rawNotes', 'status', 'expectedVersion'])) return json({ error: 'Kickoff payload is invalid', code: 'INVALID_KICKOFF_PAYLOAD' }, 400);
+    if (!exactObjectKeys(body, ['meetingAt', 'location', 'agenda', 'participantUnits', 'rawNotes', 'status', 'expectedVersion', 'minutesFields'])) return json({ error: 'Kickoff payload is invalid', code: 'INVALID_KICKOFF_PAYLOAD' }, 400);
+    const minutesFields = body.minutesFields === undefined ? undefined : normalizeMinutesFields(body.minutesFields);
+    if (minutesFields === null) return json({ error: '회의록 양식 정보가 올바르지 않습니다.', code: 'INVALID_MINUTES_FIELDS' }, 400);
     const meetingAt = typeof body.meetingAt === 'string' && !Number.isNaN(Date.parse(body.meetingAt)) ? new Date(body.meetingAt).toISOString() : null;
     const location = typeof body.location === 'string' ? body.location.trim() : '';
     const agenda = normalizedWorkflowText(body.agenda, 12000);
@@ -1237,10 +1247,10 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     await env.DB.batch([
       env.DB.prepare(
         'INSERT INTO preview_workflow_kickoffs (case_id, organization_id, meeting_at, location, agenda, participant_units_json, raw_notes, summary_text, timeline_json, status, version, updated_by, created_at, updated_at) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, \'\', \'[]\', ?, 1, ?, ?, ?) ON CONFLICT(case_id) DO UPDATE SET meeting_at=excluded.meeting_at, location=excluded.location, agenda=excluded.agenda, participant_units_json=excluded.participant_units_json, raw_notes=excluded.raw_notes, status=excluded.status, version=preview_workflow_kickoffs.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_workflow_kickoffs.version=?'
+        'VALUES (?, ?, ?, ?, ?, ?, ?, \'\', \'[]\', ?, 1, ?, ?, ?) ON CONFLICT(case_id) DO UPDATE SET meeting_at=excluded.meeting_at, location=excluded.location, agenda=excluded.agenda, participant_units_json=excluded.participant_units_json, raw_notes=excluded.raw_notes, summary_text=CASE WHEN preview_workflow_kickoffs.raw_notes<>excluded.raw_notes OR preview_workflow_kickoffs.agenda<>excluded.agenda THEN \'\' ELSE preview_workflow_kickoffs.summary_text END, timeline_json=CASE WHEN preview_workflow_kickoffs.raw_notes<>excluded.raw_notes OR preview_workflow_kickoffs.agenda<>excluded.agenda THEN \'[]\' ELSE preview_workflow_kickoffs.timeline_json END, status=excluded.status, version=preview_workflow_kickoffs.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_workflow_kickoffs.version=?'
       ).bind(caseId, PREVIEW_ORGANIZATION_ID, meetingAt, location || null, agenda, JSON.stringify(participants), rawNotes, status, user.id, now, now, expectedVersion),
       env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_workflow_kickoffs WHERE case_id=? AND version=? AND updated_at=?)')
-        .bind(crypto.randomUUID(), caseId, user.id, 'KICKOFF_SAVED', caseId, JSON.stringify({ status, participantCount: participants.length }), now, caseId, nextVersion, now)
+        .bind(crypto.randomUUID(), caseId, user.id, 'KICKOFF_SAVED', caseId, JSON.stringify({ status, participantCount: participants.length, minutesFields }), now, caseId, nextVersion, now)
     ]);
     const canonical = await env.DB.prepare('SELECT version, updated_at AS updatedAt FROM preview_workflow_kickoffs WHERE case_id=?').bind(caseId).first<{ version: number; updatedAt: string }>();
     if (canonical?.version !== nextVersion || canonical.updatedAt !== now) return json({ error: 'Concurrent kickoff update detected', code: 'VERSION_CONFLICT' }, 409);
@@ -1341,9 +1351,11 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
   }
 
   if (action === 'site-survey' && request.method === 'PUT') {
-    const currentShape = exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'rawNotes', 'status', 'expectedVersion', 'outputExpectedVersion']);
+    const currentShape = exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'rawNotes', 'status', 'expectedVersion', 'outputExpectedVersion', 'minutesFields']);
     const legacyShape = exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'status', 'expectedVersion']);
     if (!currentShape && !legacyShape) return json({ error: 'Site survey payload is invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
+    const minutesFields = body.minutesFields === undefined ? undefined : normalizeMinutesFields(body.minutesFields);
+    if (minutesFields === null) return json({ error: '회의록 양식 정보가 올바르지 않습니다.', code: 'INVALID_MINUTES_FIELDS' }, 400);
     const surveyDate = validWorkflowDate(body.surveyDate) ? body.surveyDate : null;
     const location = typeof body.location === 'string' ? body.location.trim() : '';
     const scopeText = normalizedWorkflowText(body.scopeText, 12000);
@@ -1371,7 +1383,7 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
         "ON CONFLICT(survey_id) DO UPDATE SET source_notes=excluded.source_notes, summary_text=CASE WHEN preview_site_survey_outputs.source_notes<>excluded.source_notes THEN '' ELSE preview_site_survey_outputs.summary_text END, timeline_json=CASE WHEN preview_site_survey_outputs.source_notes<>excluded.source_notes THEN '[]' ELSE preview_site_survey_outputs.timeline_json END, status=CASE WHEN preview_site_survey_outputs.source_notes<>excluded.source_notes THEN 'DRAFTED' ELSE preview_site_survey_outputs.status END, version=preview_site_survey_outputs.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_site_survey_outputs.version=?"
       ).bind(surveyId,caseId,PREVIEW_ORGANIZATION_ID,rawNotes,user.id,now,now,outputExpectedVersion),
       env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_site_surveys WHERE id=? AND version=? AND updated_at=?) AND EXISTS (SELECT 1 FROM preview_site_survey_outputs WHERE survey_id=? AND version=? AND updated_at=?)')
-        .bind(crypto.randomUUID(), caseId, user.id, 'SITE_SURVEY_SAVED', surveyId, JSON.stringify({ surveyDate, leadUnit, folderPath }), now, surveyId, nextVersion, now, surveyId, nextOutputVersion, now)
+        .bind(crypto.randomUUID(), caseId, user.id, 'SITE_SURVEY_SAVED', surveyId, JSON.stringify({ surveyDate, leadUnit, folderPath, minutesFields }), now, surveyId, nextVersion, now, surveyId, nextOutputVersion, now)
     ]);
     const canonical = await env.DB.prepare('SELECT s.version, o.version AS outputVersion FROM preview_site_surveys s JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.id=?').bind(surveyId).first<{ version: number; outputVersion: number }>();
     if (canonical?.version !== nextVersion || canonical.outputVersion !== nextOutputVersion) return json({ error: 'Concurrent site survey update detected', code: 'VERSION_CONFLICT' }, 409);

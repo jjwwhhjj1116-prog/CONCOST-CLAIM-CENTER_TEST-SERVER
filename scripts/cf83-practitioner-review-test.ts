@@ -71,7 +71,7 @@ test('CF83 reviewed meeting minutes download as the company-form XLSX instead of
   const packageText = new TextDecoder().decode(bytes);
   assert.match(packageText, /회 의 록/u);
   assert.match(packageText, /회의내용 및 지시사항/u);
-  assert.match(packageText, /orientation="landscape"/u);
+  assert.match(packageText, /orientation="portrait"/u);
   const workflow = read('apps/web/src/workflow/WorkflowOperations.tsx');
   assert.match(workflow, /현재 회의록 XLSX 내려받기/u);
 });

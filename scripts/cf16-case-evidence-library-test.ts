@@ -144,7 +144,7 @@ test('CF16 keeps evidence bytes and attribution append-only and renders the uplo
   const workflow = readFileSync('apps/web/src/workflow/WorkflowOperations.tsx', 'utf8');
   const library = readFileSync('apps/web/src/routes/PreviewEvidenceHub.tsx', 'utf8');
   const panel = readFileSync('apps/web/src/evidence/CaseEvidencePanel.tsx', 'utf8');
-  assert.match(workflow, /산출자료·내역자료 업로드/u);
+  assert.match(workflow, /산출자료·내역자료 → 회사 Google Drive에 업로드하세요/u);
   assert.match(workflow, /allowedCategories=\{\['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING'\]\}/u);
   assert.match(workflow, /allowedCategories=\{\['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT'\]\}/u);
   assert.match(workflow, /allowedCategories=\{\['TAKEOFF_SOURCE', 'COST_BREAKDOWN'\]\}/u);

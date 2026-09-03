@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 const read = (...parts: string[]): string => readFileSync(join(process.cwd(), ...parts), 'utf8');
 
 test('CF80 kickoff final minutes follow the approved company table structure', () => {
-  const source = read('apps', 'web', 'src', 'workflow', 'WorkflowOperations.tsx');
+  const source = read('apps', 'web', 'src', 'workflow', 'CompanyMinutes.tsx');
   const css = read('apps', 'web', 'src', 'workflow', 'WorkflowOperations.css');
 
   assert.match(source, /company-minutes-table/u);
@@ -15,7 +15,7 @@ test('CF80 kickoff final minutes follow the approved company table structure', (
     assert.match(source, new RegExp(label, 'u'));
   }
   assert.match(source, /결정사항 · 후속업무/u);
-  assert.match(source, /미입력/u);
+  assert.match(source, /모든 부서/u);
   assert.match(css, /\.company-minutes-scroll\s*\{[^}]*overflow:\s*auto/su);
   assert.match(css, /\.company-minutes-table\s*\{[^}]*border-collapse:\s*collapse/su);
   assert.match(css, /\.company-minutes-content\s*\{[^}]*vertical-align:\s*top/su);

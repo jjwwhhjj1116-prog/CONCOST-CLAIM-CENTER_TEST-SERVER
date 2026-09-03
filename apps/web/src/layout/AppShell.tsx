@@ -299,7 +299,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
       </header>
 
-      <Dialog isOpen={alertsOpen} title="신규 수주·오늘의 프로젝트 투입 알림" onClose={()=>!alertsBusy&&setAlertsOpen(false)}>
+      <Dialog isOpen={alertsOpen} size="wide" hideDefaultAction title="신규 수주·오늘의 프로젝트 투입 알림" onClose={()=>!alertsBusy&&setAlertsOpen(false)}>
         <div className="member-alert-dialog">
           {memberAlerts.awards.length>0&&<section><header><h3>신규 프로젝트 수주</h3><span>{memberAlerts.awards.length}건</span></header><ul>{memberAlerts.awards.map((alert)=><li key={alert.eventKey}><button type="button" onClick={()=>{go(`/projects/schedule?caseId=${encodeURIComponent(alert.caseId)}`);setAlertsOpen(false);}}><strong>{alert.caseNumber} · {alert.projectTitle}</strong><span>{alert.message}</span><small>{new Date(alert.awardedAt).toLocaleString('ko-KR')} · {alert.projectStartOn??'시작일 미정'} ~ {alert.projectEndOn??'종료일 미정'}</small></button></li>)}</ul></section>}
           <section><header><h3>{memberAlerts.today||'금일'} 투입 To-do</h3><span>{memberAlerts.todos.length}건</span></header>{memberAlerts.todos.length?<ul>{memberAlerts.todos.map((todo)=><li key={todo.eventKey}><button type="button" onClick={()=>{go(`/projects/schedule?caseId=${encodeURIComponent(todo.caseId)}`);setAlertsOpen(false);}}><strong>{todo.caseNumber} · {todo.stageLabel}</strong><span>{todo.title}</span><small>{todo.startDate} ~ {todo.endDate}{todo.noteText?` · ${todo.noteText}`:''}</small></button></li>)}</ul>:<p className="empty-box">오늘 배정된 프로젝트 단계 일정이 없습니다.</p>}</section>

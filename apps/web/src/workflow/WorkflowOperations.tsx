@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Select } from '@claim-studio/ui';
 import { ApiError, apiRequest } from '../api';
 import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
-import { meetingMinutesWorkbook } from '../proposals/proposal-excel';
+import { CompanyMinutes, MinutesFieldsEditor, downloadMinutes } from './CompanyMinutes';
+import { minutesContent, minutesFieldDefaults, normalizeMinutesFields, type MinutesFields } from '../../../cloudflare/src/company-minutes';
 import { WORKFLOW_STAGES, WORKFORCE_UNITS } from './workflow-model';
 
 type WorkflowRouteId = 'WF-03' | 'WF-04' | 'WF-05';
@@ -12,11 +13,13 @@ interface CaseSummary {
   caseNumber: string;
   title: string;
   claimType: string;
+  clientName?: string;
   status: string;
   version: number;
 }
 
 interface KickoffRecord {
+  minutesFields?: MinutesFields;
   meetingAt: string;
   location: string | null;
   agenda: string;
@@ -31,6 +34,8 @@ interface KickoffRecord {
 }
 
 interface SurveyRecord {
+  minutesFields?: MinutesFields;
+  updatedByName?: string;
   id: string;
   surveyDate: string;
   location: string | null;
@@ -94,6 +99,7 @@ interface SharedScheduleProject {
 }
 
 interface WorkflowAiImport {
+  minutesFields?: MinutesFields;
   meetingAt: string | null;
   surveyDate: string | null;
   location: string;
@@ -168,10 +174,10 @@ export const WorkflowOperations: React.FC<{
   const allocationKeys = useRef(new Map<string, string>());
 
   const [kickoff, setKickoff] = useState({
-    meetingAt: `${kstToday()}T10:00`, location: '', agenda: '', participantUnits: '', rawNotes: '', status: 'PLANNED', expectedVersion: 0
+    minutesFields: { ...minutesFieldDefaults }, meetingAt: `${kstToday()}T10:00`, location: '', agenda: '', participantUnits: '', rawNotes: '', status: 'PLANNED', expectedVersion: 0
   });
   const [survey, setSurvey] = useState({
-    surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', rawNotes: '', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0
+    minutesFields: { ...minutesFieldDefaults }, surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', rawNotes: '', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0
   });
   const [allocation, setAllocation] = useState({
     unitKey: WORKFORCE_OPTIONS[0]?.key ?? '', memberName: WORKFORCE_OPTIONS[0]?.members?.[0] ?? '', scopeText: '', basisText: '설계도서·현장실측', startDate: kstToday(), endDate: kstToday()
@@ -179,8 +185,9 @@ export const WorkflowOperations: React.FC<{
 
   const selectedUnit = useMemo(() => WORKFORCE_OPTIONS.find((unit) => unit.key === allocation.unitKey) ?? WORKFORCE_OPTIONS[0], [allocation.unitKey]);
 
-  const syncForms = (payload: WorkflowPayload) => {
+  const syncForms = (payload: WorkflowPayload, preserveSurveyDate = false) => {
     if (payload.kickoff) setKickoff({
+      minutesFields: normalizeMinutesFields(payload.kickoff.minutesFields) ?? { ...minutesFieldDefaults, author: payload.kickoff.updatedByName, clientName: payload.case.clientName ?? '' },
       meetingAt: localDateTime(payload.kickoff.meetingAt),
       location: payload.kickoff.location ?? '',
       agenda: payload.kickoff.agenda,
@@ -189,16 +196,19 @@ export const WorkflowOperations: React.FC<{
       status: payload.kickoff.status,
       expectedVersion: payload.kickoff.version
     });
-    else setKickoff({ meetingAt: `${kstToday()}T10:00`, location: '', agenda: '', participantUnits: '', rawNotes: '', status: 'PLANNED', expectedVersion: 0 });
-    const latestSurvey = payload.siteSurveys[0];
-    if (latestSurvey) setSurvey({
+    else setKickoff({ minutesFields: { ...minutesFieldDefaults }, meetingAt: `${kstToday()}T10:00`, location: '', agenda: '', participantUnits: '', rawNotes: '', status: 'PLANNED', expectedVersion: 0 });
+    setSurvey(current => {
+    const latestSurvey = (preserveSurveyDate ? payload.siteSurveys.find(row => row.surveyDate === current.surveyDate) : null) ?? payload.siteSurveys[0];
+    if (latestSurvey) return {
+      minutesFields: normalizeMinutesFields(latestSurvey.minutesFields) ?? { ...minutesFieldDefaults, author: latestSurvey.updatedByName ?? '', clientName: payload.case.clientName ?? '' },
       surveyDate: latestSurvey.surveyDate, location: latestSurvey.location ?? '', scopeText: latestSurvey.scopeText,
       leadUnit: latestSurvey.leadUnit, rawNotes: latestSurvey.rawNotes ?? '', status: latestSurvey.status, expectedVersion: latestSurvey.version, outputExpectedVersion: latestSurvey.outputVersion ?? 0
+    };
+    return { minutesFields: { ...minutesFieldDefaults, clientName: payload.case.clientName ?? '' }, surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', rawNotes: '', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 };
     });
-    else setSurvey({ surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', rawNotes: '', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 });
   };
 
-  const syncSharedSchedule = (projects: SharedScheduleProject[]) => {
+  const syncSharedSchedule = (projects: SharedScheduleProject[], payload: WorkflowPayload) => {
     const project = projects.find((entry) => entry.caseId === selectedCaseRef.current) ?? null;
     const item = project?.stages.find((entry) => entry.stageCode === sharedStageCode[routeId]);
     setScheduleProject(project);
@@ -211,8 +221,8 @@ export const WorkflowOperations: React.FC<{
       explicit: item?.scheduleExplicit ?? false
     });
     if (!item?.startDate || !item.endDate) return;
-    if (routeId === 'WF-03') setKickoff((current) => ({ ...current, meetingAt: `${item.startDate}T${current.meetingAt.split('T')[1] ?? '10:00'}` }));
-    if (routeId === 'WF-04') setSurvey((current) => ({ ...current, surveyDate: item.startDate ?? current.surveyDate }));
+    if (routeId === 'WF-03' && !payload.kickoff) setKickoff((current) => ({ ...current, meetingAt: `${item.startDate}T${current.meetingAt.split('T')[1] ?? '10:00'}` }));
+    if (routeId === 'WF-04' && !payload.siteSurveys.length) setSurvey((current) => ({ ...current, surveyDate: item.startDate ?? current.surveyDate }));
     if (routeId === 'WF-05') setAllocation((current) => ({ ...current, startDate: item.startDate ?? current.startDate, endDate: item.endDate ?? current.endDate }));
   };
 
@@ -229,7 +239,7 @@ export const WorkflowOperations: React.FC<{
       if (requestCaseId !== selectedCaseRef.current) return;
       setData(payload);
       if (sync) syncForms(payload);
-      syncSharedSchedule(schedule.projects);
+      syncSharedSchedule(schedule.projects, payload);
     } catch (error) {
       if (requestCaseId === selectedCaseRef.current) setFailure(messageFrom(error));
     } finally {
@@ -310,9 +320,9 @@ export const WorkflowOperations: React.FC<{
       const payload = 'payload' in result ? result.payload : result;
       if (selectedCaseId !== selectedCaseRef.current) return;
       setData(payload);
-      syncForms(payload);
+      syncForms(payload, true);
       const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
-      syncSharedSchedule(schedule.projects);
+      syncSharedSchedule(schedule.projects, payload);
       setNotice('payload' in result ? result.notice : `${label} 완료 · 안전하게 저장되었습니다.`);
     } catch (error) {
       setFailure(messageFrom(error));
@@ -479,6 +489,7 @@ const evidenceCategoryFor = (kind: 'KICKOFF' | 'SITE_SURVEY', file: File) => {
 
 function kickoffRecordAsImport(record: KickoffRecord): WorkflowAiImport {
   return {
+    minutesFields: record.minutesFields,
     meetingAt: record.meetingAt,
     surveyDate: null,
     location: record.location ?? '',
@@ -495,6 +506,7 @@ function kickoffRecordAsImport(record: KickoffRecord): WorkflowAiImport {
 function surveyRecordAsImport(record: SurveyRecord): WorkflowAiImport {
   return {
     meetingAt: null,
+    minutesFields: record.minutesFields,
     surveyDate: record.surveyDate,
     location: record.location ?? '',
     agenda: record.scopeText,
@@ -516,6 +528,7 @@ function workflowArchiveText(kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiI
   return [
     title,
     `저장 상태: ${statusLabel}`,
+    ...(value.minutesFields ? Object.entries(value.minutesFields).filter(([,text]) => text).map(([key,text]) => `${({author:'작성자 성명',authorDepartment:'작성자 소속',authorPosition:'작성자 직급',clientName:'거래처명',reportingDepartment:'보고부서',referenceDepartments:'참조부서',clientParticipants:'참석자 (거래처)',attachmentName:'첨부파일',meetingStartTime:'시작 시간',meetingEndTime:'종료 시간',participants:'참석자 (컨코스트)',meetingTitle:'회의명'} as Record<string,string>)[key]}: ${text}`) : []),
     `일시·일자: ${schedule || '미입력'}`,
     `장소: ${value.location || '미입력'}`,
     kind === 'KICKOFF' ? `참석 팀·담당자: ${value.participants.join(', ') || '미입력'}` : `조사 책임 팀: ${value.leadUnit || '미입력'}`,
@@ -556,18 +569,11 @@ function workflowArchiveNotice(prefix: string, file: WorkflowArchivedFile): stri
     : `${prefix} · 회사 Drive 연결 전 임시 보관함에 안전하게 저장했습니다.`;
 }
 
-function downloadWorkflowTemplate(kind: 'KICKOFF' | 'SITE_SURVEY'): void {
-  if (kind === 'KICKOFF') {
-    const anchor = document.createElement('a');
-    anchor.href = '/templates/CONCOST_%ED%9A%8C%EC%9D%98%EB%A1%9D_%EC%96%91%EC%8B%9D.xlsx';
-    anchor.download = 'CONCOST_회의록_양식.xlsx';
-    anchor.click();
-    return;
-  }
-  const rows = [['조사 일자','YYYY-MM-DD'],['현장 위치',''],['조사 책임팀',''],['조사 범위',''],['관찰 내용',''],['사진·도면 번호',''],['추가 확인사항','']];
-  const csv = `\uFEFF항목,내용\r\n${rows.map((row) => row.map((cell) => `"${cell.replaceAll('"','""')}"`).join(',')).join('\r\n')}`;
-  const url = URL.createObjectURL(new Blob([csv], { type:'text/csv;charset=utf-8' }));
-  const anchor = document.createElement('a'); anchor.href = url; anchor.download = '현장조사_현장작성_양식.csv'; anchor.click(); URL.revokeObjectURL(url);
+function downloadWorkflowTemplate(_kind: 'KICKOFF' | 'SITE_SURVEY'): void {
+  const anchor = document.createElement('a');
+  anchor.href = '/templates/CONCOST_%ED%9A%8C%EC%9D%98%EB%A1%9D_%EC%96%91%EC%8B%9D.xlsx';
+  anchor.download = 'CONCOST_회의록_양식.xlsx';
+  anchor.click();
 }
 
 const WorkflowAiImporter: React.FC<{
@@ -627,7 +633,7 @@ const WorkflowAiImporter: React.FC<{
   };
 
   return <section className={`workflow-ai-importer${dragging?' is-dragging':''}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); void importFile(event.dataTransfer.files[0]); }}>
-    <header><div><span>IMPORT → AUTO DRAFT → REVIEW</span><h4>{kind === 'KICKOFF' ? '회의록 가져오기·자동작성' : '현장조사 기록 가져오기·자동작성'}</h4><p>{kind === 'KICKOFF' ? '파일을 선택하거나 끌어 놓으면 먼저 원본으로 저장합니다. 이후 자동작성 버튼으로 회의 항목과 후속업무를 정리합니다.' : '현장 원본을 선택하거나 끌어 놓으면 먼저 저장합니다. 이후 자동작성 버튼으로 조사 범위·관찰·추가 확인사항을 정리합니다.'}</p></div><Button className="workflow-template-button" size="sm" variant="secondary" onClick={() => downloadWorkflowTemplate(kind)}>{kind === 'KICKOFF' ? '회사 회의록 XLSX 내보내기' : '현장조사 CSV 내보내기'}</Button></header>
+    <header><div><span>IMPORT → AUTO DRAFT → REVIEW</span><h4>{kind === 'KICKOFF' ? '회의록 가져오기·자동작성' : '현장조사 기록 가져오기·자동작성'}</h4><p>{kind === 'KICKOFF' ? '파일을 선택하거나 끌어 놓으면 회사 Google Drive에 원본으로 업로드합니다. 이후 자동작성 버튼으로 회의 항목과 후속업무를 정리합니다.' : '현장 원본을 선택하거나 끌어 놓으면 회사 Google Drive에 업로드합니다. 이후 자동작성 버튼으로 조사 범위·관찰·추가 확인사항을 정리합니다.'}</p></div><Button className="workflow-template-button" size="sm" variant="secondary" onClick={() => downloadWorkflowTemplate(kind)}>회사 회의록 XLSX 내보내기</Button></header>
     <div className="workflow-ai-import-controls"><label>자료 보안등급<select value={dataClass} disabled={busy} onChange={(event) => setDataClass(event.target.value as typeof dataClass)}><option value="GENERAL">일반·외부전송 가능</option><option value="INTERNAL">회사 내부</option><option value="CONFIDENTIAL">기밀</option><option value="RESTRICTED">제한자료</option></select></label><input ref={inputRef} type="file" accept={WORKFLOW_IMPORT_ACCEPT} disabled={disabled||busy} onChange={(event) => void importFile(event.target.files?.[0])}/><Button className="workflow-import-button" onClick={() => inputRef.current?.click()} disabled={disabled||busy}>{busy&&!selectedFile?'가져오는 중…':'1. 파일 가져오기'}</Button><Button className="workflow-autodraft-button" onClick={() => void generateFromFile()} disabled={disabled||busy||!selectedFile}>{busy&&selectedFile?'자동작성 중…':'2. 자동작성·정리'}</Button></div>
     <div className={`workflow-import-state${selectedFile?' is-ready':''}`}><strong>{selectedFile?'가져오기 완료':'가져올 파일을 선택하세요'}</strong><span>{storedFileName||'XLSX·TXT·CSV는 내부 자료도 회사 서버에서 안전하게 정리할 수 있습니다.'}</span></div>
     <small>내부·기밀 XLSX·TXT·CSV는 외부 전송 없이 회사 서버에서 자동정리합니다. 그 밖의 문서는 관리자가 Gemini 유료 비학습 조건을 승인한 경우에만 외부 AI 정리를 실행합니다.</small>
@@ -637,8 +643,8 @@ const WorkflowAiImporter: React.FC<{
 
 const KickoffEditor: React.FC<{
   caseId: string;
-  form: { meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number };
-  setForm: React.Dispatch<React.SetStateAction<{ meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number }>>;
+  form: { minutesFields: MinutesFields; meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number };
+  setForm: React.Dispatch<React.SetStateAction<{ minutesFields: MinutesFields; meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number }>>;
   record: KickoffRecord | null;
   disabled: boolean;
   busy: string;
@@ -650,74 +656,43 @@ const KickoffEditor: React.FC<{
   const [importedDraft, setImportedDraft] = useState<WorkflowAiImport | null>(null);
   const [archivedFile, setArchivedFile] = useState<WorkflowArchivedFile | null>(null);
   useEffect(() => { setImportedDraft(null); setArchivedFile(null); }, [caseId]);
-  const savedSourcePreview = record?.rawNotes.trim() || record?.agenda.trim() || '';
-  const displayedSummary = record?.summaryText || importedDraft?.summary || (savedSourcePreview ? `저장된 회의 원문 미리보기\n\n${savedSourcePreview}` : '');
-  const displayedTimeline = record?.summaryText ? record.timeline : importedDraft?.timeline ?? (savedSourcePreview ? [{ order:1,title:'저장된 원문',detail:'자동작성·정리를 실행하면 결정사항과 후속업무가 항목별로 표시됩니다.' }] : []);
-  const outputState = record?.status === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : savedSourcePreview ? '원문 저장 완료 · 자동작성 대기' : 'EMPTY';
-  const [meetingDate = '미입력', meetingTime = '미입력'] = form.meetingAt
-    ? [form.meetingAt.slice(0, 10).replaceAll('-', '. '), form.meetingAt.slice(11, 16) || '미입력']
-    : [];
-  const meetingTitle = form.agenda.trim().split(/\r?\n/u)[0] || '미입력';
-  const participantText = form.participantUnits.trim() || '미입력';
-  const attachmentName = archivedFile?.originalName?.trim() || '미입력';
-  const downloadCurrentMinutes = () => {
-    const bytes = meetingMinutesWorkbook({ author:record?.updatedByName || '미입력', meetingDate, meetingTime, location:form.location.trim() || '미입력', participants:participantText, meetingTitle, attachmentName, summary:displayedSummary, followUps:displayedTimeline.map((item)=>`${item.order}. ${item.title} · ${item.detail}`).join('\n') || '미입력' });
-    const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    const url = URL.createObjectURL(new Blob([payload], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    const anchor = document.createElement('a'); anchor.href=url; anchor.download=`착수회의_회의록_${form.meetingAt.slice(0,10) || kstToday()}.xlsx`; anchor.click(); URL.revokeObjectURL(url);
-  };
+  const displayedSummary = minutesContent(form.rawNotes, record?.rawNotes ?? importedDraft?.sourceNotes, record?.summaryText || importedDraft?.summary);
+  const displayedTimeline = form.rawNotes.trim() === (record?.rawNotes ?? importedDraft?.sourceNotes ?? '').trim() ? (record?.summaryText ? record.timeline : importedDraft?.timeline ?? []) : [];
+  const outputState = record?.status === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : form.rawNotes ? '입력 내용 미리보기' : '작성 중';
+  const minutesValues = { ...form.minutesFields, meetingDate: form.meetingAt.slice(0,10).replaceAll('-', '. '), meetingTime: form.meetingAt.slice(11,16), location: form.location, participants: form.participantUnits, meetingTitle: form.agenda, attachmentName: form.minutesFields.attachmentName || archivedFile?.originalName || '', summary: displayedSummary, followUps: displayedTimeline.map(item => `${item.order}. ${item.title}\n${item.detail}`).join('\n\n') };
+  const unsaved = !record || form.meetingAt !== localDateTime(record.meetingAt) || form.location !== (record.location ?? '') || form.agenda !== record.agenda || form.participantUnits !== record.participantUnits.join(', ') || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
+  const downloadCurrentMinutes = () => downloadMinutes(minutesValues, `착수회의_회의록_${form.meetingAt.slice(0,10) || kstToday()}.xlsx`);
   return (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>KICKOFF INTAKE</span><h3>착수회의 기록</h3></div><em>v{form.expectedVersion}</em></header>
-      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => ({ ...current, meetingAt:value.meetingAt?localDateTime(value.meetingAt):current.meetingAt,location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:value.sourceNotes,status:'DRAFTED' })); }}/>
-      <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>가져온 내용도 아래에서 보완할 수 있으며, 저장 후 다시 자동정리할 수 있습니다.</span></div>
+      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => ({ ...current, minutesFields: normalizeMinutesFields(value.minutesFields) ?? current.minutesFields, meetingAt:value.meetingAt?localDateTime(value.meetingAt):current.meetingAt,location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:value.sourceNotes,status:'DRAFTED' })); }}/>
+      <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>입력한 내용이 오른쪽 회의록과 XLSX에 동일하게 반영됩니다.</span></div>
+      <MinutesFieldsEditor value={form.minutesFields} onChange={minutesFields => setForm(current => ({ ...current, minutesFields }))} disabled={disabled}/>
       <div className="workflow-form-grid">
         <label>회의 일시<input type="datetime-local" value={form.meetingAt} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, meetingAt: event.target.value }))} /></label>
         <label>회의 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">진행 예정</option><option value="COMPLETED">진행 완료</option><option value="DRAFTED">회의록 초안</option><option value="CONFIRMED">확정</option></select></label>
         <label className="is-wide">장소<input value={form.location} maxLength={300} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} placeholder="본사 회의실 또는 온라인 링크" /></label>
-        <label className="is-wide">회의 안건<textarea value={form.agenda} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, agenda: event.target.value }))} placeholder="업무 범위, 현장 일정, 산출 기준, 고객 요청" /></label>
-        <label className="is-wide">참석 팀·담당자<input value={form.participantUnits} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, participantUnits: event.target.value }))} placeholder="쉼표로 구분" /></label>
+        <label className="is-wide">회의명·안건<textarea value={form.agenda} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, agenda: event.target.value }))} placeholder="업무 범위, 현장 일정, 산출 기준, 고객 요청" /></label>
+        <label className="is-wide">참석자 (컨코스트)<input value={form.participantUnits} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, participantUnits: event.target.value }))} placeholder="쉼표로 구분" /></label>
         <label className="is-wide">회의 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="녹음 전사문 또는 회의 중 메모를 입력하세요." /></label>
       </div>
-      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의 기록 저장' ? '회의 원문 저장 중…' : '3. 회의 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
+      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의 기록 저장' ? '회의 원문 저장 중…' : '3. 회의 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || unsaved || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
+      {unsaved && <p className="workflow-honest-note" role="status">수정한 내용을 먼저 저장하면 저장본 자동정리를 실행할 수 있습니다.</p>}
       <p className="workflow-honest-note">관리자 설정의 조직 공용 Gemini 키를 사용합니다. 키가 없는 테스트 환경에서는 원문을 보존한 로컬 구조화 초안만 만들며, 모든 결과는 담당자가 원문과 대조해 확정해야 합니다.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
-      <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문이 먼저 미리보기로 표시됩니다. 자동작성·정리 후에는 결정사항과 후속업무를 검수하고 최종 확정합니다.</p>
+      <p className="workflow-output-guide">입력한 양식 정보와 회의 메모를 확인하세요. 자동정리 후에는 정리본을 원문과 대조하고 확정합니다.</p>
       {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
-      {displayedSummary ? <>
-        <div className="company-minutes-scroll" tabIndex={0} role="region" aria-label="회사 회의록 최종본 표">
-          <table className="company-minutes-table">
-            <caption>회 의 록</caption>
-            <colgroup>{Array.from({ length: 8 }, (_, index) => <col key={index} />)}</colgroup>
-            <tbody>
-              <tr><th scope="row">작성자</th><th scope="col">소속</th><td colSpan={2}>클레임센터</td><th scope="col">직급</th><td>미입력</td><th scope="col">성명</th><td>{record?.updatedByName || '미입력'}</td></tr>
-              <tr><th scope="row">회의일시</th><td colSpan={3}>{meetingDate}</td><th scope="row">시간</th><td>{meetingTime}</td><td className="company-minutes-time-separator">~</td><td>미입력</td></tr>
-              <tr><th scope="row">회의장소</th><td colSpan={7}>{form.location.trim() || '미입력'}</td></tr>
-              <tr><th scope="row">거래처명</th><td colSpan={7}>미입력</td></tr>
-              <tr><th scope="row">보고부서</th><td colSpan={7}>클레임센터</td></tr>
-              <tr><th scope="row">참조부서</th><td colSpan={7}>미입력</td></tr>
-              <tr><th scope="row">참석자<br />(컨코스트)</th><td colSpan={7}>{participantText}</td></tr>
-              <tr><th scope="row">참석자<br />(거래처)</th><td colSpan={7}>미입력</td></tr>
-              <tr><th scope="row">회의명</th><td colSpan={7}>{meetingTitle}</td></tr>
-              <tr><th scope="row">첨부파일</th><td colSpan={7}>{attachmentName}</td></tr>
-              <tr className="company-minutes-section-heading"><th colSpan={8} scope="colgroup">회의내용 및 지시사항</th></tr>
-              <tr><td className="company-minutes-content" colSpan={8}>
-                <p>{displayedSummary}</p>
-                {displayedTimeline.length > 0 && <section aria-label="결정사항과 후속업무"><h4>결정사항 · 후속업무</h4><ol>{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><strong>{item.order}. {item.title}</strong><span>{item.detail}</span></li>)}</ol></section>}
-              </td></tr>
-              <tr className="company-minutes-note"><td colSpan={8}>※ 거래처 명함은 PDF 파일로 업로드</td></tr>
-            </tbody>
-          </table>
-        </div>
+      <>
+        <CompanyMinutes values={minutesValues}/>
         <Button className="workflow-template-button" variant="secondary" onClick={downloadCurrentMinutes}>현재 회의록 XLSX 내려받기</Button>
-        {record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
-      </> : <div className="workflow-empty"><strong>아직 정리된 회의록이 없습니다.</strong><p>회사 양식을 가져오거나 회의 메모를 저장한 뒤 Gemini 정리를 실행하세요.</p></div>}
+        {record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
+      </>
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
-      <header><div><span>KICKOFF EVIDENCE</span><h3>착수회의 제공자료·회의록·녹음</h3></div><em>회사 Drive 자동 분류</em></header>
+      <header><div><span>KICKOFF EVIDENCE</span><h3>착수회의 제공자료·회의록·녹음 → 회사 Google Drive에 업로드하세요</h3></div><em>회사 Drive 자동 분류</em></header>
       <p className="workflow-evidence-intro">발주처가 제공한 원본, 회의록과 녹음파일을 현재 프로젝트에 바로 연결합니다. 다른 분류는 자료실 전체 보기에서 선택할 수 있습니다.</p>
       <CaseEvidencePanel caseId={caseId} defaultCategory="KICKOFF_MATERIAL" allowedCategories={['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING']} compact onNavigate={onNavigate} />
     </article>
@@ -727,8 +702,8 @@ const KickoffEditor: React.FC<{
 
 const SurveyEditor: React.FC<{
   caseId: string;
-  form: { surveyDate: string; location: string; scopeText: string; leadUnit: string; rawNotes: string; status: string; expectedVersion: number; outputExpectedVersion: number };
-  setForm: React.Dispatch<React.SetStateAction<{ surveyDate: string; location: string; scopeText: string; leadUnit: string; rawNotes: string; status: string; expectedVersion: number; outputExpectedVersion: number }>>;
+  form: { minutesFields: MinutesFields; surveyDate: string; location: string; scopeText: string; leadUnit: string; rawNotes: string; status: string; expectedVersion: number; outputExpectedVersion: number };
+  setForm: React.Dispatch<React.SetStateAction<{ minutesFields: MinutesFields; surveyDate: string; location: string; scopeText: string; leadUnit: string; rawNotes: string; status: string; expectedVersion: number; outputExpectedVersion: number }>>;
   surveys: SurveyRecord[];
   drive: WorkflowPayload['googleDrive'];
   disabled: boolean;
@@ -742,23 +717,26 @@ const SurveyEditor: React.FC<{
   const [archivedFile,setArchivedFile] = useState<WorkflowArchivedFile | null>(null);
   useEffect(() => { setImportedDraft(null); setArchivedFile(null); }, [caseId]);
   const record = surveys.find((item) => item.surveyDate === form.surveyDate) ?? null;
-  const savedSourcePreview = record?.rawNotes.trim() || record?.scopeText.trim() || '';
-  const displayedSummary = record?.summaryText || importedDraft?.summary || (savedSourcePreview ? `저장된 현장조사 원문 미리보기\n\n${savedSourcePreview}` : '');
-  const displayedTimeline = record?.summaryText ? record.timeline : importedDraft?.timeline ?? (savedSourcePreview ? [{ order:1,title:'저장된 원문',detail:'자동작성·정리를 실행하면 관찰사항과 추가 확인업무가 항목별로 표시됩니다.' }] : []);
-  const outputState = record?.outputStatus === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : savedSourcePreview ? '원문 저장 완료 · 자동작성 대기' : 'EMPTY';
+  const displayedSummary = minutesContent(form.rawNotes, record?.rawNotes ?? importedDraft?.sourceNotes, record?.summaryText || importedDraft?.summary);
+  const displayedTimeline = form.rawNotes.trim() === (record?.rawNotes ?? importedDraft?.sourceNotes ?? '').trim() ? (record?.summaryText ? record.timeline : importedDraft?.timeline ?? []) : [];
+  const outputState = record?.outputStatus === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : form.rawNotes ? '입력 내용 미리보기' : '작성 중';
+  const minutesValues = { ...form.minutesFields, meetingDate: form.surveyDate.replaceAll('-', '. '), meetingTime: form.minutesFields.meetingStartTime, location: form.location, meetingTitle: form.minutesFields.meetingTitle || form.scopeText, attachmentName: form.minutesFields.attachmentName || archivedFile?.originalName || '', summary: displayedSummary, followUps: displayedTimeline.map(item => `${item.order}. ${item.title}\n${item.detail}`).join('\n\n') };
+  const unsaved = !record || form.location !== (record.location ?? '') || form.scopeText !== record.scopeText || form.leadUnit !== record.leadUnit || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
   const changeSurveyDate = (surveyDate:string) => {
     const existing = surveys.find((item) => item.surveyDate === surveyDate);
     setImportedDraft(null);
+    setArchivedFile(null);
     setForm((current) => existing ? {
-      surveyDate,location:existing.location??'',scopeText:existing.scopeText,leadUnit:existing.leadUnit,rawNotes:existing.rawNotes??'',status:existing.status,expectedVersion:existing.version,outputExpectedVersion:existing.outputVersion??0
-    } : { ...current,surveyDate,location:'',scopeText:'',rawNotes:'',status:'PLANNED',expectedVersion:0,outputExpectedVersion:0 });
+      minutesFields: normalizeMinutesFields(existing.minutesFields) ?? { ...minutesFieldDefaults }, surveyDate,location:existing.location??'',scopeText:existing.scopeText,leadUnit:existing.leadUnit,rawNotes:existing.rawNotes??'',status:existing.status,expectedVersion:existing.version,outputExpectedVersion:existing.outputVersion??0
+    } : { ...current,minutesFields:{ ...minutesFieldDefaults },surveyDate,location:'',scopeText:'',rawNotes:'',status:'PLANNED',expectedVersion:0,outputExpectedVersion:0 });
   };
   return (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>SITE SURVEY PLAN</span><h3>현장조사 계획·원본 분류</h3></div><em>v{form.expectedVersion}</em></header>
-      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => { const surveyDate=value.surveyDate??current.surveyDate; const existing=surveys.find((item)=>item.surveyDate===surveyDate); return { ...current,surveyDate,location:value.location,scopeText:value.agenda||current.scopeText,leadUnit:value.leadUnit||current.leadUnit,rawNotes:value.sourceNotes,status:'IN_PROGRESS',expectedVersion:existing?.version??0,outputExpectedVersion:existing?.outputVersion??0 }; }); }}/>
-      <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>가져온 현장 기록을 아래에서 보완하고 저장할 수 있습니다.</span></div>
+      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => { const surveyDate=value.surveyDate??current.surveyDate; const existing=surveys.find((item)=>item.surveyDate===surveyDate); return { ...current,minutesFields: normalizeMinutesFields(value.minutesFields) ?? (surveyDate === current.surveyDate ? current.minutesFields : normalizeMinutesFields(existing?.minutesFields) ?? { ...minutesFieldDefaults }),surveyDate,location:value.location,scopeText:value.agenda||current.scopeText,leadUnit:value.leadUnit||current.leadUnit,rawNotes:value.sourceNotes,status:'IN_PROGRESS',expectedVersion:existing?.version??0,outputExpectedVersion:existing?.outputVersion??0 }; }); }}/>
+      <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>현장 기록도 동일한 회사 회의록 양식으로 확인·저장합니다.</span></div>
+      <MinutesFieldsEditor value={form.minutesFields} onChange={minutesFields => setForm(current => ({ ...current, minutesFields }))} disabled={disabled} survey/>
       <div className="workflow-form-grid">
         <label>조사 일자<input type="date" value={form.surveyDate} disabled={disabled} onChange={(event) => changeSurveyDate(event.target.value)} /></label>
         <label>진행 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option></select></label>
@@ -767,21 +745,24 @@ const SurveyEditor: React.FC<{
         <label className="is-wide">조사 책임 팀<input value={form.leadUnit} maxLength={120} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, leadUnit: event.target.value }))} /></label>
         <label className="is-wide">조사 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="현장 관찰, 인터뷰, 사진·도면 번호와 추가 확인사항을 입력하세요." /></label>
       </div>
-      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사 기록 저장' ? '조사 원문 저장 중…' : '3. 조사 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === '현장조사 자동작성·정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
+      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사 기록 저장' ? '조사 원문 저장 중…' : '3. 조사 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || unsaved || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === '현장조사 자동작성·정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
+      {unsaved && <p className="workflow-honest-note" role="status">수정한 내용을 먼저 저장한 뒤 자동정리·최종 확정을 진행하세요.</p>}
       <p className="workflow-honest-note">조사 계획은 자동 보존되고, 아래 원본 자료는 회사 Google Drive의 프로젝트/현장조사/월 폴더에 저장됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>SITE NOTES · HUMAN REVIEW</span><h3>현장조사 최종본 · 관찰사항 · 후속확인</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문을 먼저 미리보기로 확인합니다. 자동작성·정리 후에는 관찰사항과 추가 확인업무를 원문과 대조하고 최종 확정합니다.</p>
       {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
-      {displayedSummary ? <><pre className="workflow-summary-text">{displayedSummary}</pre><ol className="workflow-timeline">{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol>{record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}</> : <div className="workflow-empty"><strong>아직 정리된 현장조사 기록이 없습니다.</strong><p>현장 원본을 가져오거나 조사 메모를 저장한 뒤 자동작성·정리를 실행하세요.</p></div>}
+      <CompanyMinutes values={minutesValues}/>
+      <Button className="workflow-template-button" variant="secondary" onClick={() => downloadMinutes(minutesValues, `현장조사_회의록_${form.surveyDate}.xlsx`)}>현재 회의록 XLSX 내려받기</Button>
+      {record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
     </article>
     <article className="workflow-editor-card workflow-survey-ledger-card">
       <header><div><span>FOLDER LEDGER</span><h3>조사일자별 저장 기록</h3></div><em>{surveys.length}건</em></header>
       {surveys.length ? <div className="survey-list">{surveys.map((item) => <section key={item.id}><div><strong>{item.surveyDate} · {item.leadUnit}</strong><span>{item.location || '위치 미입력'} · {item.status}</span></div><code>{item.folderPath}</code><small>사진 {item.photoCount} · 녹음 {item.audioCount} · 문서 {item.documentCount}</small></section>)}</div> : <div className="workflow-empty"><strong>저장된 현장조사 계획이 없습니다.</strong><p>조사 일자와 범위를 먼저 등록하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
-      <header><div><span>SITE EVIDENCE</span><h3>현장 사진·녹음·도면 업로드</h3></div><em>프로젝트 자료실 자동 연동</em></header>
+      <header><div><span>SITE EVIDENCE</span><h3>현장 사진·녹음·도면 → 회사 Google Drive에 업로드하세요</h3></div><em>프로젝트 자료실 자동 연동</em></header>
       <p className="workflow-evidence-intro">현장 사진을 기본으로 열었습니다. 녹음과 기타 조사자료는 상단 분류 탭을 바꿔 올리세요.</p>
       <CaseEvidencePanel caseId={caseId} defaultCategory="SITE_PHOTO" allowedCategories={['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT']} compact onNavigate={onNavigate} />
     </article>
@@ -818,7 +799,7 @@ const AllocationEditor: React.FC<{
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
       <header>
-        <div><span>PROJECT EVIDENCE INTAKE</span><h3>산출자료·내역자료 업로드</h3></div>
+        <div><span>PROJECT EVIDENCE INTAKE</span><h3>산출자료·내역자료 → 회사 Google Drive에 업로드하세요</h3></div>
         <em>프로젝트 자료실 자동 연동</em>
       </header>
       <p className="workflow-evidence-intro">도면, 산출서, 내역서 등 원본을 구분해 올리면 현재 프로젝트의 자료실에 즉시 저장됩니다. 업로드 사용자와 일시는 자동 기록됩니다.</p>

@@ -40,6 +40,13 @@ export interface ReportDocxValues {
 }
 
 export interface MeetingMinutesExcelValues {
+  authorDepartment?: string;
+  authorPosition?: string;
+  clientName?: string;
+  reportingDepartment?: string;
+  referenceDepartments?: string;
+  clientParticipants?: string;
+  meetingEndTime?: string;
   author: string;
   meetingDate: string;
   meetingTime: string;
@@ -93,7 +100,7 @@ const reportStudioFields: Array<{ code: keyof ReportStudioExcelValues; label: st
   { code:'reportContent',label:'보고서 본문',guide:'챕터 제목과 본문을 포함한 전체 초안. Markdown 표·목록을 사용할 수 있습니다.' },
 ];
 
-const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
+const xml = (value: string) => value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/gu, '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 const u16 = (value: number) => new Uint8Array([value & 255, (value >>> 8) & 255]);
 const u32 = (value: number) => new Uint8Array([value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255]);
 const concat = (parts: Uint8Array[]) => {
@@ -131,21 +138,22 @@ function zipStore(files: Array<{ name: string; content: string }>): Uint8Array {
 const cell = (reference: string, value: string, style = '') => `<c r="${reference}" t="inlineStr"${style ? ` s="${style}"` : ''}><is><t xml:space="preserve">${xml(value)}</t></is></c>`;
 
 export function meetingMinutesWorkbook(values: MeetingMinutesExcelValues): Uint8Array {
+  const text = (value?: string) => value?.trim() || '—';
+  const merges = ['A1:H1','C2:D2','B3:D3',...Array.from({length:8},(_,i)=>`B${i+4}:H${i+4}`),'A12:H12','A13:H13','A14:H14'];
   const rows = [
     `<row r="1" ht="34" customHeight="1">${cell('A1','회 의 록','1')}</row>`,
-    `<row r="2" ht="26" customHeight="1">${cell('A2','작성자','2')}${cell('B2',values.author,'3')}${cell('E2','소속','2')}${cell('F2','클레임센터','3')}</row>`,
-    `<row r="3" ht="26" customHeight="1">${cell('A3','회의일시','2')}${cell('B3',values.meetingDate,'3')}${cell('E3','시간','2')}${cell('F3',values.meetingTime,'3')}</row>`,
-    `<row r="4" ht="26" customHeight="1">${cell('A4','회의장소','2')}${cell('B4',values.location,'3')}</row>`,
-    `<row r="5" ht="26" customHeight="1">${cell('A5','거래처명','2')}${cell('B5','미입력','3')}</row>`,
-    `<row r="6" ht="26" customHeight="1">${cell('A6','보고부서','2')}${cell('B6','클레임센터','3')}${cell('E6','참조부서','2')}${cell('F6','미입력','3')}</row>`,
-    `<row r="7" ht="34" customHeight="1">${cell('A7','참석자','2')}${cell('B7',values.participants,'3')}</row>`,
-    `<row r="8" ht="34" customHeight="1">${cell('A8','회의명','2')}${cell('B8',values.meetingTitle,'3')}</row>`,
-    `<row r="9" ht="34" customHeight="1">${cell('A9','첨부파일','2')}${cell('B9',values.attachmentName,'3')}</row>`,
-    `<row r="10" ht="28" customHeight="1">${cell('A10','회의내용 및 지시사항','2')}</row>`,
-    `<row r="11" ht="230" customHeight="1">${cell('A11',values.summary,'4')}</row>`,
-    `<row r="12" ht="120" customHeight="1">${cell('A12',`결정사항 · 후속업무\n${values.followUps}`,'4')}</row>`,
+    `<row r="2" ht="32" customHeight="1">${cell('A2','작성자','2')}${cell('B2','소속','2')}${cell('C2',text(values.authorDepartment),'3')}${cell('E2','직급','2')}${cell('F2',text(values.authorPosition),'3')}${cell('G2','성명','2')}${cell('H2',text(values.author),'3')}</row>`,
+    `<row r="3" ht="28" customHeight="1">${cell('A3','회의일시','2')}${cell('B3',text(values.meetingDate),'3')}${cell('E3','시간','2')}${cell('F3',text(values.meetingTime),'3')}${cell('G3','~','3')}${cell('H3',text(values.meetingEndTime),'3')}</row>`,
+    ...[
+      ['회의장소',values.location],['거래처명',values.clientName],['보고부서',values.reportingDepartment],
+      ['참조부서',values.referenceDepartments?.trim() || '모든 부서'],['참석자 (컨코스트)',values.participants],
+      ['참석자 (거래처)',values.clientParticipants],['회의명',values.meetingTitle],['첨부파일',values.attachmentName]
+    ].map(([label,value],i)=>`<row r="${i+4}" ht="32" customHeight="1">${cell(`A${i+4}`,label!,'2')}${cell(`B${i+4}`,text(value),'3')}</row>`),
+    `<row r="12" ht="28" customHeight="1">${cell('A12','회의내용 및 지시사항','2')}</row>`,
+    `<row r="13" ht="230" customHeight="1">${cell('A13',values.summary,'4')}</row>`,
+    `<row r="14" ht="120" customHeight="1">${cell('A14',values.followUps ? `결정사항 · 후속업무\n${values.followUps}` : '', '4')}</row>`,
   ].join('');
-  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews><cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="4" width="20" customWidth="1"/><col min="5" max="5" width="14" customWidth="1"/><col min="6" max="8" width="20" customWidth="1"/></cols><sheetData>${rows}</sheetData><mergeCells count="15"><mergeCell ref="A1:H1"/><mergeCell ref="B2:D2"/><mergeCell ref="F2:H2"/><mergeCell ref="B3:D3"/><mergeCell ref="F3:H3"/><mergeCell ref="B4:H4"/><mergeCell ref="B5:H5"/><mergeCell ref="B6:D6"/><mergeCell ref="F6:H6"/><mergeCell ref="B7:H7"/><mergeCell ref="B8:H8"/><mergeCell ref="B9:H9"/><mergeCell ref="A10:H10"/><mergeCell ref="A11:H11"/><mergeCell ref="A12:H12"/></mergeCells><pageSetup orientation="landscape" paperSize="9" fitToWidth="1" fitToHeight="0"/><pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/></worksheet>`;
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews><cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="4" width="20" customWidth="1"/><col min="5" max="5" width="14" customWidth="1"/><col min="6" max="8" width="20" customWidth="1"/></cols><sheetData>${rows}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup orientation="portrait" paperSize="9" fitToWidth="1" fitToHeight="0"/></worksheet>`;
   const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Malgun Gothic"/></font><font><b/><sz val="18"/><name val="Malgun Gothic"/></font><font><b/><sz val="11"/><name val="Malgun Gothic"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7EEF8"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="1" applyFont="1" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>';
   return zipStore([
     { name:'[Content_Types].xml', content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },

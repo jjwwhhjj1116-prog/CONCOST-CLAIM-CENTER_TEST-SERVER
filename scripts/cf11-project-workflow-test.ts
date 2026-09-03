@@ -76,6 +76,38 @@ function request(path: string, token = ADMIN_TOKEN, init: RequestInit = {}): Req
   return new Request(`https://preview.example${path}`, { ...init, headers });
 }
 
+test('CF103 company fields survive save/reopen, legacy clients, long event feeds, and survey dates', async () => {
+  const { sql, env } = await setup();
+  const base = `/api/cases/${CASE_ID}/workflow`;
+  const get = async () => { const res=await worker.fetch(request(base),env); assert.equal(res.status,200); return res.json() as Promise<any>; };
+  const save = async (path:string, body:unknown, status=200) => { const res=await worker.fetch(request(base+path,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify(body)}),env); assert.equal(res.status,status,await res.clone().text()); return res.json() as Promise<any>; };
+  const initial=await get();
+  assert.equal(initial.kickoff.minutesFields.referenceDepartments,'모든 부서');
+  const input={meetingAt:'2030-09-03T01:00:00.000Z',location:'회의실',agenda:'착수회의',participantUnits:['내부 담당자'],rawNotes:'원문은 그대로 보존',status:'DRAFTED',expectedVersion:initial.kickoff.version,minutesFields:{author:'작성자',clientName:'거래처',referenceDepartments:'',meetingEndTime:'11:30',clientParticipants:'외부 담당자'}};
+  const saved=await save('/kickoff',input);
+  assert.equal(saved.kickoff.minutesFields.clientName,'거래처');
+  assert.equal(saved.kickoff.minutesFields.referenceDepartments,'모든 부서');
+  assert.equal(saved.kickoff.rawNotes,input.rawNotes);
+  const count=()=>Number(sql.exec('SELECT COUNT(*) FROM preview_workflow_events')[0].values[0][0]);
+  const before=count(); await save('/kickoff',input,409); assert.equal(count(),before);
+  for(let i=0;i<105;i++)sql.run('INSERT INTO preview_workflow_events (id,case_id,actor_id,event_type,entity_id,detail_json,created_at) VALUES (?,?,?,?,?,?,?)',[crypto.randomUUID(),CASE_ID,ADMIN_ID,'KICKOFF_SAVED',CASE_ID,'{}','2099-01-01T00:00:00.000Z']);
+  assert.equal((await get()).kickoff.minutesFields.clientName,'거래처');
+  const {minutesFields,...legacy}=input;
+  const legacySaved=await save('/kickoff',{...legacy,expectedVersion:saved.kickoff.version});
+  assert.equal(legacySaved.kickoff.minutesFields.clientName,'거래처');
+  const cleared=await save('/kickoff',{...input,expectedVersion:legacySaved.kickoff.version,minutesFields:{clientName:'',referenceDepartments:''}});
+  assert.equal(cleared.kickoff.minutesFields.clientName,'');
+  assert.equal(cleared.kickoff.minutesFields.referenceDepartments,'모든 부서');
+  await save('/kickoff',{...input,expectedVersion:cleared.kickoff.version,minutesFields:{meetingEndTime:'99:99'}},400);
+  for(const [date,clientName] of [['2030-09-03','첫날 거래처'],['2030-09-04','둘째날 거래처']]){
+    await save('/site-survey',{surveyDate:date,location:'현장',scopeText:'조사 범위',leadUnit:'조사팀',rawNotes:'관찰 메모',status:'PLANNED',expectedVersion:0,outputExpectedVersion:0,minutesFields:{clientName,referenceDepartments:'',author:'담당자'}});
+  }
+  const reopened=await get();
+  assert.equal(reopened.siteSurveys.find((r:any)=>r.surveyDate==='2030-09-03').minutesFields.clientName,'첫날 거래처');
+  assert.equal(reopened.siteSurveys.find((r:any)=>r.surveyDate==='2030-09-04').minutesFields.clientName,'둘째날 거래처');
+  sql.close();
+});
+
 test('CF11 persists kickoff, local structured minutes, site-survey folder plans, and team allocations', async () => {
   const { sql, env } = await setup();
   const initial = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow`), env);
