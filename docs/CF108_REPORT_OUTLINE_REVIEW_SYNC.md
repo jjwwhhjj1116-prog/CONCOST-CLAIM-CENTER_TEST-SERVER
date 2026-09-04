@@ -40,3 +40,12 @@ git diff --check
 ## 배포 범위
 
 개발 환경 `wrangler.development.jsonc` / `concost-claim-center-development`만 대상으로 한다. DB migration·회사 데이터 변경·운영 서버 배포는 없다. 로그인된 실제 업무 레코드 저장과 합성 화면 검수는 구분한다.
+
+## 개발 서버 배포 결과 · 2026-09-04
+
+- 기능 소스 커밋 `50d70a3`, 추가 검수 기록 `2ed6468`, 개발 전용 원격 `test-server/fix/CF73-workflow-minutes-parity`에 푸시.
+- Worker 버전 `4c2957d0-d62e-4c3e-852d-85bc8c09ec85`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/reports/studio
+- `/health` 200 `ok`, `/readiness` 200 `ready`, 보고서 경로 200 확인.
+- 배포 HTML이 새 `index-Dg14gh88.js`를 참조한다. 해당 JS, `index.es-BFSfMzUf.js`, `index-zwz1EwQc.css`의 SHA-256이 검증한 로컬 빌드와 일치한다.
+- 브라우저 도구의 DNS 오류와 별개로 배포 후 HTTP 상태·자산 검증은 성공했다. 로그인된 실제 업무 레코드 편집 검수는 하지 않았다.
