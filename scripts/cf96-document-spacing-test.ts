@@ -27,7 +27,7 @@ test('CF96 reviewer and preview share output renderer and preserve explicit spac
   assert.match(proposal,/previewContent=\{<ProposalFinalChapterPages/u);
   assert.doesNotMatch(proposal,/<section className="proposal-review-page-parity"/u);
   assert.equal((report.match(/previewWidth=\{1123\} previewContent=\{<ReportFinalDocumentPreview/gu)??[]).length,2);
-  assert.match(report,/JSON\.stringify\(editorJsonRef\.current\) !== JSON\.stringify\(requestEditorJson\)/u);
+  assert.match(report,/JSON\.stringify\(joinReportPresentation\(editorJsonRef\.current, reportHeaderRef\.current\)\) !== JSON\.stringify\(requestEditorJson\)/u);
   assert.match(report,/marked\.parse\(expandDocumentSpacingMarkers\(content\)/u);
   assert.match(editor,/blankReplacement:[\s\S]*?data-document-spacer/u);
   assert.match(editor,/addRule\('emptyParagraph'/u);

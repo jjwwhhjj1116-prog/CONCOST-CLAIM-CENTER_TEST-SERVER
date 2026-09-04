@@ -24,9 +24,10 @@ assert.match(excerpt.markdown, /산출내역 첨부 검증/u);
 assert.match(reportSource, /HWP 전체 문서를 보고서에 적용/u);
 assert.match(reportSource, /DOCX 전체 문서 적용/u);
 assert.match(reportSource, /AI 없이 담당자 검수로 이동/u);
-assert.match(reportSource, /백업파일 불러오기/u);
+assert.match(reportSource, /시간별 백업 불러오기/u);
 assert.match(reportSource, /event\.key\.toLowerCase\(\) !== 's'/u);
-assert.match(reportSource, /readSpreadsheetExcerpt/u);
+// CF110 removes the redundant upload panel, not the shared spreadsheet parser.
+assert.doesNotMatch(reportSource, /report-quantity-attachment|CURRENT CHAPTER AGENT/u);
 assert.doesNotMatch(reportSource, /ref=\{reportBodyRef\} compact documentKey=\{`report-step3/u);
 assert.match(reportCss, /report-step-card--3 \.form-stack \{ width: 100%; max-width: none/u);
 assert.match(reportCss, /min-height: 720px/u);

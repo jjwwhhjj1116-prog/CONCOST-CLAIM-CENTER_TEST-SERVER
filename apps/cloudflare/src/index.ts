@@ -36,6 +36,7 @@ import { categoryEvidence, evidenceDisplayName, evidenceVersions, evidenceVersio
 import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './proposal-company-content';
 import { ErpBridgeError, registerProjectInErp } from './erp-bridge';
 import { normalizeMinutesFields } from './company-minutes';
+import { joinReportPresentation, splitReportPresentation } from '../../../packages/document-engine/src/report-presentation';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -4430,8 +4431,8 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
 
   if (!canManage) return json({ error: '담당 PM 또는 관리자만 검수 완료 챕터를 보고서에 반영할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
   if (current.status !== 'READY') return json({ error: '담당자가 검수 완료로 제출한 챕터만 반영할 수 있습니다.', code: 'CHAPTER_NOT_READY' }, 409);
-  const report = await env.DB.prepare('SELECT title,content,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
-    .bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; version: number; updatedAt: string }>();
+  const report = await env.DB.prepare('SELECT title,content,editor_json AS editorJson,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
+    .bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; editorJson: string | null; version: number; updatedAt: string }>();
   const expectedReportVersion = Number(body.expectedReportVersion);
   if (!report || Number(report.version) !== expectedReportVersion) return json({ error: 'Report changed before the chapter was applied', code: 'VERSION_CONFLICT', currentVersion: Number(report?.version ?? 0) }, 409);
   const outline = await previewOutlinePlan(env, caseId, await previewPromptRows(env, caseRow.claimType));
@@ -4440,11 +4441,14 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   const nextReportVersion = expectedReportVersion + 1;
   const reportNow = new Date(Math.max(Date.now(), Date.parse(report.updatedAt) + 1, Date.parse(now) + 1)).toISOString();
   const reportSha = await sha256Hex(nextContent);
+  // The body is replaced from chapter text; retain only document presentation metadata.
+  const presentation = joinReportPresentation(null, splitReportPresentation(parsePreviewEditorJson(report.editorJson)).header);
+  const editorJson = presentation ? JSON.stringify(presentation) : null;
   const results = await env.DB.batch([
-    env.DB.prepare('UPDATE preview_report_drafts SET content=?,editor_json=NULL,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=?')
-      .bind(nextContent, body.chapterId, user.id, reportNow, caseId, PREVIEW_ORGANIZATION_ID, expectedReportVersion),
-    env.DB.prepare('INSERT INTO preview_report_revisions (id,case_id,version,title,content,editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)')
-      .bind(crypto.randomUUID(), caseId, nextReportVersion, report.title, nextContent, reportSha, user.id, reportNow, caseId, nextReportVersion, reportNow),
+    env.DB.prepare('UPDATE preview_report_drafts SET content=?,editor_json=?,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=?')
+      .bind(nextContent, editorJson, body.chapterId, user.id, reportNow, caseId, PREVIEW_ORGANIZATION_ID, expectedReportVersion),
+    env.DB.prepare('INSERT INTO preview_report_revisions (id,case_id,version,title,content,editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)')
+      .bind(crypto.randomUUID(), caseId, nextReportVersion, report.title, nextContent, editorJson, reportSha, user.id, reportNow, caseId, nextReportVersion, reportNow),
     env.DB.prepare("UPDATE preview_report_chapter_assignments SET status='APPLIED',version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND status='READY'")
       .bind(user.id, reportNow, caseId, body.chapterId, expectedVersion),
     env.DB.prepare("INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,'APPLIED',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)")

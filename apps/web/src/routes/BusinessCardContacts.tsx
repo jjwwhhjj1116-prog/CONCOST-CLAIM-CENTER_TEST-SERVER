@@ -1,4 +1,4 @@
-import { Button, Card, Input } from '@claim-studio/ui';
+import { Button, Card, Dialog, Input } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../api';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
@@ -45,6 +45,7 @@ export function BusinessCardContacts({ mode, roles, onNavigate }: { mode:Busines
   const [analysis,setAnalysis]=useState<Analysis|null>(null); const [fields,setFields]=useState<BusinessCardFields>(EMPTY_FIELDS);
   const [busy,setBusy]=useState(''); const [error,setError]=useState(''); const [notice,setNotice]=useState('');
   const [analysisProgress,setAnalysisProgress]=useState<{status:AiGenerationStatus;error?:string}|null>(null);
+  const [deleteTarget,setDeleteTarget]=useState<BusinessCardRecord|null>(null);
 
   const loadCards=useCallback(async(search='')=>{
     try{const result=await apiRequest<{cards:BusinessCardRecord[]}>(`/api/business-cards?q=${encodeURIComponent(search)}${mode==='DATABASE'?'&includeArchived=true':''}`);setCards(result.cards);setError('');}
@@ -77,8 +78,10 @@ export function BusinessCardContacts({ mode, roles, onNavigate }: { mode:Busines
     finally{setBusy('');}
   };
   const changeArchive=async(card:BusinessCardRecord,archive:boolean)=>{
-    if(!isAdmin)return;setBusy(card.id);setError('');
-    try{await apiRequest(`/api/business-cards/${encodeURIComponent(card.id)}`,{method:'PUT',body:JSON.stringify({action:archive?'ARCHIVE':'RESTORE',expectedVersion:card.version})});await loadCards(query);setNotice(archive?'명함을 목록에서 보관 처리했습니다. Drive 원본과 감사이력은 삭제하지 않았습니다.':'명함을 인맥관리 목록으로 복원했습니다.');}
+    if(!isAdmin||busy)return;setBusy(card.id);setError('');setNotice('');
+    try{await apiRequest(`/api/business-cards/${encodeURIComponent(card.id)}`,{method:'PUT',body:JSON.stringify({action:archive?'ARCHIVE':'RESTORE',expectedVersion:card.version})});
+      setCards(current=>mode==='LIST'&&archive?current.filter(item=>item.id!==card.id):current.map(item=>item.id===card.id?{...item,deletedAt:archive?new Date().toISOString():null,version:item.version+1}:item));
+      setDeleteTarget(null);await loadCards(query);setNotice(archive?'명함을 목록에서 삭제했습니다. Drive 원본은 보존되며 명함 DB관리에서 복원할 수 있습니다.':'명함을 인맥관리 목록으로 복원했습니다.');}
     catch(reason){setError(reason instanceof Error?reason.message:'명함 상태를 변경하지 못했습니다.');}
     finally{setBusy('');}
   };
@@ -96,6 +99,11 @@ export function BusinessCardContacts({ mode, roles, onNavigate }: { mode:Busines
     <div className="workspace-hero business-card-hero"><div><span className="workspace-eyebrow">CLAIM CENTER CONTACT NETWORK</span><h2 id="business-card-list-title">{mode==='DATABASE'?'명함 DB관리':'인맥관리'}</h2><p>{mode==='DATABASE'?'관리자가 명함 등록 이력과 보관 상태를 관리합니다. 물리 삭제 없이 Drive 원본과 감사이력을 보존합니다.':'등록된 명함을 이름·회사·부서·직함·전화·이메일·태그로 빠르게 찾습니다.'}</p></div><div className="business-card-kpi"><b>{mode==='DATABASE'?'활성 명함':'검색 가능 인맥'}</b><strong>{filteredCount}</strong><small>등록된 연락처</small></div></div>
     <Card title="통합 검색"><form className="business-card-search" onSubmit={(event)=>{event.preventDefault();void loadCards(query);}}><Input label="검색어" value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="이름·회사·부서·전화·이메일·태그"/><Button type="submit">검색</Button><Button type="button" variant="secondary" onClick={()=>onNavigate('/contacts/cards/new')}>+ 명함 등록</Button></form></Card>
     {notice&&<p className="success-box" role="status">{notice}</p>}{error&&<p className="error-box" role="alert">{error}</p>}
-    <div className="business-card-list">{cards.length?cards.map((card)=><article key={card.id} className={card.deletedAt?'is-archived':''}><header><div className="business-card-avatar" aria-hidden="true">{card.name.slice(0,1)}</div><div><h3>{card.name}</h3><p>{[card.company,card.department,card.title].filter(Boolean).join(' · ')||'소속 정보 없음'}</p></div>{card.deletedAt&&<span>보관됨</span>}</header><dl><div><dt>휴대전화</dt><dd>{card.mobile||'-'}</dd></div><div><dt>전화</dt><dd>{card.phone||'-'}</dd></div><div><dt>이메일</dt><dd>{card.email||'-'}</dd></div><div><dt>주소</dt><dd>{card.address||'-'}</dd></div></dl>{card.tags&&<p className="business-card-tags">{card.tags}</p>}<footer><small>{card.createdByName} · {new Date(card.createdAt).toLocaleDateString('ko-KR')} · {card.geminiModelCode}</small><div><a href={card.googleDriveUrl} target="_blank" rel="noreferrer noopener">Drive 원본</a>{mode==='DATABASE'&&isAdmin&&<button type="button" disabled={busy===card.id} onClick={()=>void changeArchive(card,!card.deletedAt)}>{card.deletedAt?'복원':'보관'}</button>}</div></footer></article>):<p className="empty-box">검색 조건에 맞는 인맥이 없습니다. 명함을 등록하면 이곳에서 바로 찾을 수 있습니다.</p>}</div>
+    <div className="business-card-list">{cards.length?cards.map((card)=><article key={card.id} className={card.deletedAt?'is-archived':''}><header><div className="business-card-avatar" aria-hidden="true">{card.name.slice(0,1)}</div><div><h3>{card.name}</h3><p>{[card.company,card.department,card.title].filter(Boolean).join(' · ')||'소속 정보 없음'}</p></div>{card.deletedAt&&<span>보관됨</span>}</header><dl><div><dt>휴대전화</dt><dd>{card.mobile||'-'}</dd></div><div><dt>전화</dt><dd>{card.phone||'-'}</dd></div><div><dt>이메일</dt><dd>{card.email||'-'}</dd></div><div><dt>주소</dt><dd>{card.address||'-'}</dd></div></dl>{card.tags&&<p className="business-card-tags">{card.tags}</p>}<footer><small>{card.createdByName} · {new Date(card.createdAt).toLocaleDateString('ko-KR')} · {card.geminiModelCode}</small><div><a href={card.googleDriveUrl} target="_blank" rel="noreferrer noopener">Drive 원본</a>{isAdmin&&<button type="button" aria-label={`${card.name} 명함 ${card.deletedAt?'복원':'삭제'}`} disabled={Boolean(busy)} onClick={()=>card.deletedAt?void changeArchive(card,false):setDeleteTarget(card)}>{card.deletedAt?'복원':'삭제'}</button>}</div></footer></article>):<p className="empty-box">검색 조건에 맞는 인맥이 없습니다. 명함을 등록하면 이곳에서 바로 찾을 수 있습니다.</p>}</div>
+    <Dialog isOpen={Boolean(deleteTarget)} title="명함을 목록에서 삭제할까요?" hideDefaultAction onClose={()=>{if(!busy)setDeleteTarget(null);}}>
+      <p><strong>{deleteTarget?.name}</strong>{deleteTarget?.company?` · ${deleteTarget.company}`:''}</p><p>인맥 목록에서 삭제합니다. 회사 Google Drive 원본과 감사이력은 보존되며, 관리자가 명함 DB관리에서 복원할 수 있습니다.</p>
+      {error&&<p className="error-box" role="alert">{error}</p>}
+      <div className="action-row"><Button variant="secondary" disabled={Boolean(busy)} onClick={()=>setDeleteTarget(null)}>취소</Button><Button disabled={Boolean(busy)} onClick={()=>{if(deleteTarget)void changeArchive(deleteTarget,true);}}>{busy?'삭제 중…':'목록에서 삭제'}</Button></div>
+    </Dialog>
   </section>;
 }

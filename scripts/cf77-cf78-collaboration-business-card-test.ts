@@ -91,6 +91,7 @@ test('CF77 enforces PM-owned chapter collaboration and recoverable delivered-pro
 
 test('CF108 collaboration APPLY uses the latest saved outline title, not the assignment snapshot', async () => {
   const { sql, env } = await setup();
+  sql.exec(migration('0052_cf79_case_law_member_alerts_backups.sql'));
   sql.exec(migration('0054_cf84_claim_report_guideline_package.sql'));
   const caseId = '78000000-0000-4000-8000-000000000108';
   const now = new Date().toISOString();
@@ -106,9 +107,10 @@ test('CF108 collaboration APPLY uses the latest saved outline title, not the ass
   assert.equal(assigned.status, 200, await assigned.text());
   const ready = await call(collaborationPath, 'POST', { chapterId: chapter.id, action: 'MARK_READY', draftText: '회원 검수 원고 보존', expectedVersion: 1, expectedReportVersion: 0 }, STAFF_TOKEN);
   assert.equal(ready.status, 200, await ready.text());
-  const draft = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { title: '합성 보고서', content: '기존 다른 챕터 보존', editorJson: null, expectedVersion: 0, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' });
+  const headerJson = { type:'doc', attrs:{ reportHeader:{ enabled:false, text:'CF110 보존 머리글\n보조정보' } } };
+  const draft = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { title: '합성 보고서', content: '기존 다른 챕터 보존', editorJson: headerJson, expectedVersion: 0, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' });
   assert.equal(draft.status, 200, await draft.text());
-  const savePayload = { title: '합성 보고서', content: '기존 다른 챕터 보존', editorJson: null, expectedVersion: 1, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' };
+  const savePayload = { title: '합성 보고서', content: '기존 다른 챕터 보존', editorJson: headerJson, expectedVersion: 1, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' };
   for (const invalidId of ['', 'with space', 'chapter/path', "chapter'quote", 'x'.repeat(101)]) {
     const invalid = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { ...savePayload, selectedChapterId: invalidId });
     assert.equal(invalid.status, 400, invalidId);
@@ -128,6 +130,13 @@ test('CF108 collaboration APPLY uses the latest saved outline title, not the ass
   assert.ok(String(saved[0]).includes('기존 다른 챕터 보존'));
   assert.ok(String(saved[0]).includes('회원 검수 원고 보존'));
   assert.equal(saved[1], 3);
+  const currentJson=sql.exec('SELECT editor_json FROM preview_report_drafts WHERE case_id=?',[caseId])[0].values[0][0];
+  assert.deepEqual(JSON.parse(String(currentJson)),headerJson);
+  const revisionJson=sql.exec('SELECT editor_json FROM preview_report_revisions WHERE case_id=? AND version=3',[caseId])[0].values[0][0];
+  assert.deepEqual(JSON.parse(String(revisionJson)),headerJson);
+  const backups=sql.exec('SELECT editor_json FROM preview_report_hourly_backups WHERE case_id=?',[caseId])[0];
+  assert.ok(backups?.values.length);
+  assert.deepEqual(JSON.parse(String(backups.values[0][0])),headerJson);
   sql.close();
 });
 
@@ -140,8 +149,22 @@ test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the ori
   const registered=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:cf78-0001'},body:registerForm}),env);assert.equal(registered.status,201,await registered.text());
   const listed=await worker.fetch(req('/api/business-cards?q=%ED%99%8D%EA%B8%B8%EB%8F%99',STAFF_TOKEN),env);const cards=(await listed.json() as {cards:Array<{id:string;name:string;version:number;deletedAt:string|null}>}).cards;assert.equal(cards.length,1);assert.equal(cards[0].name,'홍길동');
   const forbidden=await worker.fetch(req(`/api/business-cards/${cards[0].id}`,STAFF_TOKEN,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'ARCHIVE',expectedVersion:cards[0].version})}),env);assert.equal(forbidden.status,403);
+  const beforeOriginal=sql.exec('SELECT google_file_id,google_folder_id,google_drive_url,source_sha256,byte_size FROM preview_business_cards WHERE id=?',[cards[0].id])[0].values;
   const archived=await worker.fetch(req(`/api/business-cards/${cards[0].id}`,ADMIN_TOKEN,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'ARCHIVE',expectedVersion:cards[0].version})}),env);assert.equal(archived.status,200);
   assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards WHERE deleted_at IS NOT NULL')[0].values[0][0]),1);
+  const visible=await worker.fetch(req('/api/business-cards',STAFF_TOKEN),env);
+  assert.equal((await visible.json() as {cards:unknown[]}).cards.length,0);
+  const hidden=await worker.fetch(req('/api/business-cards?includeArchived=true',STAFF_TOKEN),env);
+  assert.equal((await hidden.json() as {cards:unknown[]}).cards.length,0);
+  const database=await worker.fetch(req('/api/business-cards?includeArchived=true',ADMIN_TOKEN),env);
+  const archivedCard=(await database.json() as {cards:Array<{version:number}>}).cards[0];
+  assert.ok(archivedCard);
+  const stale=await worker.fetch(req(`/api/business-cards/${cards[0].id}`,ADMIN_TOKEN,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'RESTORE',expectedVersion:cards[0].version})}),env);
+  assert.equal(stale.status,409);
+  const restored=await worker.fetch(req(`/api/business-cards/${cards[0].id}`,ADMIN_TOKEN,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'RESTORE',expectedVersion:archivedCard.version})}),env);
+  assert.equal(restored.status,200);
+  assert.deepEqual(sql.exec('SELECT google_file_id,google_folder_id,google_drive_url,source_sha256,byte_size FROM preview_business_cards WHERE id=?',[cards[0].id])[0].values,beforeOriginal);
+  assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards WHERE deleted_at IS NULL')[0].values[0][0]),1);
   assert.throws(()=>sql.run('DELETE FROM preview_business_cards'),/PHYSICAL_DELETE_FORBIDDEN/u);sql.close();
 });
 

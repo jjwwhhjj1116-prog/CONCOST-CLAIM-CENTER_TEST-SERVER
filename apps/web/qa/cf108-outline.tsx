@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { PreviewReportStudio } from '../src/routes/PreviewReportStudio';
+import { BusinessCardContacts } from '../src/routes/BusinessCardContacts';
 import { editorHtmlToMarkdown, renderStructuredDocumentHtml } from '../src/documents/StructuredDocumentEditor';
 import { renameUnstructuredReportTitles } from '../src/reports/report-outline-sync';
 import { marked } from 'marked';
@@ -13,13 +14,15 @@ import '../src/theme-system.css';
 
 const params = new URLSearchParams(location.search);
 document.head.prepend(...Array.from(new DOMParser().parseFromString(appHtml, 'text/html').head.querySelectorAll('style,link[rel="stylesheet"]')).map(node => node.cloneNode(true)));
-document.documentElement.dataset.theme = 'light';
+document.documentElement.dataset.theme = params.has('dark') ? 'dark' : 'light';
 const cases = [{ id: 'cf108-case', caseNumber: 'CF108-001', title: '목차 제목 동기화 합성 검수 프로젝트', claimType: 'TYPE-01', status: 'CONTRACT' }];
-const initialDraft = { caseId: cases[0].id, title: '합성 클레임 검토 보고서', content: editorHtmlToMarkdown(renderStructuredDocumentHtml(reportJson)), editorJson: params.has('markdown') ? null : reportJson, version: 1, wizardStep: 4, selectedChapterId: 'ch1', updatedAt: new Date().toISOString(), updatedBy: { id: 'qa', name: '합성 PM' } };
+const initialDraft = { caseId: cases[0].id, title: '합성 클레임 검토 보고서', content: editorHtmlToMarkdown(renderStructuredDocumentHtml(reportJson)), editorJson: params.has('markdown') ? null : reportJson, version: 1, wizardStep: Number(params.get('step')) || 4, selectedChapterId: 'ch1', updatedAt: new Date().toISOString(), updatedBy: { id: 'qa', name: '합성 PM' } };
 const initialOutline = { persistenceAvailable: true, status: 'CONFIRMED', version: 1, updatedAt: null, updatedBy: null, items: chapters.map(ch => ({ chapterId: ch.id, chapterCode: ch.chapterCode, chapterTitle: ch.title, promptVersion: 1, planningNote: '' })) };
-const storageKey = `cf108-qa-${params.has('markdown') ? 'markdown' : 'json'}-${params.has('readonly') ? 'readonly' : 'pm'}`;
+const storageKey = `${params.has('cf110') ? 'cf110' : 'cf108'}-qa-${params.has('markdown') ? 'markdown' : 'json'}-${params.has('readonly') ? 'readonly' : 'pm'}`;
 let state = params.has('reset') ? { draft: initialDraft, outline: initialOutline } : JSON.parse(sessionStorage.getItem(storageKey) || 'null') || { draft: initialDraft, outline: initialOutline };
 let failDraft = false;
+let cards = [{ id: '00000000-0000-4000-8000-000000000110', name:'합성 연락처', company:'삭제 검수 회사', department:'검수 부서', title:'담당자', mobile:'010-0000-0000', phone:'',email:'qa@example.invalid',address:'합성 주소',tags:'합성 자료',googleDriveUrl:'#source',geminiModelCode:'QA',version:1,createdAt:new Date().toISOString(),createdByName:'합성 관리자',deletedAt:null as string|null }];
+if(params.has('contacts')) { const toggle=document.createElement('a');toggle.href='?cf110=1&contacts=1&database=1';toggle.textContent='합성 DB관리';document.querySelector('nav')?.append(toggle); }
 const audit = (value: string) => { document.getElementById('qa-audit')!.textContent = value; };
 document.getElementById('qa-fail')!.onclick = () => { failDraft = true; audit('다음 본문 저장 503 예정'); };
 const withoutHeadings = (json: typeof reportJson) => json.content?.filter(node => node.type !== 'heading');
@@ -45,7 +48,8 @@ document.getElementById('qa-check')!.onclick = () => {
     importedTableImagePreserved: htmlDom.querySelector('table')?.textContent === '보존' && htmlDom.querySelector('img')?.getAttribute('width') === '220',
     referenceLinkPreserved: referenceResult.matched.length === 1 && referenceResult.content.includes('https://example.invalid') && referenceResult.content.includes('<a href="https://example.invalid">'),
     crlfBodyPreserved: referenceResult.content.endsWith('\r\n본문\r\n\r\n[ref]: https://example.invalid\r\n'),
-    version: state.draft.version, wizardStep: state.draft.wizardStep
+    version: state.draft.version, wizardStep: state.draft.wizardStep,
+    savedHeader: state.draft.editorJson?.attrs?.reportHeader ?? null
   };
   document.getElementById('qa-checks')!.textContent = JSON.stringify(checks, null, 2);
 };
@@ -53,6 +57,19 @@ window.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
   const method = init?.method ?? 'GET';
   const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  if (url.pathname.startsWith('/api/business-cards')) {
+    if(method==='GET')return response({cards:url.searchParams.has('includeArchived')&&!params.has('readonly')?cards:cards.filter(card=>!card.deletedAt)});
+    if(method==='PUT') {
+      if(params.has('readonly'))return response({error:'관리자만 삭제할 수 있습니다.'},403);
+      if(failDraft){failDraft=false;return response({error:'합성 삭제 실패: 다시 시도하세요.'},503);}
+      const body=JSON.parse(String(init?.body));
+      if(body.expectedVersion!==cards[0]?.version)return response({error:'버전 충돌'},409);
+      cards=cards.map(card=>({...card,version:card.version+1,deletedAt:body.action==='ARCHIVE'?new Date().toISOString():null}));
+      audit(`명함 ${body.action} · Drive 원본 보존 · v${cards[0]?.version}`);
+      return response({card:cards[0]});
+    }
+    return response({error:'합성 명함 미등록 요청 차단'},405);
+  }
   if (method === 'PUT' && ['/api/report-authoring/outline', '/api/report-drafts'].includes(url.pathname)) {
     if (params.has('readonly')) return response({ error: '합성 읽기 전용' }, 403);
     const body = JSON.parse(String(init?.body));
@@ -76,4 +93,4 @@ window.fetch = async (input, init) => {
   return response({ error: 'CF108: 미등록 합성 요청 차단' }, 404);
 };
 window.open = (() => null) as typeof window.open;
-createRoot(document.getElementById('root')!).render(<PreviewReportStudio roles={params.has('readonly') ? ['reviewer'] : ['pm']} onNavigate={path => audit(`이동 요청: ${path}`)} />);
+createRoot(document.getElementById('root')!).render(params.has('contacts') ? <BusinessCardContacts mode={params.has('database')?'DATABASE':'LIST'} roles={params.has('readonly')?['staff']:['admin']} onNavigate={path=>audit(`이동 요청: ${path}`)}/> : <PreviewReportStudio roles={params.has('readonly') ? ['reviewer'] : ['pm']} onNavigate={path => audit(`이동 요청: ${path}`)} />);
