@@ -139,26 +139,66 @@ const cell = (reference: string, value: string, style = '') => `<c r="${referenc
 
 export function meetingMinutesWorkbook(values: MeetingMinutesExcelValues): Uint8Array {
   const text = (value?: string) => value?.trim() || '—';
-  const merges = ['A1:H1','C2:D2','B3:D3',...Array.from({length:8},(_,i)=>`B${i+4}:H${i+4}`),'A12:H12','A13:H13','A14:H14'];
-  const rows = [
-    `<row r="1" ht="34" customHeight="1">${cell('A1','회 의 록','1')}</row>`,
-    `<row r="2" ht="32" customHeight="1">${cell('A2','작성자','2')}${cell('B2','소속','2')}${cell('C2',text(values.authorDepartment),'3')}${cell('E2','직급','2')}${cell('F2',text(values.authorPosition),'3')}${cell('G2','성명','2')}${cell('H2',text(values.author),'3')}</row>`,
-    `<row r="3" ht="28" customHeight="1">${cell('A3','회의일시','2')}${cell('B3',text(values.meetingDate),'3')}${cell('E3','시간','2')}${cell('F3',text(values.meetingTime),'3')}${cell('G3','~','3')}${cell('H3',text(values.meetingEndTime),'3')}</row>`,
-    ...[
-      ['회의장소',values.location],['거래처명',values.clientName],['보고부서',values.reportingDepartment],
-      ['참조부서',values.referenceDepartments?.trim() || '모든 부서'],['참석자 (컨코스트)',values.participants],
-      ['참석자 (거래처)',values.clientParticipants],['회의명',values.meetingTitle],['첨부파일',values.attachmentName]
-    ].map(([label,value],i)=>`<row r="${i+4}" ht="32" customHeight="1">${cell(`A${i+4}`,label!,'2')}${cell(`B${i+4}`,text(value),'3')}</row>`),
-    `<row r="12" ht="28" customHeight="1">${cell('A12','회의내용 및 지시사항','2')}</row>`,
-    `<row r="13" ht="230" customHeight="1">${cell('A13',values.summary,'4')}</row>`,
-    `<row r="14" ht="120" customHeight="1">${cell('A14',values.followUps ? `결정사항 · 후속업무\n${values.followUps}` : '', '4')}</row>`,
-  ].join('');
-  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews><cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="4" width="20" customWidth="1"/><col min="5" max="5" width="14" customWidth="1"/><col min="6" max="8" width="20" customWidth="1"/></cols><sheetData>${rows}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup orientation="portrait" paperSize="9" fitToWidth="1" fitToHeight="0"/></worksheet>`;
-  const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Malgun Gothic"/></font><font><b/><sz val="18"/><name val="Malgun Gothic"/></font><font><b/><sz val="11"/><name val="Malgun Gothic"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7EEF8"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="1" applyFont="1" applyBorder="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>';
+  const merges: string[] = [];
+  const rows: string[] = [];
+  // Excel does not autofit merged cells. Wrap conservatively at this form's
+  // 12-character columns, then split long content into printable rows.
+  // ponytail: sizing assumes the bundled form's Malgun Gothic 11pt; remeasure if its font changes.
+  const lines = (value: string, columns: number) => value.replace(/\r\n?/g, '\n').split('\n').flatMap((line, index, paragraphs) => {
+    const result = [''];
+    let width = 0;
+    for (const char of line) {
+      const size = /[^\x00-\x7f]|[A-Zmw@%&]/u.test(char) ? 2 : char === '\t' ? 4 : 1;
+      if (width + size > columns * 12 - 4) { result.push(''); width = 0; }
+      result[result.length - 1] += char;
+      width += size;
+    }
+    if (index < paragraphs.length - 1) result[result.length - 1] += '\n';
+    return result;
+  });
+  // Styles use a four-bit outer-border mask: top, right, bottom, left.
+  // Write every cell in a merge, including blank boundary cells (Excel 2013).
+  const addRow = (fields: Array<[number, string, number]>, minimumHeight: number) => {
+    const content = fields.map(([columns, value]) => lines(value, columns));
+    const count = Math.ceil(Math.max(...content.map(parts => parts.length)) / 12);
+    for (let part = 0; part < count; part++) {
+      const row = rows.length + 1;
+      let column = 0;
+      let height = count === 1 ? minimumHeight : 24;
+      const cells = fields.map(([columns, , kind], index) => {
+        const chunk = content[index].slice(part * 12, (part + 1) * 12);
+        height = Math.max(height, chunk.length * (kind === 1 ? 24 : 17) + 12);
+        const start = column;
+        column += columns;
+        if (columns > 1) merges.push(`${String.fromCharCode(65 + start)}${row}:${String.fromCharCode(64 + column)}${row}`);
+        return Array.from({ length: columns }, (_, offset) => {
+          const border = (part === 0 ? 1 : 0) | (offset === columns - 1 ? 2 : 0) | (part === count - 1 ? 4 : 0) | (offset === 0 ? 8 : 0);
+          const reference = `${String.fromCharCode(65 + start + offset)}${row}`;
+          return cell(reference, offset === 0 ? chunk.join('') : '', String(kind * 16 + border));
+        }).join('');
+      }).join('');
+      rows.push(`<row r="${row}" ht="${height}" customHeight="1">${cells}</row>`);
+    }
+  };
+  addRow([[8, '회 의 록', 1]], 38);
+  addRow([[1,'작성자',2],[1,'소속',2],[2,text(values.authorDepartment),3],[1,'직급',2],[1,text(values.authorPosition),3],[1,'성명',2],[1,text(values.author),3]], 32);
+  addRow([[1,'회의일시',2],[3,text(values.meetingDate),3],[1,'시간',2],[1,text(values.meetingTime),3],[1,'~',3],[1,text(values.meetingEndTime),3]], 29);
+  for (const [label, value] of [
+    ['회의장소',values.location],['거래처명',values.clientName],['보고부서',values.reportingDepartment],
+    ['참조부서',values.referenceDepartments?.trim() || '모든 부서'],['참석자\n(컨코스트)',values.participants],
+    ['참석자\n(거래처)',values.clientParticipants],['회의명',values.meetingTitle],['첨부파일',values.attachmentName]
+  ]) addRow([[1,label!,2],[7,text(value),3]], 32);
+  addRow([[8,'회의내용 및 지시사항',2]], 29);
+  addRow([[8,values.summary + (values.followUps ? `\n\n결정사항 · 후속업무\n${values.followUps}` : ''),4]], 180);
+  addRow([[8,'※ 거래처 명함은 PDF 파일로 업로드',3]], 29);
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:H${rows.length}"/><sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews><cols><col min="1" max="8" width="12" customWidth="1"/></cols><sheetData>${rows.join('')}</sheetData><mergeCells count="${merges.length}">${merges.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells><pageMargins left="0.35" right="0.35" top="0.4" bottom="0.4" header="0.2" footer="0.2"/><pageSetup orientation="portrait" paperSize="9" fitToWidth="1" fitToHeight="0"/></worksheet>`;
+  const borders = Array.from({length:16}, (_, mask) => `<border>${(['left','right','top','bottom'] as const).map((edge, i) => mask & [8,2,1,4][i] ? `<${edge} style="thin"><color rgb="FF1F2937"/></${edge}>` : `<${edge}/>`).join('')}</border>`).join('');
+  const formats = Array.from({length:5}, (_, kind) => Array.from({length:16}, (_, border) => `<xf numFmtId="0" fontId="${kind === 1 ? 1 : kind === 2 ? 2 : 0}" fillId="${kind === 2 ? 2 : 0}" borderId="${border}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="${kind === 1 || kind === 2 ? 'center' : 'left'}" vertical="${kind === 4 ? 'top' : 'center'}" wrapText="1"/></xf>`).join('')).join('');
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Malgun Gothic"/></font><font><b/><sz val="18"/><name val="Malgun Gothic"/></font><font><b/><sz val="11"/><name val="Malgun Gothic"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7EEF8"/></patternFill></fill></fills><borders count="16">${borders}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="80">${formats}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
   return zipStore([
     { name:'[Content_Types].xml', content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
     { name:'_rels/.rels', content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
-    { name:'xl/workbook.xml', content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="회의록" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+    { name:'xl/workbook.xml', content:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="회의록" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">'회의록'!$A$1:$H$${rows.length}</definedName></definedNames></workbook>` },
     { name:'xl/_rels/workbook.xml.rels', content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
     { name:'xl/styles.xml', content:styles }, { name:'xl/worksheets/sheet1.xml', content:worksheet }
   ]);
