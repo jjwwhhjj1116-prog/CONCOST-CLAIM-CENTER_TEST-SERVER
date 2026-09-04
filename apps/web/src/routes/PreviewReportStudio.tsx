@@ -10,7 +10,8 @@ import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
 import { expandDocumentSpacingMarkers } from '../documents/document-spacing';
-import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, editorHtmlToMarkdown, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { renameStructuredReportTitles, renameUnstructuredReportTitles } from '../reports/report-outline-sync';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { readReportDocx, readReportStudioWorkbook, readSpreadsheetExcerpt, reportStudioWorkbook } from '../proposals/proposal-excel';
@@ -144,7 +145,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [editorJson, setEditorJsonState] = useState<import('@tiptap/core').JSONContent | null>(null);
   const editorJsonRef = useRef(editorJson);
   const setEditorJson = useCallback((next: import('@tiptap/core').JSONContent | null) => { editorJsonRef.current = next; setEditorJsonState(next); }, []);
-  const [version, setVersion] = useState(0);
+  const [version, setVersionState] = useState(0);
+  const versionRef = useRef(0);
+  const setVersion = useCallback((next: number) => { versionRef.current = next; setVersionState(next); }, []);
   const [backups, setBackups] = useState<ReportBackup[]>([]);
   const [reviews, setReviews] = useState<PreviewReportReview[]>([]);
   const [finalizations, setFinalizations] = useState<Finalization[]>([]);
@@ -170,6 +173,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [submittingMemory, setSubmittingMemory] = useState(false);
   const memoryRequestKey = useRef(crypto.randomUUID());
   const [savingOutline, setSavingOutline] = useState(false);
+  const outlineSaveInFlight = useRef(false);
+  const draftSaveInFlight = useRef(false);
+  const [outlineSyncPending, setOutlineSyncPending] = useState(false);
+  const outlineSyncPendingRef = useRef(false);
+  const [outlineSyncNotice, setOutlineSyncNotice] = useState('');
   const [generatingOutline, setGeneratingOutline] = useState(false);
   const [outlineStatus, setOutlineStatus] = useState<'DRAFT' | 'CONFIRMED'>('DRAFT');
   const [outlineVersion, setOutlineVersion] = useState(0);
@@ -256,6 +264,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const loadDraft = useCallback(async (caseId: string) => {
     const sequence = ++loadSequence.current;
     setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false); setWorkspaceDirty(false);
+    outlineSyncPendingRef.current = false; setOutlineSyncPending(false); setOutlineSyncNotice('');
     try {
       const [result, reviewResult, finalizationResult, authoringResult, collaborationResult] = await Promise.all([
         apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
@@ -328,16 +337,18 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   useEffect(() => { if (selectedCaseId) void loadDraft(selectedCaseId); else setLoading(false); }, [selectedCaseId, loadDraft]);
 
-  const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL'): Promise<boolean> => {
-    if (!editable || saving || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return false;
-    if (!dirty && !workspaceDirty && version > 0) return true;
+  const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL', syncOutline = false): Promise<boolean> => {
+    if (!editable || saving || draftSaveInFlight.current || (outlineSaveInFlight.current && !syncOutline) || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return false;
+    if (!dirty && !workspaceDirty && !outlineSyncPendingRef.current && !syncOutline && versionRef.current > 0) return true;
     const requestCaseId = selectedCaseId;
-    const requestTitle = title;
-    const requestContent = content;
-    const requestEditorJson = editorJson;
-    const requestVersion = version;
-    const requestWizardStep = activeStep;
-    const requestChapterId = selectedChapterId || null;
+    // Outline saves and navigation can run in the same render: always use the latest document/version.
+    const requestTitle = titleRef.current;
+    const requestContent = contentRef.current;
+    const requestEditorJson = editorJsonRef.current;
+    const requestVersion = versionRef.current;
+    const requestWizardStep = activeStepRef.current;
+    const requestChapterId = selectedChapterRef.current || null;
+    draftSaveInFlight.current = true;
     setSaving(true); setError('');
     try {
       const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(requestCaseId)}`, {
@@ -349,22 +360,24 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setBackups(result.backups ?? []);
       setDirty(titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(editorJsonRef.current) !== JSON.stringify(requestEditorJson));
       setWorkspaceDirty(activeStepRef.current !== requestWizardStep || (selectedChapterRef.current || null) !== requestChapterId);
-      await loadSavedWorkspaces();
+      outlineSyncPendingRef.current = false; setOutlineSyncPending(false);
+      void loadSavedWorkspaces().catch(() => { /* The draft itself is already saved. */ });
       return true;
     } catch (reason) {
       if (selectedCaseRef.current !== requestCaseId) return false;
       setError(reason instanceof ApiError && reason.status === 409 ? '다른 탭에서 보고서가 먼저 저장되었습니다. 최신본을 다시 불러온 뒤 계속 작성해 주세요.' : reason instanceof Error ? reason.message : String(reason));
       return false;
     } finally {
+      draftSaveInFlight.current = false;
       if (selectedCaseRef.current === requestCaseId) setSaving(false);
     }
   }, [activeStep, content, dirty, editable, editorJson, loadedCaseId, loadSavedWorkspaces, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
-    if ((!dirty && !workspaceDirty) || saving) return;
+    if ((!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
     const timer = window.setTimeout(() => { void saveNow('AUTO'); }, 3000);
     return () => window.clearTimeout(timer);
-  }, [activeStep, content, dirty, saveNow, saving, selectedChapterId, title, workspaceDirty]);
+  }, [activeStep, content, dirty, saveNow, saving, savingOutline, outlineSyncPending, selectedChapterId, title, workspaceDirty]);
 
   useEffect(() => {
     const saveShortcut = (event: KeyboardEvent) => {
@@ -377,7 +390,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [saveNow]);
 
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => { if (dirty || outlineDirty || workspaceDirty) event.preventDefault(); };
+    const warn = (event: BeforeUnloadEvent) => { if (dirty || outlineDirty || workspaceDirty || outlineSaveInFlight.current || outlineSyncPendingRef.current) event.preventDefault(); };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty, outlineDirty, workspaceDirty]);
@@ -398,6 +411,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const assignChapter = async (chapterId: string, assigneeId: string) => {
+    if (outlineSaveInFlight.current || draftSaveInFlight.current || chapterBusy) return;
     const assignment = chapterCollaboration?.assignments.find((item) => item.chapterId === chapterId);
     setChapterBusy(`assign:${chapterId}`); setError(''); setChapterNotice('');
     try {
@@ -411,6 +425,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const saveChapterCollaboration = async (action: 'SAVE' | 'MARK_READY' | 'APPLY') => {
+    if (outlineSaveInFlight.current || draftSaveInFlight.current || outlineSyncPendingRef.current || outlineDirty || chapterBusy) return;
     if (!selectedChapterAssignment) { setError('담당 PM이 현재 챕터의 담당자를 먼저 지정해야 합니다.'); return; }
     const draftText = chapterDrafts[selectedChapterAssignment.chapterId] ?? '';
     setChapterBusy(`${action}:${selectedChapterAssignment.chapterId}`); setError(''); setChapterNotice('');
@@ -431,6 +446,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const changeWizardStep = (step: ReportWizardStep) => {
+    if (outlineSaveInFlight.current) return;
     if (step === activeStep) return;
     if (step > activeStep && !stepUnlocked[step]) {
       setError('앞 단계의 필수 입력·저장·확인을 완료한 뒤 다음 단계로 이동할 수 있습니다.');
@@ -509,32 +525,51 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const saveOutline = async (status: 'DRAFT' | 'CONFIRMED'): Promise<boolean> => {
-    if (!editable || !authoring?.available || !authoring.outlinePlan.persistenceAvailable || savingOutline || loadedCaseId !== selectedCaseId) return false;
+    if (!editable || !authoring?.available || !authoring.outlinePlan.persistenceAvailable || saving || outlineSaveInFlight.current || draftSaveInFlight.current || outlineSyncPendingRef.current || generatingOutline || generating || improving || chapterBusy || submittingReview || linkingHwp || loadedCaseId !== selectedCaseId) return false;
     const requestCaseId = selectedCaseId;
-    setSavingOutline(true); setError('');
+    const items = authoring.chapters.map((chapter) => ({ chapterId: chapter.id, chapterCode: chapter.chapterCode, chapterTitle: (outlineTitles[chapter.id] ?? chapter.title).trim(), promptVersion: chapter.promptVersion, planningNote: outlineNotes[chapter.id]?.trim() ?? '' }));
+    if (items.some(item => !item.chapterTitle)) { setError('챕터 제목을 입력해 주세요. 빈 제목은 저장할 수 없습니다.'); return false; }
+    const changes = items.map(item => ({ chapterCode: item.chapterCode, title: item.chapterTitle, previousTitle: authoring.outlinePlan.items.find(previous => previous.chapterId === item.chapterId)?.chapterTitle ?? authoring.chapters.find(chapter => chapter.id === item.chapterId)!.title })).filter(change => change.title !== change.previousTitle);
+    outlineSaveInFlight.current = true;
+    setSavingOutline(true); setError(''); setOutlineSyncNotice('');
     try {
+      const structured = editorJsonRef.current;
+      const sync = structured ? renameStructuredReportTitles(structured, changes) : renameUnstructuredReportTitles(contentRef.current, changes);
+      const nextJson = sync.matched.length && 'document' in sync ? sync.document : null;
+      const rendered = nextJson ? renderStructuredDocumentHtml(nextJson) : '';
+      if (nextJson && !rendered.trim()) throw new Error('본문 서식을 안전하게 읽을 수 없어 목차 저장을 중단했습니다. 기존 본문은 변경하지 않았습니다.');
+      const nextContent = nextJson ? editorHtmlToMarkdown(rendered) : 'content' in sync ? sync.content : contentRef.current;
       const result = await apiRequest<{ outlinePlan: OutlinePlan }>('/api/report-authoring/outline', {
         method: 'PUT',
         body: JSON.stringify({
           caseId: requestCaseId,
           status,
           expectedVersion: outlineVersion,
-          items: authoring.chapters.map((chapter) => ({ chapterId: chapter.id, chapterCode: chapter.chapterCode, chapterTitle: outlineTitles[chapter.id]?.trim() || chapter.title, promptVersion: chapter.promptVersion, planningNote: outlineNotes[chapter.id]?.trim() ?? '' }))
+          items
         })
       });
       if (selectedCaseRef.current !== requestCaseId) return false;
       setOutlineStatus(result.outlinePlan.status); setOutlineVersion(result.outlinePlan.version); setOutlineDirty(false);
+      setOutlineTitles(Object.fromEntries(result.outlinePlan.items.map(item => [item.chapterId, item.chapterTitle])));
       setAuthoring((current) => current ? { ...current, outlinePlan: result.outlinePlan } : current);
+      if (changes.length && contentRef.current.trim()) {
+        if (sync.matched.length) {
+          contentRef.current = nextContent; setContent(nextContent); setEditorJson(nextJson); setDirty(true);
+          outlineSyncPendingRef.current = true; setOutlineSyncPending(true);
+          if (!await saveNow('MANUAL', true)) return false;
+        }
+        setOutlineSyncNotice(sync.unmatched.length ? `목차를 저장했습니다. ${sync.unmatched.join(', ')}은 본문 제목을 확실하게 식별할 수 없어 변경하지 않았습니다. 본문 편집기에서 해당 제목을 확인해 주세요.` : '목차와 본문 제목을 함께 저장했습니다. 본문 내용·표·이미지·서식은 유지됩니다.');
+      } else setOutlineSyncNotice('목차를 저장했습니다. 이후 작성하는 챕터에도 이 제목이 적용됩니다.');
       return true;
     } catch (reason) {
       if (selectedCaseRef.current === requestCaseId) setError(reason instanceof ApiError && reason.status === 409 ? '목차 또는 관리자 템플릿이 변경되었습니다. 최신본을 다시 불러와 목차를 확인해 주세요.' : reason instanceof Error ? reason.message : String(reason));
       return false;
-    } finally { if (selectedCaseRef.current === requestCaseId) setSavingOutline(false); }
+    } finally { outlineSaveInFlight.current = false; if (selectedCaseRef.current === requestCaseId) setSavingOutline(false); }
   };
 
   useEffect(() => registerNavigationBlocker((navigation) => {
     const current = `${window.location.pathname}${window.location.search}`;
-    if (!editable || !selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current || (!dirty && !outlineDirty && !workspaceDirty)) return false;
+    if (!editable || !selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current || (!dirty && !outlineDirty && !workspaceDirty && !outlineSaveInFlight.current && !outlineSyncPendingRef.current)) return false;
     setPendingNavigation(navigation);
     return true;
   }), [dirty, editable, loadedCaseId, outlineDirty, selectedCaseId, workspaceDirty]);
@@ -780,6 +815,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const restoreRevision = (revision: ReportRevision) => {
+    if (outlineSaveInFlight.current || draftSaveInFlight.current || outlineSyncPendingRef.current) return;
     titleRef.current = revision.title; contentRef.current = revision.content;
     setTitle(revision.title); setContent(revision.content); setEditorJson(revision.editorJson); setDraftMethod('MANUAL'); setDirty(true);
     setMemoryNotice(`백업 버전 ${revision.version}을 작업 화면에 불러왔습니다. 현재 버전을 덮어쓰지 않았으며 저장하면 새 버전으로 기록됩니다.`);
@@ -916,7 +952,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const projectStepComplete = Boolean(selectedCaseId && loadedCaseId === selectedCaseId && authoring?.available);
-  const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty;
+  const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty && !outlineSyncPending && !savingOutline;
   const wholeDocumentImported = content.includes(WHOLE_DOCUMENT_START) && content.includes(WHOLE_DOCUMENT_END);
   const chapterStepComplete = Boolean(outlineStepComplete && (wholeDocumentImported || (authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length)));
   const editingStepComplete = Boolean(chapterStepComplete && version > 0 && title.trim() && content.trim() && !dirty && !saving);
@@ -969,6 +1005,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 보고서 작업공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
+
+  const outlineFeedback = <>
+    {outlineSyncPending && <div className="error-box" role="alert"><p>목차는 저장됐지만 본문 제목 저장은 완료되지 않았습니다. 변경 내용은 화면에 유지됩니다. 다시 저장한 뒤 이동해 주세요.</p><Button variant="secondary" disabled={saving || savingOutline} onClick={() => void saveNow('MANUAL')}>{saving ? '저장 중…' : '본문 제목 저장 다시 시도'}</Button></div>}
+    {outlineSyncNotice && <p className="notice-box" role="status">{outlineSyncNotice}</p>}
+  </>;
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="보고서 자동 저장 스튜디오">
@@ -1050,9 +1091,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.claimType} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
             <div className="notice-box"><strong>쉬운 시작:</strong> 파란색 “AI·템플릿으로 목차 자동 만들기”를 누르세요. API 키가 없어도 선택한 원본 템플릿 목차는 바로 불러옵니다.</div>
             <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => changeSelectedChapter(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {outlineTitles[chapter.id] || chapter.title}</strong><small>{chapter.agentCode} · 제목 편집 가능</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
-            {selectedChapter && <div className="report-outline-note report-outline-title-editor"><label htmlFor="report-outline-title"><span>{selectedChapter.chapterCode}</span> 챕터 제목 직접 수정</label><input id="report-outline-title" maxLength={300} value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} disabled={!editable || savingOutline} onChange={(event) => { setOutlineTitles((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} /><small>본문 작성 방향은 관리자의 유형별 지침과 프로젝트 근거로 자동 적용됩니다. 사용자는 목차 제목만 고치면 됩니다.</small></div>}
-            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 대기'}</span><Button className="report-action-ai" disabled={!editable || generatingOutline || savingOutline} onClick={() => void generateOutline()}>{generatingOutline ? '템플릿 목차 불러오는 중…' : '✦ AI·템플릿으로 목차 자동 만들기'}</Button><Button className="report-action-review" variant="secondary" disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '수정한 목차 저장'}</Button><Button className="report-action-confirm" disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 확정 · 다음 단계'}</Button></div>
+            {selectedChapter && <div className="report-outline-note report-outline-title-editor"><label htmlFor="report-outline-title"><span>{selectedChapter.chapterCode}</span> 챕터 제목 직접 수정</label><input id="report-outline-title" maxLength={300} value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} disabled={!editable || savingOutline || saving || generatingOutline || outlineSyncPending} onChange={(event) => { setOutlineTitles((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} /><small>저장하면 이미 작성된 본문·미리보기의 챕터 제목도 함께 바뀝니다. 본문 내용·표·이미지는 유지됩니다.</small></div>}
+            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 대기'}</span><Button className="report-action-ai" disabled={!editable || generatingOutline || savingOutline || saving || outlineSyncPending} onClick={() => void generateOutline()}>{generatingOutline ? '템플릿 목차 불러오는 중…' : '✦ AI·템플릿으로 목차 자동 만들기'}</Button><Button className="report-action-review" variant="secondary" disabled={!editable || savingOutline || saving || outlineSyncPending || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '수정한 목차 저장'}</Button><Button className="report-action-confirm" disabled={!editable || savingOutline || saving || outlineSyncPending || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 확정 · 다음 단계'}</Button></div>
             {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장 기능을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
+            {outlineFeedback}
+            {error && <p className="error-box" role="alert">{error}</p>}
           </div>}
         </Card>
         <Card title="" className="report-step-card report-step-card--3 report-stage-card">
@@ -1087,29 +1130,40 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </Card>
         <Card title="" className="report-step-card report-step-card--4 report-stage-card">
           {renderStageHeader(4)}
-          <div className="form-stack">
+          <fieldset className="form-stack report-review-fields" disabled={savingOutline}>
+            {authoring?.available && selectedChapter && <section className="report-review-outline" aria-labelledby="report-review-outline-heading">
+              <h3 id="report-review-outline-heading">목차 제목 수정</h3>
+              <p>검수 중에도 제목을 수정할 수 있습니다. 저장하면 2단계 목차와 본문·미리보기에 함께 반영됩니다.</p>
+              <div className="report-review-outline__fields">
+                <Select label="수정할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} options={authoring.chapters.map(chapter => ({ value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title}` }))} />
+                <Input label="챕터 제목" value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} maxLength={300} disabled={!editable || savingOutline || saving || outlineSyncPending} onChange={(event) => { setOutlineTitles(current => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); setOutlineSyncNotice(''); }} />
+                <Button disabled={!editable || savingOutline || saving || outlineSyncPending || !outlineDirty || !authoring.outlinePlan.persistenceAvailable} onClick={() => void saveOutline(outlineStatus)}>{savingOutline ? '목차·본문 저장 중…' : '목차·본문 제목 저장'}</Button>
+              </div>
+              <small>본문 내용·표·이미지·서식은 유지됩니다. 제목 수정 권한은 기존 보고서 편집 권한과 같습니다.</small>
+              {outlineFeedback}
+            </section>}
             <section className="report-chapter-collaboration" aria-labelledby="report-chapter-collaboration-title">
               <header><div><span>CHAPTER COLLABORATION · VERSIONED</span><h3 id="report-chapter-collaboration-title">챕터별 담당 지정·작성·검수</h3><p>담당 PM이 챕터별 회원을 지정합니다. 담당자는 배정된 챕터만 작성·검수하고, PM이 검수 완료본을 전체 보고서에 반영합니다.</p></div><em>{chapterCollaboration?.canManage ? 'PM · ASSIGNMENT CONTROL' : 'MY ASSIGNED CHAPTERS'}</em></header>
               {chapterCollaboration?.canManage && <div className="report-chapter-assignment-grid">{authoring?.chapters.map((chapter) => {
                 const assignment = chapterCollaboration.assignments.find((item) => item.chapterId === chapter.id);
-                return <label key={chapter.id}><span><b>{chapter.chapterCode}</b>{outlineTitles[chapter.id] || chapter.title}</span><select aria-label={`${chapter.chapterCode} 담당자`} value={assignment?.assigneeId ?? ''} disabled={Boolean(chapterBusy)} onChange={(event) => void assignChapter(chapter.id, event.target.value)}><option value="">담당 미지정</option>{chapterCollaboration.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.roles.join('/')}</option>)}</select><small data-status={assignment?.status ?? 'UNASSIGNED'}>{assignment?.assigneeName ?? '담당 없음'} · {assignment?.status === 'READY' ? 'PM 반영 대기' : assignment?.status === 'APPLIED' ? '보고서 반영 완료' : assignment?.status === 'IN_PROGRESS' ? `작성 중 · v${assignment.version}` : '미지정'}</small></label>;
+                return <label key={chapter.id}><span><b>{chapter.chapterCode}</b>{outlineTitles[chapter.id] || chapter.title}</span><select aria-label={`${chapter.chapterCode} 담당자`} value={assignment?.assigneeId ?? ''} disabled={Boolean(chapterBusy) || saving || savingOutline} onChange={(event) => void assignChapter(chapter.id, event.target.value)}><option value="">담당 미지정</option>{chapterCollaboration.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.roles.join('/')}</option>)}</select><small data-status={assignment?.status ?? 'UNASSIGNED'}>{assignment?.assigneeName ?? '담당 없음'} · {assignment?.status === 'READY' ? 'PM 반영 대기' : assignment?.status === 'APPLIED' ? '보고서 반영 완료' : assignment?.status === 'IN_PROGRESS' ? `작성 중 · v${assignment.version}` : '미지정'}</small></label>;
               })}</div>}
               <div className="report-chapter-workbench">
-                <Select label="작성·검수할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={Boolean(chapterBusy)} options={(authoring?.chapters ?? []).map((chapter) => {
+                <Select label="작성·검수할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={Boolean(chapterBusy) || saving || savingOutline} options={(authoring?.chapters ?? []).map((chapter) => {
                   const assignment = chapterCollaboration?.assignments.find((item) => item.chapterId === chapter.id);
                   return { value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title} · ${assignment?.assigneeName ?? '미지정'}` };
                 })} />
-                {selectedChapterAssignment ? <><div className="report-chapter-workbench__identity"><strong>{selectedChapterAssignment.chapterCode} · {selectedChapterAssignment.chapterTitle}</strong><span>담당 {selectedChapterAssignment.assigneeName ?? '미지정'} · v{selectedChapterAssignment.version}</span><em data-status={selectedChapterAssignment.status}>{selectedChapterAssignment.status === 'READY' ? '검수 완료·PM 반영 대기' : selectedChapterAssignment.status === 'APPLIED' ? '전체 보고서 반영 완료' : '작성·검수 중'}</em></div><label className="report-chapter-workbench__editor"><span>챕터 협업 원고</span><textarea value={chapterDrafts[selectedChapterAssignment.chapterId] ?? ''} readOnly={!selectedChapterAssignment.canEdit} onChange={(event) => setChapterDrafts((current) => ({ ...current, [selectedChapterAssignment.chapterId]: event.target.value }))} placeholder="현재 챕터의 사실·수치·근거를 검수하며 작성하세요." /></label><div className="report-chapter-workbench__actions">{selectedChapterAssignment.canEdit && <><Button variant="secondary" onClick={() => void saveChapterCollaboration('SAVE')} disabled={Boolean(chapterBusy)}>챕터 중간 저장</Button><Button className="report-action-review" onClick={() => void saveChapterCollaboration('MARK_READY')} disabled={Boolean(chapterBusy) || !(chapterDrafts[selectedChapterAssignment.chapterId] ?? '').trim()}>담당자 검수 완료</Button></>}{chapterCollaboration?.canManage && selectedChapterAssignment.status === 'READY' && <Button className="report-action-confirm" onClick={() => void saveChapterCollaboration('APPLY')} disabled={Boolean(chapterBusy) || dirty}>검수본을 전체 보고서에 반영</Button>}</div></> : <p className="empty-box">현재 챕터는 아직 담당자가 지정되지 않았습니다. 담당 PM 또는 관리자에게 배정을 요청하세요.</p>}
+                {selectedChapterAssignment ? <><div className="report-chapter-workbench__identity"><strong>{selectedChapterAssignment.chapterCode} · {outlineTitles[selectedChapterAssignment.chapterId] || selectedChapterAssignment.chapterTitle}</strong><span>담당 {selectedChapterAssignment.assigneeName ?? '미지정'} · v{selectedChapterAssignment.version}</span><em data-status={selectedChapterAssignment.status}>{selectedChapterAssignment.status === 'READY' ? '검수 완료·PM 반영 대기' : selectedChapterAssignment.status === 'APPLIED' ? '전체 보고서 반영 완료' : '작성·검수 중'}</em></div><label className="report-chapter-workbench__editor"><span>챕터 협업 원고</span><textarea value={chapterDrafts[selectedChapterAssignment.chapterId] ?? ''} readOnly={!selectedChapterAssignment.canEdit} onChange={(event) => setChapterDrafts((current) => ({ ...current, [selectedChapterAssignment.chapterId]: event.target.value }))} placeholder="현재 챕터의 사실·수치·근거를 검수하며 작성하세요." /></label><div className="report-chapter-workbench__actions">{selectedChapterAssignment.canEdit && <><Button variant="secondary" onClick={() => void saveChapterCollaboration('SAVE')} disabled={Boolean(chapterBusy) || saving || savingOutline}>챕터 중간 저장</Button><Button className="report-action-review" onClick={() => void saveChapterCollaboration('MARK_READY')} disabled={Boolean(chapterBusy) || !(chapterDrafts[selectedChapterAssignment.chapterId] ?? '').trim()}>담당자 검수 완료</Button></>}{chapterCollaboration?.canManage && selectedChapterAssignment.status === 'READY' && <Button className="report-action-confirm" onClick={() => void saveChapterCollaboration('APPLY')} disabled={Boolean(chapterBusy) || dirty || outlineDirty || saving || savingOutline || outlineSyncPending}>검수본을 전체 보고서에 반영</Button>}</div></> : <p className="empty-box">현재 챕터는 아직 담당자가 지정되지 않았습니다. 담당 PM 또는 관리자에게 배정을 요청하세요.</p>}
               </div>
               {chapterNotice && <p className="notice-box" role="status">{chapterNotice}</p>}
             </section>
             <section className="report-case-law-review" aria-labelledby="report-case-law-review-title"><header><div><span>CASE-LAW CITATION REVIEW</span><h3 id="report-case-law-review-title">판례 인용 검수</h3><p>선택 판례의 공식 원문과 초안 문장을 대조합니다. 판례는 법리 근거이며 프로젝트 사실관계나 귀책을 자동 확정하지 않습니다.</p></div><em>{caseLawSources.length ? `${caseLawSources.length}건 대조` : '판례 미사용'}</em></header>{caseLawSources.length?<div>{caseLawSources.map((source)=>{const citation=latestCaseLawCitationBySource.get(source.id);const status=citation?.validationStatus??'REVIEW_REQUIRED';const label=status==='VERIFIED'?'ID 연결 정상':status==='INSUFFICIENT'?'근거 연결 불충분':status==='MISMATCH'?'내용 불일치':'사람 확인 필요';return <article key={source.id} data-citation-status={status}><header><div><strong>{source.caseNumber} · {source.caseName}</strong><small>{source.courtName} · {source.decisionDate}</small></div><span>{label}</span></header><p>{citation?.citationText||'이 판례와 연결된 생성 문장이 아직 없습니다. 판례 근거 초안을 생성하거나 직접 인용을 확인해 주세요.'}</p><small>{citation?.validationNote||'공식 판례 원문과 보고서 문장을 사람이 대조해야 합니다.'}</small><footer><a href={source.officialUrl} target="_blank" rel="noreferrer">공식 원문 열기</a><Button variant="secondary" size="sm" onClick={()=>void excludeCaseLaw(source.id)} disabled={Boolean(caseLawBusy)}>판례 교체·제외</Button></footer></article>})}</div>:<p className="empty-box">현재 챕터는 판례를 사용하지 않았습니다. 사실관계 근거만 검수하면 됩니다.</p>}</section>
             <Input required label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} />
-            {activeStep === 4 && <div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={editorJson}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div>}
+            {activeStep === 4 && <div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={editorJson}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div>}
             {editable && selectedChapter && <section className="report-memory-feedback" aria-label="AI 학습 피드백"><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>APPROVED MEMORY</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</section>}
             <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
-          </div>
+          </fieldset>
           <details id="report-backups" className="report-revision-history"><summary>시간별 백업 불러오기 · 최근 {backups.length}건</summary>{backups.length ? <ul className="dashboard-work-list">{backups.map((backup) => <li key={backup.id}><span><strong>{backup.backupHour.replace('T',' ')}시 백업 · {backup.title}</strong><small>보고서 v{backup.version} · {new Date(backup.savedAt).toLocaleString('ko-KR')} · {backup.savedBy.name} · 무결성 확인 {backup.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(backup)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">첫 자동 저장 때 백업이 생성되고, 이후 변경된 작업은 1시간 단위로 안전하게 보관됩니다.</p>}</details>
         </Card>
         <Card title="" className="report-step-card report-step-card--5 report-stage-card">

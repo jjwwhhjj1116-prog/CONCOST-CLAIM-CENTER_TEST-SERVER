@@ -89,6 +89,48 @@ test('CF77 enforces PM-owned chapter collaboration and recoverable delivered-pro
   assert.equal(denied.status,403);assert.equal((await denied.json() as {code:string}).code,'RESPONSIBLE_PM_REQUIRED');sql.close();
 });
 
+test('CF108 collaboration APPLY uses the latest saved outline title, not the assignment snapshot', async () => {
+  const { sql, env } = await setup();
+  sql.exec(migration('0054_cf84_claim_report_guideline_package.sql'));
+  const caseId = '78000000-0000-4000-8000-000000000108';
+  const now = new Date().toISOString();
+  sql.run('INSERT INTO preview_cases (id,organization_id,case_number,title,claim_type,status,version,category_major,category_middle,category_minor,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [caseId,'concost','CC-2026-78108','목차 반영 테스트','TYPE-01','INQUIRY',1,'클레임','기술검토','보고서',ADMIN_ID,now,now]);
+  const configResponse = await worker.fetch(req(`/api/report-authoring/config?caseId=${caseId}`, ADMIN_TOKEN), env);
+  assert.equal(configResponse.status, 200);
+  const config = await configResponse.json() as { chapters: Array<{ id: string; chapterCode: string; title: string; promptVersion: number }> };
+  assert.ok(config.chapters.length);
+  const chapter = config.chapters[0];
+  const call = (path: string, method: string, body: unknown, token = ADMIN_TOKEN) => worker.fetch(req(path, token, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), env);
+  const collaborationPath = `/api/report-chapter-collaboration?caseId=${caseId}`;
+  const assigned = await call(collaborationPath, 'PUT', { chapterId: chapter.id, assigneeId: STAFF_ID, expectedVersion: 0 });
+  assert.equal(assigned.status, 200, await assigned.text());
+  const ready = await call(collaborationPath, 'POST', { chapterId: chapter.id, action: 'MARK_READY', draftText: '회원 검수 원고 보존', expectedVersion: 1, expectedReportVersion: 0 }, STAFF_TOKEN);
+  assert.equal(ready.status, 200, await ready.text());
+  const draft = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { title: '합성 보고서', content: '기존 다른 챕터 보존', editorJson: null, expectedVersion: 0, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' });
+  assert.equal(draft.status, 200, await draft.text());
+  const savePayload = { title: '합성 보고서', content: '기존 다른 챕터 보존', editorJson: null, expectedVersion: 1, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' };
+  for (const invalidId of ['', 'with space', 'chapter/path', "chapter'quote", 'x'.repeat(101)]) {
+    const invalid = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { ...savePayload, selectedChapterId: invalidId });
+    assert.equal(invalid.status, 400, invalidId);
+  }
+  const deniedSave = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', savePayload, STAFF_TOKEN);
+  assert.equal(deniedSave.status, 403);
+  const uuidSave = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { ...savePayload, selectedChapterId: '78000000-0000-4000-8000-000000000109' });
+  assert.equal(uuidSave.status, 200);
+  const staleSave = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', savePayload);
+  assert.equal(staleSave.status, 409);
+  const outline = await call('/api/report-authoring/outline', 'PUT', { caseId, status: 'CONFIRMED', expectedVersion: 0, items: config.chapters.map(ch => ({ chapterId: ch.id, chapterCode: ch.chapterCode, chapterTitle: ch.id === chapter.id ? '검수 중 수정한 최신 제목' : ch.title, promptVersion: ch.promptVersion, planningNote: '' })) });
+  assert.equal(outline.status, 200, await outline.text());
+  const applied = await call(collaborationPath, 'POST', { chapterId: chapter.id, action: 'APPLY', draftText: '회원 검수 원고 보존', expectedVersion: 2, expectedReportVersion: 2 });
+  assert.equal(applied.status, 200, await applied.text());
+  const saved = sql.exec('SELECT content,version FROM preview_report_drafts WHERE case_id=?', [caseId])[0].values[0];
+  assert.ok(String(saved[0]).includes(`## ${chapter.chapterCode} 검수 중 수정한 최신 제목`));
+  assert.ok(String(saved[0]).includes('기존 다른 챕터 보존'));
+  assert.ok(String(saved[0]).includes('회원 검수 원고 보존'));
+  assert.equal(saved[1], 3);
+  sql.close();
+});
+
 test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the original in Drive, and supports admin-only soft archive',async()=>{
   const{sql,env}=await setup();const bytes=new Uint8Array(100);bytes.set([0xff,0xd8,0xff,0xe0]);const file=new File([bytes],'card.jpg',{type:'image/jpeg'});
   const analyzeForm=new FormData();analyzeForm.set('file',file);

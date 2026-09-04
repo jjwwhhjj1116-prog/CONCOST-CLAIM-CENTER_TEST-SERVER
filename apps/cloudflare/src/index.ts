@@ -4186,7 +4186,8 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   const saveKind = body.saveKind === undefined ? 'MANUAL' : String(body.saveKind);
   const requestedWizardStep = body.wizardStep === undefined ? null : Number(body.wizardStep);
   const requestedChapterId = body.selectedChapterId === undefined ? undefined : typeof body.selectedChapterId === 'string' ? body.selectedChapterId.trim() : null;
-  if (!title || title.length > 300 || content.length > 500_000 || (editorJson?.length ?? 0) > 2_000_000 || expectedVersion < 0 || (requestedWizardStep !== null && (requestedWizardStep < 1 || requestedWizardStep > 5)) || (typeof requestedChapterId === 'string' && (!requestedChapterId || requestedChapterId.length > 100 || !PREVIEW_DRAFT_KEY.test(requestedChapterId)))) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  // Prompt IDs include seeded PROMPT-TYPE-01-CH-01 keys as well as UUIDs.
+  if (!title || title.length > 300 || content.length > 500_000 || (editorJson?.length ?? 0) > 2_000_000 || expectedVersion < 0 || (requestedWizardStep !== null && (requestedWizardStep < 1 || requestedWizardStep > 5)) || (typeof requestedChapterId === 'string' && (!requestedChapterId || requestedChapterId.length > 100 || !/^[A-Za-z0-9_-]{1,100}$/u.test(requestedChapterId)))) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
   const backupSchema = await previewReportHourlyBackupSchemaAvailable(env);
 
@@ -4433,7 +4434,9 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
     .bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; version: number; updatedAt: string }>();
   const expectedReportVersion = Number(body.expectedReportVersion);
   if (!report || Number(report.version) !== expectedReportVersion) return json({ error: 'Report changed before the chapter was applied', code: 'VERSION_CONFLICT', currentVersion: Number(report?.version ?? 0) }, 409);
-  const nextContent = replacePreviewReportChapter(report.content, current.chapterCode, current.chapterTitle, draftText);
+  const outline = await previewOutlinePlan(env, caseId, await previewPromptRows(env, caseRow.claimType));
+  const chapterTitle = outline.items.find(item => item.chapterId === body.chapterId && item.chapterCode === current.chapterCode)?.chapterTitle ?? current.chapterTitle;
+  const nextContent = replacePreviewReportChapter(report.content, current.chapterCode, chapterTitle, draftText);
   const nextReportVersion = expectedReportVersion + 1;
   const reportNow = new Date(Math.max(Date.now(), Date.parse(report.updatedAt) + 1, Date.parse(now) + 1)).toISOString();
   const reportSha = await sha256Hex(nextContent);
