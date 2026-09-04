@@ -26,10 +26,11 @@ function samePath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
-export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate }: {
+export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended = false, onNavigate }: {
   category: string;
   routeId?: string;
   previewMode: boolean;
+  suspended?: boolean;
   onNavigate: (path: string) => void;
 }): React.ReactElement {
   const [tutorialOpen, setTutorialOpen] = useState(false);
@@ -44,26 +45,29 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
   const [pointIndex, setPointIndex] = useState(0);
   const [coachCollapsed, setCoachCollapsed] = useState(false);
   const targetElementRef = useRef<HTMLElement | null>(null);
+  const tutorialLoadedRef = useRef(false);
   const categoryHelp = CATEGORY_HELP[category] ?? CATEGORY_HELP.home;
   const routeHelp = routeId ? ROUTE_HELP[routeId] : undefined;
   const step = WORKSPACE_TUTORIAL_STEPS[tutorialStep] ?? WORKSPACE_TUTORIAL_STEPS[0];
   const progress = useMemo(() => Math.round(((tutorialStep + 1) / WORKSPACE_TUTORIAL_STEPS.length) * 100), [tutorialStep]);
-  const currentScreenOpen = tutorialOpen && openedSteps.has(tutorialStep) && samePath(window.location.pathname, step.path);
+  const currentScreenOpen = tutorialOpen && !suspended && openedSteps.has(tutorialStep) && samePath(window.location.pathname, step.path);
 
   useEffect(() => {
-    if (!previewMode) return;
+    if (!previewMode || suspended || tutorialLoadedRef.current) return;
     let active = true;
     void apiRequest<{ tutorial: TutorialState; currentTutorialVersion: string }>('/api/settings/tutorial')
       .then((result) => {
         if (!active) return;
+        tutorialLoadedRef.current = true;
         setTutorialState(result.tutorial);
         if (result.tutorial.completedTutorialVersion !== CURRENT_TUTORIAL_VERSION) setTutorialOpen(true);
       })
       .catch(() => {
+        if (active) tutorialLoadedRef.current = true;
         if (active && window.localStorage.getItem('claim-center-tutorial-fallback') !== CURRENT_TUTORIAL_VERSION) setTutorialOpen(true);
       });
     return () => { active = false; };
-  }, [previewMode]);
+  }, [previewMode, suspended]);
 
   useEffect(() => {
     const clearTarget = () => {
@@ -182,7 +186,7 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
     <button type="button" className="theme-toggle workspace-help-trigger" aria-label="현재 화면 도움말 열기" onClick={() => setHelpOpen(true)}>
       <span aria-hidden="true">?</span><strong>도움말</strong>
     </button>
-    {tutorialOpen && createPortal(<div className={`workspace-tutorial-layer${currentScreenOpen ? ' is-guiding' : ''}`}>
+    {tutorialOpen && !suspended && createPortal(<div className={`workspace-tutorial-layer${currentScreenOpen ? ' is-guiding' : ''}`}>
       {currentScreenOpen && targetRect && <>
         <div className="workspace-tutorial-shade is-top" style={{ height: targetRect.top }} onClick={() => setNotice('주황색으로 확대된 기능을 직접 눌러야 다음 포인트로 넘어갑니다.')} />
         <div className="workspace-tutorial-shade is-left" style={{ top: targetRect.top, width: targetRect.left, height: targetRect.height }} onClick={() => setNotice('주황색으로 확대된 기능을 직접 눌러야 다음 포인트로 넘어갑니다.')} />
@@ -213,7 +217,7 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
         </div>}
       </aside>
     </div>, document.body)}
-    <Dialog isOpen={helpOpen} title={`도움말 · ${categoryHelp.title}`} onClose={() => setHelpOpen(false)} hideDefaultAction size="wide">
+    <Dialog isOpen={helpOpen && !suspended} title={`도움말 · ${categoryHelp.title}`} onClose={() => setHelpOpen(false)} hideDefaultAction size="wide">
       <div className="workspace-help-center">
         <header><span>CURRENT CATEGORY GUIDE</span><h3>{categoryHelp.title}</h3><p>{categoryHelp.purpose}</p></header>
         <div className="workspace-help-center__grid">

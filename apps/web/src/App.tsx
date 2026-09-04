@@ -239,7 +239,7 @@ export const App: React.FC = () => {
 
   const workspacePath = currentPath === '/' ? '/dashboard' : currentPath;
   return (
-    <AppShell currentPath={workspacePath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
+    <AppShell key={session.id} userId={session.id} currentPath={workspacePath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
       <RouterView currentPath={workspacePath} currentSearch={currentSearch} roles={session.roles} userName={session.name} userEmail={session.email} previewMode={previewMode} onNavigate={navigate} />
     </AppShell>
   );
