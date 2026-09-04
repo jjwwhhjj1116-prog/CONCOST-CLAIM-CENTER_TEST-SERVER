@@ -30,4 +30,11 @@
 
 ## Deployment
 
-Development-only target: `concost-claim-center-development`, config `wrangler.development.jsonc`. No migration required. Source commit and deployment version recorded after release below.
+Development-only target: `concost-claim-center-development`, config `wrangler.development.jsonc`. No migration required.
+
+- Source: `70411d2`, pushed to `test-server/fix/CF73-workflow-minutes-parity`.
+- Worker version: `c441f140-0a0a-4363-a6c7-3e8cc0f6c6ea`.
+- `/health`, `/readiness`, `/reports/studio`: HTTP 200.
+- Public JS `index-DO_hhDrD.js`, `index.es-B69yvL1s.js` and CSS `index-FmMz0pmV.css`: HTTP 200 and SHA-256 matches local build.
+- `RELEASE_MAINTENANCE=0`; no migration, credential change or live project write performed.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/reports/studio
