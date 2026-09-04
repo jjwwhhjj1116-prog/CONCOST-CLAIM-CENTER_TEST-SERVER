@@ -7,7 +7,7 @@ import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { TableKit, TableView } from '@tiptap/extension-table';
 import TextAlign from '@tiptap/extension-text-align';
-import { Extension, Mark, Node, generateHTML, mergeAttributes, type JSONContent } from '@tiptap/core';
+import { Extension, Mark, Node, generateHTML, generateJSON, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { DOMParser as ProseMirrorDOMParser, type Node as ProseMirrorNode } from '@tiptap/pm/model';
@@ -561,6 +561,12 @@ const createTurndown = () => {
 };
 
 export const editorHtmlToMarkdown = (html: string): string => createTurndown().turndown(html).replace(/\n{3,}/gu, '\n\n').trim();
+
+export const parseStructuredDocumentMarkdown = (markdown: string): JSONContent => generateJSON(markdownToEditorHtml(markdown), [
+  StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }), Highlight.configure({ multicolor: false }),
+  TextAlign.configure({ types: ['heading', 'paragraph'] }), TableKit.configure({ table: { resizable: false } }), Image.configure({ allowBase64: false, inline: false }),
+  AiChapterMarker, DocumentPageBreak, DocumentSpacer, DocumentTextStyle, DocumentPresentationAttributes
+]);
 
 /** Render the same structured document used by the editor for final previews. */
 export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: { pageMode?: 'standard' | 'a4-portrait' }): string => {

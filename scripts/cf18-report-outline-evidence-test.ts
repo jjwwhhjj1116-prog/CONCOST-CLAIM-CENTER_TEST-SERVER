@@ -101,6 +101,6 @@ test('CF18 DB and UI prevent outline tampering and expose source readiness hones
   assert.match(studio, /목차 확정 · 다음 단계/u); assert.match(studio, /outlineStatus !== 'CONFIRMED'/u);
   assert.match(studio, /파일 본문을 확인하지 못한 내용은 추측하지 않고/u);
   assert.match(studio, /\[확인 필요\]/u);
-  assert.match(studio, /report-chapter-source-pack/u); assert.match(css, /report-source-grid/u);
+  assert.doesNotMatch(studio, /report-chapter-source-pack/u); assert.match(studio, /report-draft-context/u); assert.match(css, /report-source-grid/u);
   sql.close();
 });

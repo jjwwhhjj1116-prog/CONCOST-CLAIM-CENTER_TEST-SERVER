@@ -101,8 +101,6 @@ const canvasPage = async (source: HTMLCanvasElement, top: number, height: number
 
 const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrientation, onProgress?: (message: string) => void): Promise<CapturedPage[]> => {
   const layout = pageLayout(orientation);
-  const elements = [...root.querySelectorAll<HTMLElement>('[data-export-page]')];
-  if (!elements.length) throw new Error('내보낼 미리보기 페이지가 없습니다. 화면을 다시 불러온 뒤 시도해 주세요.');
   const visibleText = root.innerText;
   if (/<\/?[a-z][^>]{0,500}>/iu.test(visibleText)) {
     throw new Error('미리보기에 HTML 코드가 노출되어 내보내기를 중단했습니다. 담당자 검수에서 해당 장을 확인해 주세요.');
@@ -110,18 +108,20 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
   await waitForImages(root);
   window.dispatchEvent(new Event('final-document:refit'));
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+  const elements = [...root.querySelectorAll<HTMLElement>('[data-export-page]')];
+  if (!elements.length) throw new Error('내보낼 미리보기 페이지가 없습니다. 화면을 다시 불러온 뒤 시도해 주세요.');
   for (const element of elements.filter((page) => page.dataset.exportPagePolicy === 'fit')) {
     const viewport = element.querySelector<HTMLElement>('.proposal-final-chapter__viewport');
     const content = element.querySelector<HTMLElement>('.proposal-final-chapter__fit');
     const scale = Number(element.dataset.pageFitScale ?? '1');
-    const chapterOverflow = viewport && content
+    const chapterOverflow = element.dataset.pageFitOverflow === 'true' || (viewport && content
       ? element.dataset.pageFitOverflow === 'true'
         || content.scrollHeight * scale > viewport.clientHeight + 2
         || content.scrollWidth * scale > viewport.clientWidth + 2
-      : element.scrollHeight > element.clientHeight + 2 || element.scrollWidth > element.clientWidth + 2;
+      : element.scrollHeight > element.clientHeight + 2 || element.scrollWidth > element.clientWidth + 2);
     if (chapterOverflow) {
       const pageNumber = element.dataset.pageNumber ?? '?';
-      throw new Error(`제안서 ${pageNumber}페이지 내용이 A4 영역을 넘었습니다. 담당자 검수에서 문단·표·이미지 크기를 조정한 뒤 다시 내보내 주세요.`);
+      throw new Error(`문서 ${pageNumber}페이지 내용이 A4 영역을 넘었습니다. 담당자 검수에서 문단·표·이미지 크기를 조정한 뒤 다시 내보내 주세요.`);
     }
   }
   const result: CapturedPage[] = [];

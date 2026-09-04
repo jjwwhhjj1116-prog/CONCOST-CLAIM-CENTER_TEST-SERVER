@@ -83,7 +83,7 @@ test('CF12 writers receive chapter metadata only and generate from server-held l
   const generatedText = await generated.text(); assert.match(generatedText, /장별 초안/u); assert.doesNotMatch(generatedText, /SYNTHETIC_SERVER_ONLY_KEY/u);
   assert.equal(providerRequests.length, 1); assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_ai_generations')[0].values[0][0], 1);
   const studio = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewReportStudio.tsx'), 'utf8');
-  assert.match(studio, /선택 챕터 AI 자동 작성/u); assert.match(studio, /프롬프트 원문은 관리자만/u);
+  assert.match(studio, /챕터별 자동작성\(권장\)/u); assert.match(studio, /전체 한 번에 작성/u); assert.match(studio, /프롬프트 원문은 관리자만/u);
 
   const noKeyEnv = { ...env, OPENAI_API_KEY: undefined };
   const disconnected = await worker.fetch(request('/api/report-authoring/generate', ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), noKeyEnv);

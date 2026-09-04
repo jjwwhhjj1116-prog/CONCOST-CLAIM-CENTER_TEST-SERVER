@@ -43,6 +43,14 @@
 .document-review-pages__paper>.proposal-final-chapter:not(.proposal-final-pagination-source){margin-bottom:22px}
 .document-review-pages__paper>.report-final-document{margin:0;padding:0;width:100%;max-width:none}
 .document-review-pages__paper .report-final-cover{display:none}
+.report-final-document{position:relative}
+.report-final-document .report-final-cover[data-export-page]{box-sizing:border-box;width:1123px;height:794px;min-height:794px;padding:74px 74px 66px}
+.report-final-document .report-paginated-sheet[data-export-page],.report-final-document .report-pagination-source{box-sizing:border-box;display:flex;flex-direction:column;width:1123px;height:794px;min-height:794px;padding:74px 74px 66px;overflow:visible}
+.report-final-document .report-paginated-sheet>header,.report-final-document .report-pagination-source>header{flex:none}
+.report-final-document .report-paginated-sheet>.structured-editor__preview,.report-final-document .report-pagination-source>.structured-editor__preview{display:flow-root;position:relative;flex:1;min-height:0;margin:0;padding:0}
+.report-final-document .report-pagination-source{position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;z-index:-1}
+.report-page-label{position:absolute;right:24px;top:16px;font-size:13px;color:#244c70;background:#f7fbff;padding:3px 8px;border:1px solid #b8cad9;border-radius:3px}
+.document-review-pages:has(.report-final-document) .document-review-pages__heading::after{content:'연속 편집 · 실제 페이지 구분과 쪽번호는 출력 미리보기에서 확인하세요.';grid-column:1/-1;text-align:center;font-size:12px;color:#435b76}
 .structured-editor__top-tools{position:relative;z-index:5;background:#f7fbff}
 .structured-editor__top-tools .structured-editor__toolbar{max-height:none;overflow:visible;gap:6px;padding:8px 12px}
 .structured-editor__top-tools .structured-editor__toolbar .structured-editor__toolbar-group{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:4px 8px;border:0;border-right:1px solid #c9d8e8;border-radius:0;background:transparent;max-width:none;min-width:0;width:auto}

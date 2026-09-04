@@ -13,14 +13,19 @@ import '../src/preview-theme.css';
 import '../src/theme-system.css';
 
 const params = new URLSearchParams(location.search);
+const qaLogStyle=document.createElement('style');qaLogStyle.textContent='#qa-generation{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;max-height:200px;overflow:auto}';document.head.append(qaLogStyle);
 document.head.prepend(...Array.from(new DOMParser().parseFromString(appHtml, 'text/html').head.querySelectorAll('style,link[rel="stylesheet"]')).map(node => node.cloneNode(true)));
 document.documentElement.dataset.theme = params.has('dark') ? 'dark' : 'light';
 const cases = [{ id: 'cf108-case', caseNumber: 'CF108-001', title: '목차 제목 동기화 합성 검수 프로젝트', claimType: 'TYPE-01', status: 'CONTRACT' }];
-const initialDraft = { caseId: cases[0].id, title: '합성 클레임 검토 보고서', content: editorHtmlToMarkdown(renderStructuredDocumentHtml(reportJson)), editorJson: params.has('markdown') ? null : reportJson, version: 1, wizardStep: Number(params.get('step')) || 4, selectedChapterId: 'ch1', updatedAt: new Date().toISOString(), updatedBy: { id: 'qa', name: '합성 PM' } };
+const cf112Json = { type:'doc', content:[{type:'paragraph',content:[{type:'text',text:'기존 검수 본문은 보존합니다.'}]}, ...(reportJson.content ?? []).filter(node => node.type === 'table' || node.type === 'image')] };
+const fixtureJson = params.has('cf112') ? cf112Json : reportJson;
+const initialDraft = { caseId: cases[0].id, title: '합성 클레임 검토 보고서', content: editorHtmlToMarkdown(renderStructuredDocumentHtml(fixtureJson)), editorJson: params.has('markdown') ? null : fixtureJson, version: 1, wizardStep: Number(params.get('step')) || 4, selectedChapterId: 'ch1', updatedAt: new Date().toISOString(), updatedBy: { id: 'qa', name: '합성 PM' } };
 const initialOutline = { persistenceAvailable: true, status: 'CONFIRMED', version: 1, updatedAt: null, updatedBy: null, items: chapters.map(ch => ({ chapterId: ch.id, chapterCode: ch.chapterCode, chapterTitle: ch.title, promptVersion: 1, planningNote: '' })) };
-const storageKey = `${params.has('cf110') ? 'cf110' : 'cf108'}-qa-${params.has('markdown') ? 'markdown' : 'json'}-${params.has('readonly') ? 'readonly' : 'pm'}`;
+const storageKey = `${params.has('cf112') ? 'cf112' : params.has('cf110') ? 'cf110' : 'cf108'}-qa-${params.has('markdown') ? 'markdown' : 'json'}-${params.has('readonly') ? 'readonly' : 'pm'}`;
 let state = params.has('reset') ? { draft: initialDraft, outline: initialOutline } : JSON.parse(sessionStorage.getItem(storageKey) || 'null') || { draft: initialDraft, outline: initialOutline };
 let failDraft = false;
+let generationCount=0, failedGeneration=false; const generationLog:string[]=[];
+const generationAudit=()=>{let node=document.getElementById('qa-generation');if(!node){node=document.createElement('pre');node.id='qa-generation';document.querySelector('nav')?.append(node);}node.textContent=JSON.stringify({calls:generationLog,version:state.draft.version,content:state.draft.content,editorJson:state.draft.editorJson},null,2);};
 let cards = [{ id: '00000000-0000-4000-8000-000000000110', name:'합성 연락처', company:'삭제 검수 회사', department:'검수 부서', title:'담당자', mobile:'010-0000-0000', phone:'',email:'qa@example.invalid',address:'합성 주소',tags:'합성 자료',googleDriveUrl:'#source',geminiModelCode:'QA',version:1,createdAt:new Date().toISOString(),createdByName:'합성 관리자',deletedAt:null as string|null }];
 if(params.has('contacts')) { const toggle=document.createElement('a');toggle.href='?cf110=1&contacts=1&database=1';toggle.textContent='합성 DB관리';document.querySelector('nav')?.append(toggle); }
 const audit = (value: string) => { document.getElementById('qa-audit')!.textContent = value; };
@@ -78,8 +83,18 @@ window.fetch = async (input, init) => {
     if (body.expectedVersion !== state[key].version) return response({ error: '합성 버전 충돌' }, 409);
     state[key] = { ...state[key], ...body, version: state[key].version + 1, updatedAt: new Date().toISOString() };
     sessionStorage.setItem(storageKey, JSON.stringify(state));
+    if(params.has('cf112')){generationLog.push('SAVE:'+state.draft.version);generationAudit();}
     audit(`${key} 저장 v${state[key].version} · 목차 ${state.outline.items.map((item: { chapterTitle: string }) => item.chapterTitle).join(' / ')}`);
     return response(key === 'outline' ? { outlinePlan: state.outline } : { draft: state.draft, revisions: [], backups: [] });
+  }
+  if(params.has('cf112') && method==='POST' && url.pathname==='/api/report-authoring/generate') {
+    const body=JSON.parse(String(init?.body));
+    if(body.expectedDraftVersion!==state.draft.version)return response({error:'합성 생성 버전 충돌'},409);
+    generationCount++; generationLog.push('GENERATE:'+body.chapterId+':v'+body.expectedDraftVersion);generationAudit();
+    if(params.has('failsecond')&&generationCount===2&&!failedGeneration){failedGeneration=true;return response({error:'합성 AI 공급자 실패'},502);}
+    if(params.has('failsave')&&!failedGeneration){failedGeneration=true;failDraft=true;}
+    const chapter=chapters.find(ch=>ch.id===body.chapterId)!;
+    return response({chapter:{chapterCode:chapter.chapterCode,title:chapter.title,content:'실제 API 대신 합성 결과: '+chapter.chapterCode+' 근거 확인 필요.'}});
   }
   if (method !== 'GET') return response({ error: 'CF108: 미등록 합성 쓰기 차단' }, 405);
   if (url.pathname === '/api/cases') return response({ cases });
@@ -88,7 +103,7 @@ window.fetch = async (input, init) => {
   if (url.pathname === '/api/report-reviews') return response({ reviews: [] });
   if (url.pathname === '/api/report-finalizations') return response({ finalizations: [] });
   if (url.pathname === '/api/report-chapter-collaboration') return response({ assignments: [], members: [], canManage: !params.has('readonly'), currentUserId: 'qa' });
-  if (url.pathname === '/api/report-authoring/config') return response({ available: true, claimType: 'TYPE-01', chapters, outlinePlan: state.outline, sourceGroups: [], templates: [], templateLibrary: [], aiConnected: false, assistantConnected: false });
+  if (url.pathname === '/api/report-authoring/config') return response({ available: true, claimType: 'TYPE-01', chapters, outlinePlan: state.outline, sourceGroups: [], templates: [], templateLibrary: [], aiConnected: params.has('cf112') && !params.has('nokey'), providerLabel:'QA', modelLabel:'합성 모델', assistantConnected: false });
   if (url.pathname === '/api/report-authoring/case-law') return response({ sources: [], citations: [], apiConfigured: false });
   return response({ error: 'CF108: 미등록 합성 요청 차단' }, 404);
 };

@@ -29,7 +29,7 @@ test('CF67 required fields, dirty navigation, and authoring step gates are expli
   assert.match(report, /DocumentToolMenus/u);
   assert.match(theme, /\.workflow-next-action/u);
   assert.match(theme, /background:linear-gradient\(135deg,#c2410c,#9a3412\)!important;color:#fff!important/u);
-  assert.match(report, /if \(dirty \|\| outlineDirty \|\| workspaceDirty \|\| outlineSaveInFlight\.current \|\| outlineSyncPendingRef\.current\) event\.preventDefault/u);
+  assert.match(report, /if \(generationInFlight\.current \|\| dirty \|\| outlineDirty \|\| workspaceDirty \|\| outlineSaveInFlight\.current \|\| outlineSyncPendingRef\.current\) event\.preventDefault/u);
   const unloadGuard = report.slice(report.indexOf('const warn = (event: BeforeUnloadEvent)'), report.indexOf("window.addEventListener('beforeunload'"));
   assert.doesNotMatch(unloadGuard, /dirty \|\| outlineDirty \|\| saving/u);
   assert.match(app, /popstate/u);

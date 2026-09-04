@@ -123,7 +123,7 @@ test('CF84 rejects duplicate selections and a law detail response whose identity
 
 test('CF79 report UI exposes case-law selection/review and removes the redundant project basics tile',()=>{
   const studio=readFileSync('apps/web/src/routes/PreviewReportStudio.tsx','utf8');const proposal=readFileSync('apps/web/src/proposals/ProposalView.tsx','utf8');const shell=readFileSync('apps/web/src/layout/AppShell.tsx','utf8');
-  assert.match(studio,/판례 근거 추가/u);assert.match(studio,/판례 인용 검수/u);assert.doesNotMatch(studio,/프로젝트 기본정보/u);assert.match(studio,/복구용 백업은 1시간 단위/u);
+  assert.match(studio,/판례 근거 추가/u);assert.match(studio,/판례 인용 검수/u);assert.doesNotMatch(studio,/프로젝트 기본정보/u);assert.match(studio,/복구용 백업본은 변경된 작업을 기준으로 매시간/u);
   assert.match(proposal,/scope=proposal-authoring/u);assert.match(shell,/신규 프로젝트 수주/u);assert.match(shell,/투입 To-do/u);
 });
 

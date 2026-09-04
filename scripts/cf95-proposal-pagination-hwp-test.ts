@@ -51,7 +51,7 @@ test('CF95 captures exactly one physical page for each fitted proposal sheet wit
   assert.match(exporter, /data-export-document-revision/u);
   assert.match(exporter, /다시 캡처하지 않고 재사용/u);
   assert.match(exporter, /image\.complete\) throw new Error/u);
-  assert.match(exporter, /제안서 \$\{pageNumber\}페이지 내용이 A4 영역을 넘었습니다/u);
+  assert.match(exporter, /문서 \$\{pageNumber\}페이지 내용이 A4 영역을 넘었습니다/u);
 });
 
 test('CF95 emits Hancom-compatible HWPX pictures and rejects blank reopened HWP pages', () => {

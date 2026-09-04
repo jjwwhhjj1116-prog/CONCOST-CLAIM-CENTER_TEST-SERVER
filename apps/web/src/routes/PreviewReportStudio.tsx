@@ -10,7 +10,9 @@ import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
 import { expandDocumentSpacingMarkers } from '../documents/document-spacing';
-import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, editorHtmlToMarkdown, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { ReportBodyPages } from '../documents/ReportBodyPages';
+import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, editorHtmlToMarkdown, parseStructuredDocumentMarkdown, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { mergeGeneratedChapter } from '../reports/report-generated-chapter';
 import { renameStructuredReportTitles, renameUnstructuredReportTitles } from '../reports/report-outline-sync';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
@@ -124,10 +126,10 @@ export function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, conte
   const html = reportPreviewHtml(content, presentation.body);
   const [headerTitle, ...headerDetails] = (presentation.header.text ?? `${title}\n${caseNumber} · ${caseTitle}`).split('\n');
   return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기" data-export-document-title={title} data-export-document-kind="REPORT">
-    <section className="report-final-cover" data-export-page data-page-number="1">
+    <section className="report-final-cover" data-export-page data-export-page-policy="fit" data-page-number="1">
       <img className="proposal-template-logo" src="/api/proposal-studio/assets/BRAND_LOGO?v=1" alt="주식회사 컨코스트"/><span>CONCOST CLAIM CENTER STUDIO</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p><strong>프로젝트 기술 보고서</strong>
     </section>
-    <section className="report-final-body" data-export-page data-page-number="2">{presentation.header.enabled && <header><h2>{headerTitle}</h2>{headerDetails.length > 0 && <p style={{ whiteSpace: 'pre-line' }}>{headerDetails.join('\n')}</p>}</header>}<article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: html }} /></section>
+    <ReportBodyPages html={html} header={presentation.header.enabled && <header><h2>{headerTitle}</h2>{headerDetails.length > 0 && <p style={{ whiteSpace: 'pre-line' }}>{headerDetails.join('\n')}</p>}</header>}/>
   </article>;
 }
 
@@ -160,6 +162,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [selectedChapterId, setSelectedChapterId] = useState('');
   const [draftMethod, setDraftMethod] = useState<'AI' | 'MANUAL'>('AI');
   const [generating, setGenerating] = useState(false);
+  const generationInFlight = useRef(false);
   const [improving, setImproving] = useState(false);
   const [aiGeneration, setAiGeneration] = useState<{ kind: 'outline' | 'chapter' | 'improve'; status: AiGenerationStatus; title: string; error?: string } | null>(null);
   const [improvementInstruction, setImprovementInstruction] = useState('사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬어 주세요.');
@@ -332,9 +335,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   useEffect(() => { if (selectedCaseId) void loadDraft(selectedCaseId); else setLoading(false); }, [selectedCaseId, loadDraft]);
 
-  const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL', syncOutline = false): Promise<boolean> => {
+  const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL', syncOutline = false, force = false): Promise<boolean> => {
+    if (generationInFlight.current && !force) return false;
     if (!editable || saving || draftSaveInFlight.current || (outlineSaveInFlight.current && !syncOutline) || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return false;
-    if (!dirty && !workspaceDirty && !outlineSyncPendingRef.current && !syncOutline && versionRef.current > 0) return true;
+    if (!force && !dirty && !workspaceDirty && !outlineSyncPendingRef.current && !syncOutline && versionRef.current > 0) return true;
     const requestCaseId = selectedCaseId;
     // Outline saves and navigation can run in the same render: always use the latest document/version.
     const requestTitle = titleRef.current;
@@ -369,7 +373,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [activeStep, content, dirty, editable, editorJson, reportHeader, loadedCaseId, loadSavedWorkspaces, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
-    if ((!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
+    if (generationInFlight.current || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
     const timer = window.setTimeout(() => { void saveNow('AUTO'); }, 3000);
     return () => window.clearTimeout(timer);
   }, [activeStep, content, dirty, saveNow, saving, savingOutline, outlineSyncPending, selectedChapterId, title, workspaceDirty]);
@@ -385,7 +389,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [saveNow]);
 
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => { if (dirty || outlineDirty || workspaceDirty || outlineSaveInFlight.current || outlineSyncPendingRef.current) event.preventDefault(); };
+    const warn = (event: BeforeUnloadEvent) => { if (generationInFlight.current || dirty || outlineDirty || workspaceDirty || outlineSaveInFlight.current || outlineSyncPendingRef.current) event.preventDefault(); };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty, outlineDirty, workspaceDirty]);
@@ -441,7 +445,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const changeWizardStep = (step: ReportWizardStep) => {
-    if (outlineSaveInFlight.current) return;
+    if (outlineSaveInFlight.current || generationInFlight.current) return;
     if (step === activeStep) return;
     if (step > activeStep && !stepUnlocked[step]) {
       setError('앞 단계의 필수 입력·저장·확인을 완료한 뒤 다음 단계로 이동할 수 있습니다.');
@@ -563,6 +567,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   useEffect(() => registerNavigationBlocker((navigation) => {
+    if (generationInFlight.current) { setError('AI 작성·저장이 끝난 뒤 이동해 주세요.'); return true; }
     const current = `${window.location.pathname}${window.location.search}`;
     if (!editable || !selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current || (!dirty && !outlineDirty && !workspaceDirty && !outlineSaveInFlight.current && !outlineSyncPendingRef.current)) return false;
     setPendingNavigation(navigation);
@@ -624,35 +629,62 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     finally { if (selectedCaseRef.current === requestCaseId) setGeneratingOutline(false); }
   };
 
-  const generateChapter = async () => {
-    if (!editable || !authoring?.available || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating || loadedCaseId !== selectedCaseId) return;
-    const requestCaseId = selectedCaseId;
-    setGenerating(true); setError(''); setAiGeneration({ kind: 'chapter', status: 'running', title: `${selectedChapter?.title ?? '선택 챕터'} 초안을 작성하고 있습니다` });
+  const generationBlockedReason = loading || loadedCaseId !== selectedCaseId ? '프로젝트를 불러오는 중입니다.'
+    : !editable ? '담당 PM 또는 관리자만 보고서 AI 초안을 작성할 수 있습니다.'
+    : !authoring?.available ? authoring?.unavailableReason || '이 유형의 챕터 프롬프트 활성화가 필요합니다.'
+    : !authoring.aiConnected ? `${authoring.providerLabel || '보고서 작성 AI'} 키가 연결되지 않았습니다. AI 설정 후 연결 상태를 다시 확인해 주세요.`
+    : outlineStatus !== 'CONFIRMED' || outlineDirty || outlineSyncPending ? '2단계에서 변경한 목차를 확정해 주세요.'
+    : saving || savingOutline || improving || chapterBusy ? '현재 저장·편집 작업이 끝나면 작성할 수 있습니다.'
+    : generating ? 'AI 작성 중입니다.' : '';
+  const [refreshingAi, setRefreshingAi] = useState(false);
+  const refreshAiConfig = async () => {
+    if (refreshingAi || generating) return;
+    const caseId = selectedCaseId; setRefreshingAi(true);
     try {
-      const result = await apiRequest<{ chapter: { chapterCode: string; title: string; content: string; promptVersion: number; caseLawCitations?: CaseLawCitation[]; memory?: { engine: string; shortTermItems: number; approvedLongTermRules: number; personalRules: number; organizationRules: number } } }>('/api/report-authoring/generate', {
-        method: 'POST', timeoutMs: 105_000, body: JSON.stringify({ caseId: requestCaseId, chapterId: selectedChapterId, expectedDraftVersion: version, useCaseLaw: useCaseLaw && caseLawSources.length > 0 })
-      });
-      if (selectedCaseRef.current !== requestCaseId) return;
-      const start = `<!-- AI-CHAPTER:${result.chapter.chapterCode}:START -->`;
-      const end = `<!-- AI-CHAPTER:${result.chapter.chapterCode}:END -->`;
-      const chapterTitle = outlineTitles[selectedChapterId]?.trim() || result.chapter.title;
-      const block = `${start}\n## ${result.chapter.chapterCode} ${chapterTitle}\n\n${result.chapter.content}\n${end}`;
-      const escapedCode = result.chapter.chapterCode.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-      const existing = new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${escapedCode}:START -->[\\s\\S]*?<!-- (?:AI|MANUAL)-CHAPTER:${escapedCode}:END -->`, 'u');
-      const nextContent = existing.test(content) ? content.replace(existing, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
-      contentRef.current = nextContent; setContent(nextContent); setEditorJson(null); setDirty(true);
-      if(result.chapter.caseLawCitations)setCaseLawCitations(result.chapter.caseLawCitations);
-      if (result.chapter.memory) setMemoryNotice(`이번 초안 메모리 적용 · 단기 ${result.chapter.memory.shortTermItems}개 · 승인 장기 ${result.chapter.memory.approvedLongTermRules}개(개인 ${result.chapter.memory.personalRules} · 조직 ${result.chapter.memory.organizationRules})`);
-      setAiGeneration((current) => current?.kind === 'chapter' ? { ...current, status: 'complete' } : current);
+      const config = await apiRequest<AuthoringConfig>(`/api/report-authoring/config?caseId=${encodeURIComponent(caseId)}`);
+      if (selectedCaseRef.current === caseId) setAuthoring(config);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setRefreshingAi(false); }
+  };
+
+  const generateChapter = async (all = false) => {
+    if (generationInFlight.current || generationBlockedReason || !authoring) return;
+    const chapters = all ? authoring.chapters.filter(ch => !authoredChapterCodes.has(ch.chapterCode)) : authoring.chapters.filter(ch => ch.id === selectedChapterId);
+    if (!chapters.length) { setError('미작성 챕터가 없습니다. 다시 작성할 챕터를 선택해 주세요.'); return; }
+    if (!all && authoredChapterCodes.has(chapters[0].chapterCode) && !window.confirm(`${chapters[0].chapterCode}의 기존 본문을 새 AI 초안으로 교체할까요? 현재 본문은 먼저 저장합니다.`)) return;
+    const requestCaseId = selectedCaseId;
+    generationInFlight.current = true; setGenerating(true); setError('');
+    let completed = 0;
+    setAiGeneration({ kind: 'chapter', status: 'running', title: '현재 편집 내용을 저장하고 있습니다' });
+    try {
+      if (!await saveNow('MANUAL', false, true)) throw new Error('현재 본문을 저장하지 못해 AI 작성을 시작하지 않았습니다. 저장 오류를 확인해 주세요.');
+      for (const chapter of chapters) {
+        if (selectedCaseRef.current !== requestCaseId) return;
+        selectedChapterRef.current = chapter.id; setSelectedChapterId(chapter.id);
+        setAiGeneration({ kind: 'chapter', status: 'running', title: `${completed}/${chapters.length}장 저장 완료 · ${chapter.chapterCode} ${outlineTitles[chapter.id] || chapter.title} 작성 중` });
+        const law = await apiRequest<CaseLawPayload>(`/api/report-authoring/case-law?caseId=${encodeURIComponent(requestCaseId)}&chapterId=${encodeURIComponent(chapter.id)}`);
+        const result = await apiRequest<{ chapter: { chapterCode: string; title: string; content: string; caseLawCitations?: CaseLawCitation[] } }>('/api/report-authoring/generate', {
+          method: 'POST', timeoutMs: 105_000, body: JSON.stringify({ caseId: requestCaseId, chapterId: chapter.id, expectedDraftVersion: versionRef.current, useCaseLaw: (all || useCaseLaw) && law.sources.length > 0 })
+        });
+        if (selectedCaseRef.current !== requestCaseId) return;
+        if (!result.chapter.content?.trim() || result.chapter.chapterCode !== chapter.chapterCode) throw new Error('AI 챕터 응답이 비어 있거나 요청한 챕터와 다릅니다. 기존 본문은 유지했습니다.');
+        const block = `<!-- AI-CHAPTER:${chapter.chapterCode}:START -->\n## ${chapter.chapterCode} ${outlineTitles[chapter.id]?.trim() || chapter.title}\n\n${result.chapter.content}\n<!-- AI-CHAPTER:${chapter.chapterCode}:END -->`;
+        const nextJson = mergeGeneratedChapter(editorJsonRef.current ?? parseStructuredDocumentMarkdown(contentRef.current), chapter.chapterCode, parseStructuredDocumentMarkdown(block));
+        const renderedHtml = renderStructuredDocumentHtml(nextJson);
+        if (!renderedHtml.trim()) throw new Error('생성한 본문을 편집 형식으로 변환하지 못했습니다. 기존 본문은 보존했습니다.');
+        const nextContent = editorHtmlToMarkdown(renderedHtml);
+        contentRef.current = nextContent; setContent(nextContent); setEditorJson(nextJson); setDirty(true);
+        if (result.chapter.caseLawCitations) setCaseLawCitations(result.chapter.caseLawCitations);
+        if (!await saveNow('MANUAL', false, true)) throw new Error('생성한 초안을 저장하지 못했습니다. 화면의 초안은 유지되며, 먼저 저장한 뒤 계속해 주세요.');
+        completed += 1;
+      }
+      setAiGeneration({ kind: 'chapter', status: 'complete', title: `${completed}개 챕터 작성·저장 완료` });
     } catch (reason) {
       if (selectedCaseRef.current !== requestCaseId) return;
       const providerStatus = reason instanceof ApiError && typeof reason.payload.providerStatus === 'number' ? ` · 공급자 HTTP ${reason.payload.providerStatus}` : '';
-      const providerReason = reason instanceof ApiError && typeof reason.payload.providerReason === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/u.test(reason.payload.providerReason)
-        ? ` · Google 사유 ${reason.payload.providerReason}`
-        : '';
-      const message=`${reason instanceof Error ? reason.message : String(reason)}${providerStatus}${providerReason}`;setError(message);setAiGeneration((current) => current?.kind === 'chapter' ? { ...current, status: 'error', error: message } : current);
-    }
-    finally { if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
+      const message = `${reason instanceof Error ? reason.message : String(reason)}${providerStatus} · ${completed}개 챕터 저장 완료. 저장된 내용은 유지됩니다.`;
+      setError(message); setAiGeneration({ kind: 'chapter', status: 'error', title: 'AI 작성을 중단했습니다', error: message });
+    } finally { generationInFlight.current = false; if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
   };
 
   const startManualChapter = () => {
@@ -987,7 +1019,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
 
-      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} providerLabel={aiGeneration?.kind==='outline'?'OpenAI':aiGeneration?.kind==='improve'?'Gemini':'Claude'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['AI 공급자 응답 대기','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['AI 공급자 응답 대기','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['AI 공급자 응답 대기','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
+      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} providerLabel={aiGeneration?.kind==='outline'?authoring?.outlineProviderLabel:aiGeneration?.kind==='improve'?'Gemini':authoring?.providerLabel} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['AI 공급자 응답 대기','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['AI 공급자 응답 대기','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['AI 공급자 응답 대기','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'요청한 챕터 초안이 작성·저장되었습니다. 담당자가 내용과 근거를 검수해 주세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">계약·판례와 현장 근거로 클레임 보고서를 완성합니다.</h2><p>회의록·현장조사·물량산출 자료를 검토하고, 관련 계약 조항과 판례를 대조해 쟁점·책임·산정 근거를 정리합니다.</p></div>
         <div className="report-authoring-hero__actions">
@@ -1077,7 +1109,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <div className="report-draft-context">
             <div className="report-draft-chapter">
               <Select label="초안을 작성할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title} · prompt v${chapter.promptVersion}` }))} />
-              {draftMethod === 'AI' ? <Button className="report-action-ai" onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '✦ 선택 챕터 AI 자동 작성'}</Button> : <Button className="report-action-manual" onClick={startManualChapter} disabled={!editable || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || saving}>{authoredChapterCodes.has(selectedChapter?.chapterCode ?? '') ? '현재 초안 직접 편집' : '수동 입력 시작'}</Button>}
+              {draftMethod === 'AI' ? <div className="report-generation-actions">
+                <div><Button className="report-action-ai" onClick={() => void generateChapter()} disabled={Boolean(generationBlockedReason) || !selectedChapterId}>챕터별 자동작성(권장)</Button>
+                <Button variant="secondary" onClick={() => void generateChapter(true)} disabled={Boolean(generationBlockedReason) || authoring.chapters.every(ch => authoredChapterCodes.has(ch.chapterCode))}>전체 한 번에 작성</Button></div>
+                <small>챕터별: 선택한 장 작성 · 전체: 미작성 장을 순서대로 생성·저장합니다. 기존 작성 장과 장별 선택 판례를 유지합니다.</small>
+                <p role="status">{generationBlockedReason || (dirty ? '작성 버튼을 누르면 현재 편집 내용을 먼저 저장합니다.' : `${authoring.providerLabel || 'AI'} · ${authoring.modelLabel || '설정된 모델'}로 작성할 수 있습니다.`)}</p>
+                {!authoring.aiConnected && <Button variant="secondary" onClick={() => onNavigate('/settings')}>AI 연결 설정</Button>}
+                <Button variant="secondary" disabled={refreshingAi || generating} onClick={() => void refreshAiConfig()}>{refreshingAi ? '확인 중…' : '연결 상태 다시 확인'}</Button>
+              </div> : <Button className="report-action-manual" onClick={startManualChapter} disabled={!editable || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || saving}>{authoredChapterCodes.has(selectedChapter?.chapterCode ?? '') ? '현재 초안 직접 편집' : '수동 입력 시작'}</Button>}
             </div>
             {selectedChapter && <section className="report-case-law" aria-labelledby="report-case-law-title">
               <header><h3 id="report-case-law-title">판례 근거 추가</h3><em>{caseLawSources.length}/3 선택</em></header>
@@ -1090,7 +1129,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </section>}
             </div>
             {draftMethod === 'MANUAL' && <section className="report-manual-source"><div><b>HWP·DOCX 전체 문서 적용</b><span>가져온 문서는 챕터로 임의 분할하지 않고 현재 보고서 본문 전체를 교체합니다. HWP는 팝업에서 원본을 확인한 뒤 “전체 문서를 보고서에 적용”을 누르세요.</span>{linkedHwpName && <small>연결된 원본: {linkedHwpName}</small>}</div><div className="report-manual-source__actions"><Button className="report-action-hwp" onClick={() => hwpInputRef.current?.click()} disabled={linkingHwp}>{linkingHwp ? 'HWP 연결 중…' : 'HWP 업로드 · 회사 Google Drive 저장'}</Button><Button className="report-action-review" variant="secondary" onClick={() => reportDocxInputRef.current?.click()} disabled={saving}>DOCX 전체 적용</Button><Button className="report-action-confirm" onClick={continueWithoutAi} disabled={!editable || outlineStatus !== 'CONFIRMED' || outlineDirty || saving}>AI 없이 담당자 검수로 이동</Button></div></section>}
-            {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>담당자 직접 편집</b><span>AI·수동·외부 문서 초안을 편집기에서 고칩니다. 우측 출력 미리보기를 함께 확인하세요. 입력은 자동 저장되고 Ctrl+S로 즉시 저장 지점을 만들 수 있습니다.</span></div><div className="report-stage-inline-editor__actions"><Button className="report-action-review" variant="secondary" onClick={() => void saveNow('MANUAL')} disabled={!dirty || saving}>{saving ? '저장 중…' : 'Ctrl+S 저장 지점 만들기'}</Button>{backups.length > 0 && <a href="#report-backups">시간별 백업 불러오기</a>}</div></header>{renderReportHeaderControls(3)}<div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader)}/>} documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></section>}
+            {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>담당자 직접 편집</b><span>AI·수동·외부 문서 초안을 편집기에서 고칩니다. 우측 출력 미리보기를 함께 확인하세요. 입력은 자동 저장되고 Ctrl+S로 즉시 저장 지점을 만들 수 있습니다.</span></div><div className="report-stage-inline-editor__actions"><Button className="report-action-review" variant="secondary" onClick={() => void saveNow('MANUAL')} disabled={!dirty || saving}>{saving ? '저장 중…' : 'Ctrl+S 저장 지점 만들기'}</Button>{backups.length > 0 && <a href="#report-backups">시간별 백업 불러오기</a>}</div></header>{renderReportHeaderControls(3)}<div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader)}/>} documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" readOnly={generating || savingOutline} value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></section>}
             {draftMethod === 'AI' && <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? '회사 서버 보안 키 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>}
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
             {draftMethod === 'AI' && !authoring.aiConnected && <div className="error-box">AI 연결이 없어 자동작성을 사용할 수 없습니다. 수동·외부 LLM을 선택하면 API 키 없이 계속 작성할 수 있습니다.</div>}
