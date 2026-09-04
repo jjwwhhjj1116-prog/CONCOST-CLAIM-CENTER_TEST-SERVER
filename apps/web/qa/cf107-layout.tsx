@@ -26,6 +26,9 @@ const config = {
   templateLibrary: ['TYPE-01', 'REF-02'].map((categoryCode, i) => ({ id: `tpl${i}`, categoryCode, displayName: i === 0 ? '공사비 증액 클레임 검토 보고서 · 합성 원본 템플릿' : '두 번째 합성 원본 템플릿', primaryClaimType: 'TYPE-01', secondaryClaimTypes: [], matchesCurrentType: i === 0, expectedSourceCount: 1, uploadedSourceCount: 0, analysisSummary: '검수용', outline: ['개요'], analysisVersion: 1, files: [] }))
 };
 const navigate = (path: string) => { document.querySelector('#qa-navigation')!.textContent = `이동 요청: ${path}`; };
+// CF109 exercises the same selector with absent metadata, no projects and pending loads.
+if (params.has('empty')) cases.splice(0);
+if (params.has('unassigned')) projects.forEach(project => { project.responsiblePm = null as never; });
 window.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
   const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
@@ -36,6 +39,7 @@ window.fetch = async (input, init) => {
   }
   if (url.pathname === '/api/cases') return response({ cases });
   if (url.pathname === '/api/project-workflow/schedule') return response({ projects });
+  if (params.has('loading') && /^\/api\/cases\/case-\d\/workflow$/.test(url.pathname)) return new Promise<Response>(() => {});
   if (/^\/api\/cases\/case-\d\/workflow$/.test(url.pathname)) return response({ case: cases.find(c => url.pathname.includes(c.id))!, kickoff: null, siteSurveys: [], allocations: [], events: [], googleDrive: { connected: false, deferredByUser: true, uploadEnabled: false } });
   if (url.pathname.endsWith('/evidence')) return response({ files: [], storagePolicy: 'D1_TEST_FALLBACK', googleDriveConnected: false });
   if (url.pathname === '/api/report-workspaces') return response({ workspaces: [] });

@@ -29,6 +29,21 @@ test('CF107 renames only the allocation member label, not the responsible projec
   assert.match(workflow, /memberName:event\.target\.value/u);
 });
 
+test('CF109 fills the existing selector with current project facts without changing schedule actions', () => {
+  const selector = workflow.slice(workflow.indexOf('<div className="workflow-project-selector">'), workflow.indexOf('<section className="shared-stage-schedule"'));
+  assert.match(selector, /!loading && data\?\.case\.id === selectedCaseId/u);
+  assert.match(selector, /<h3>\{data.case.title\}<\/h3>/u);
+  assert.match(selector, /data.case.caseNumber/u);
+  assert.match(selector, /scheduleProject\?\.caseId === selectedCaseId/u);
+  assert.match(selector, /scheduleProject.responsiblePm\?\.name/u);
+  assert.match(selector, /projectStatusLabels\[data.case.status\]/u);
+  assert.match(selector, /data.case.clientName/u);
+  assert.doesNotMatch(selector, /scheduleDraft.status|memberName/u);
+  assert.match(selector, /selectCase\(event.target.value\)/u);
+  assert.match(workflowCss, /\.workflow-project-summary h3[^}]*overflow-wrap: anywhere/u);
+  assert.doesNotMatch(workflowCss, /\.workflow-project-summary[^}]*line-clamp/u);
+});
+
 test('CF107 presents report project and template choices together with readiness below', () => {
   const step1 = report.slice(report.indexOf('className="report-step-card report-step-card--1'), report.indexOf('className="report-step-card report-step-card--2'));
   assert.match(step1, /report-project-template-grid/u);

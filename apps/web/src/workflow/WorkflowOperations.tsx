@@ -123,6 +123,11 @@ interface WorkflowArchivedFile {
 
 const stageRoute: Record<WorkflowRouteId, 3 | 4 | 5> = { 'WF-03': 3, 'WF-04': 4, 'WF-05': 5 };
 const sharedStageCode: Record<WorkflowRouteId, SharedStageCode> = { 'WF-03': 'KICKOFF', 'WF-04': 'SITE_SURVEY', 'WF-05': 'TAKEOFF_COST' };
+const projectStatusLabels: Record<string, string> = {
+  INQUIRY: '문의', PROPOSAL: '제안', ESTIMATE: '견적', CONTRACT: '계약', MATERIAL_RECEIVED: '자료접수',
+  ANALYSIS: '분석', REPORT_DRAFTING: '보고서 작성', SUBMITTED: '제출', LITIGATION: '소송 진행',
+  JUDGEMENT: '판결', SUCCESS_FEE: '성공보수 정산', CLOSED: '종결'
+};
 const WORKFORCE_OPTIONS = WORKFORCE_UNITS
   .filter((unit) => unit.discipline !== '클레임')
   .map((unit, index) => ({
@@ -450,7 +455,15 @@ export const WorkflowOperations: React.FC<{
       <div className="workflow-project-context">
       <div className="workflow-project-selector">
         <Select id="workflow-case" searchable searchPlaceholder="프로젝트 번호·이름 검색" label="현재 프로젝트" value={selectedCaseId} disabled={Boolean(busy)} onChange={(event) => selectCase(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />
-        {data && <span>{data.case.claimType} · {data.case.status}</span>}
+        {!loading && data?.case.id === selectedCaseId ? <section className="workflow-project-summary" aria-label="선택한 프로젝트 정보">
+          <div className="workflow-project-summary__identity"><strong>{data.case.caseNumber}</strong><span>{data.case.claimType}</span></div>
+          <h3>{data.case.title}</h3>
+          <dl>
+            <div><dt>담당 PM</dt><dd>{scheduleProject?.caseId === selectedCaseId ? scheduleProject.responsiblePm?.name || '미지정' : '미지정'}</dd></div>
+            <div><dt>프로젝트 상태</dt><dd>{projectStatusLabels[data.case.status] ?? data.case.status}</dd></div>
+            {data.case.clientName?.trim() && <div className="workflow-project-summary__client"><dt>클라이언트</dt><dd>{data.case.clientName}</dd></div>}
+          </dl>
+        </section> : <p className="workflow-project-summary__empty">{loading ? '프로젝트 정보를 불러오는 중입니다.' : selectedCaseId ? '프로젝트 정보를 불러오지 못했습니다.' : '조회할 프로젝트를 선택해 주세요.'}</p>}
       </div>
 
       {!loading && data && <section className="shared-stage-schedule" aria-labelledby="shared-stage-schedule-title">
