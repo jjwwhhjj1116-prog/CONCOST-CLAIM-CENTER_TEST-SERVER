@@ -17,3 +17,12 @@
 - 브라우저 DOM 실측: 1440px 화면에서 좌측 선택 카드와 우측 일정 카드 높이 약 393px로 동일하다. 전체 제목은 17px/3줄로 표시되고 카드 바닥 여백은 약 20px다.
 - 390px 화면에서는 프로젝트 정보 다음 일정 순서로 세로 배치되며 가로 넘침이 없다. 프로젝트 변경 시 번호·이름·PM·상태·클라이언트 전환, PM 미지정·빈 목록·로딩·다크 모드, 착수회의·물량산출의 공통 적용을 확인했다.
 - 화면 캡처는 1회 시간초과로 확보하지 못했다. 위 UI 검증은 로컬 합성 데이터 화면의 DOM 실측이며 배포 서버의 로그인된 실제 프로젝트 검수와 구분한다.
+
+## 개발 서버 반영
+
+- 소스 커밋: `6d154d2` (`test-server`, `fix/CF73-workflow-minutes-parity`).
+- 개발 Worker 버전: `94744245-3f8b-4d27-be07-4dbfbf0e7b99`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/workflow/site-survey
+- 개발 설정으로 dry-run 및 배포 성공. DB·migration·실제 업무 데이터 변경 없음.
+- `/health` 200 `ok`, `/readiness` 200 `ready`, 현장조사 HTML 200 및 새 번들 참조 확인.
+- `index-DSI0gT_p.js`, `index.es-B533QqzK.js`, `index-C-Ekq66V.css`의 서버/로컬 SHA-256 일치 확인.
