@@ -35,6 +35,8 @@ document.getElementById('qa-check')!.onclick = () => {
   const referenceResult = renameUnstructuredReportTitles(reference, [changes[0]]);
   const checks = {
     nonHeadingJsonPreserved: !state.draft.editorJson || JSON.stringify(withoutHeadings(state.draft.editorJson)) === JSON.stringify(withoutHeadings(reportJson)),
+    nonHeadingRenderedPreserved: !state.draft.editorJson || renderStructuredDocumentHtml({ type: 'doc', content: withoutHeadings(state.draft.editorJson) }) === renderStructuredDocumentHtml({ type: 'doc', content: withoutHeadings(reportJson) }),
+    normalizedNodeDifferences: !state.draft.editorJson ? [] : withoutHeadings(state.draft.editorJson)?.flatMap((node: unknown, index: number) => JSON.stringify(node) === JSON.stringify(withoutHeadings(reportJson)?.[index]) ? [] : [{ index, before: withoutHeadings(reportJson)?.[index], after: node }]),
     editorAndContentHeadings: state.outline.items.map((item: { chapterCode: string; chapterTitle: string }) => ({ title: item.chapterTitle, inContent: state.draft.content.includes(item.chapterTitle), inJson: !state.draft.editorJson || JSON.stringify(state.draft.editorJson).includes(item.chapterTitle) })),
     markdownOnlyHeadingChanged: renamed.matched.length === 1 && renamed.content.substring(renamed.content.indexOf('\n\n')) === markdown.substring(markdown.indexOf('\n\n')),
     codeBlockUntouched: renamed.content.includes('```md\n' + oldHeading),
