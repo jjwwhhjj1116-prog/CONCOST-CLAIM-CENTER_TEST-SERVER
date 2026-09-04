@@ -40,7 +40,10 @@
 .workflow-stepper button:hover, .workflow-stepper button:focus-visible { border-color: #5b7ef7; color: #fff; outline: none; }
 .workflow-stepper button.is-active { border-color: #684dff; background: linear-gradient(135deg, #2a1b63, #142746); color: #fff; box-shadow: inset 3px 0 #34c9ff; }
 
-.workflow-project-selector { display: grid; grid-template-columns: auto minmax(260px, 1fr) auto; align-items: center; gap: 12px; padding: 15px 18px; border: 1px solid #26324f; border-radius: 14px; background: #11182a; }
+.workflow-project-context { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 2fr); gap: 16px; align-items: stretch; }
+.workflow-project-context > * { min-width: 0; }
+.workflow-project-selector { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; padding: 18px; border: 1px solid #26324f; border-radius: 14px; background: #11182a; }
+.workflow-project-selector > * { min-width: 0; }
 .workflow-project-selector label { font-size: .75rem; font-weight: 800; color: #aebbd1; }
 .workflow-project-selector select,
 .workflow-form-grid input,
@@ -55,7 +58,8 @@
 .shared-stage-schedule > header h3 { margin:4px 0; color:#14233a; font-size:1.1875rem; }
 .shared-stage-schedule > header p { margin:0; color:#52647a; font-size:.75rem; line-height:1.55; }
 .shared-stage-schedule > header em { padding:7px 10px; border:1px solid #8dbce9; border-radius:999px; background:#fff; color:#23629d; font-size:.6875rem; font-style:normal; font-weight:850; white-space:nowrap; }
-.shared-stage-schedule-fields { display:grid; grid-template-columns:repeat(3,minmax(145px,.55fr)) minmax(260px,1fr); gap:10px; }
+.shared-stage-schedule-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.shared-stage-schedule-fields .is-note { grid-column:1 / -1; }
 .shared-stage-schedule-fields label { display:grid; gap:6px; color:#34465e; font-size:.6875rem; font-weight:850; }
 .shared-stage-schedule-fields input,.shared-stage-schedule-fields select { width:100%; min-height:43px; border:1px solid #aebfd4; border-radius:9px; background:#fff; color:#152238; padding:0 10px; font:inherit; }
 .shared-stage-schedule-fields input:focus,.shared-stage-schedule-fields select:focus { border-color:#176ed0; outline:3px solid rgb(23 110 208 / 15%); }
@@ -241,6 +245,7 @@
 }
 
 @media (max-width: 980px) {
+  .workflow-project-context { grid-template-columns: minmax(0, 1fr); }
   .workflow-form-grid { grid-template-columns: 1fr; }
   .workflow-form-grid label.is-wide { grid-column: auto; }
   .workflow-primary-actions { display: grid; grid-template-columns: 1fr; }

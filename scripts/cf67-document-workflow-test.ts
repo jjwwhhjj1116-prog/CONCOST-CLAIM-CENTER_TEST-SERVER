@@ -22,7 +22,7 @@ test('CF67 required fields, dirty navigation, and authoring step gates are expli
   assert.match(proposal, /registerNavigationBlocker/u);
   assert.match(proposal, /if\(dirty\)event\.preventDefault/u);
   assert.match(report, /<Input required label="보고서 제목"/u);
-  assert.match(report, /<Select\b[^>]*\brequired label="작성할 프로젝트"/u);
+  assert.match(report, /<Select\b[^>]*\brequired label="프로젝트 선택"/u);
   assert.match(proposal, /proposal-step1-textarea/u);
   assert.match(proposal, /workflow-next-action/u);
   assert.match(report, /report-current-project--persistent/u);

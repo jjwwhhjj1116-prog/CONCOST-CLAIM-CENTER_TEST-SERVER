@@ -37,7 +37,8 @@ test('CF20 gives proposal, project workflow, and report authoring steps distinct
   const theme = read('apps/web/src/theme-system.css');
 
   assert.match(proposal, /proposal-step-button/u);
-  assert.match(workflow, /--step-color/u);
+  assert.match(workflow, /workflow-project-context/u);
+  assert.doesNotMatch(workflow, /className="workflow-stepper"/u);
   for (const step of ['1', '2', '3', '4', '5']) assert.match(report, new RegExp(`report-step-card--${step}`));
   for (const color of ['#c8794d', '#4a86c5', '#766bb5', '#4b967f']) assert.match(theme, new RegExp(color));
   assert.match(theme, /--report-step-number/u);

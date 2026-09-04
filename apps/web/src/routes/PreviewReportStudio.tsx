@@ -77,7 +77,7 @@ const REPORT_WIZARD_STEPS: readonly {
   tasks: readonly string[];
   doneText: string;
 }[] = [
-  { id: 1, title: '프로젝트·템플릿 확인', shortHelp: '어떤 프로젝트의 보고서를 만들지 먼저 고릅니다.', tasks: ['프로젝트 이름 확인', '클레임 유형 확인', 'AI가 참고할 자료 준비도 확인'], doneText: '프로젝트와 승인 템플릿이 연결되면 완료' },
+  { id: 1, title: '프로젝트·템플릿 확인', shortHelp: '프로젝트와 원본 보고서 템플릿을 선택하고 참고자료를 확인합니다.', tasks: ['프로젝트 선택', '원본 템플릿 선택', '참고자료 준비상태 확인'], doneText: '프로젝트와 승인 템플릿이 연결되면 완료' },
   { id: 2, title: '목차 기획', shortHelp: '선택한 템플릿에서 목차를 자동 만들고 제목만 쉽게 다듬습니다.', tasks: ['AI·템플릿으로 목차 자동 만들기', '이상한 챕터 제목만 바로 수정하기', '목차 확정 누르기'], doneText: '목차 확정 표시가 나오면 완료' },
   { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성, 직접 작성 또는 HWP·DOCX 전체 문서 적용을 선택합니다.', tasks: ['작성 방식 선택', '전체 문서 적용 또는 챕터 작성', 'Ctrl+S·자동저장 확인'], doneText: '전체 문서 적용 또는 모든 챕터 초안 작성 시 완료' },
   { id: 4, title: '담당자 검수·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 담당자가 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', '자동 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
@@ -979,7 +979,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <input ref={quantityExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importQuantitySpreadsheet(event.target.files?.[0])}/>
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} providerLabel={aiGeneration?.kind==='outline'?'OpenAI':aiGeneration?.kind==='improve'?'Gemini':'Claude'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['AI 공급자 응답 대기','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['AI 공급자 응답 대기','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['AI 공급자 응답 대기','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
-        <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
+        <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">계약·판례와 현장 근거로 클레임 보고서를 완성합니다.</h2><p>회의록·현장조사·물량산출 자료를 검토하고, 관련 계약 조항과 판례를 대조해 쟁점·책임·산정 근거를 정리합니다.</p></div>
         <div className="report-authoring-hero__actions">
           <div className="report-resume-control">
             <Button variant="secondary" aria-expanded={showResumePicker} aria-controls="report-resume-menu" onClick={() => { setShowResumePicker((current) => !current); setResumeCaseId(selectedCaseId || savedWorkspaces[0]?.caseId || ''); }}>저장한 보고서 이어쓰기 {savedWorkspaces.length ? `(${savedWorkspaces.length})` : ''}</Button>
@@ -1014,32 +1014,29 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <span className="report-wizard-navigation__progress"><i style={{ width: `${(activeStep / 5) * 100}%` }} /></span>
       </nav>
 
-      {selectedCase&&<div className="report-current-project report-current-project--persistent" aria-live="polite"><span>현재 프로젝트</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>}
+      {activeStep !== 1 && selectedCase&&<div className="report-current-project report-current-project--persistent" aria-live="polite"><span>현재 프로젝트</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>}
       {memoryNotice&&<p className="notice-box report-document-notice" role="status">{memoryNotice}</p>}
 
       <Card title="" className="report-step-card report-step-card--1 report-stage-card">
         {renderStageHeader(1)}
-        <div className="inline-form">
-          <Select searchable searchPlaceholder="프로젝트 번호·이름 검색" required label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
+        <div className="report-project-template-grid">
+        <div className="report-project-choice">
+          <Select searchable searchPlaceholder="프로젝트 번호·이름 검색" required label="프로젝트 선택" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row report-autosave-status" aria-live="polite" aria-label="지금 저장 상태">
             <span className="preview-pill">{error ? '자동 저장 일시 중단' : saving ? '자동 저장 중' : dirty || workspaceDirty || outlineDirty ? '변경사항 감지 · 잠시 후 자동 저장' : version ? `자동 저장 완료 · ${savedAt ? new Date(savedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : `v${version}`}` : '첫 입력 후 자동 저장'}</span>
             {error && <Button className="report-action-danger" onClick={() => selectedCaseId && void loadDraft(selectedCaseId)}>최신본 다시 불러오기</Button>}
           </div>
         </div>
-        <div className="report-template-contract">
-          <div><span>CLAIM TYPE</span><strong>{authoring?.claimType ?? selectedCase?.claimType ?? '불러오는 중'}</strong><small>프로젝트 의뢰에 등록된 6대 고정 유형</small></div>
-          <div><span>APPROVED TEMPLATE</span><strong>{authoring?.available ? '유형별 템플릿 적용' : '템플릿 확인 필요'}</strong><small>{authoring?.available ? `${authoring.chapters.length}개 챕터 구성` : authoring?.unavailableReason ?? '구성을 불러오는 중'}</small></div>
-          <div><span>AUTOSAVE</span><strong>자동 저장</strong><small>입력은 자동 저장 · 복구용 백업은 1시간 단위</small></div>
-          {roles.includes('admin') && <Button variant="secondary" onClick={() => onNavigate('/ai-config')}>유형별 템플릿·프롬프트 관리</Button>}
-        </div>
         <div className="report-template-viewer-control">
-          <label htmlFor="report-template-preview-type"><span>원본 보고서 템플릿 선택·열람</span><select id="report-template-preview-type" value={previewTemplateCategoryCode} onChange={(event) => setPreviewTemplateCategoryCode(event.target.value)}>{authoring?.templateLibrary.map((category) => <option key={category.categoryCode} value={category.categoryCode}>{category.matchesCurrentType ? '● ' : ''}{category.categoryCode} · {category.displayName} · {category.uploadedSourceCount}/{category.expectedSourceCount}</option>)}</select></label>
+          <label htmlFor="report-template-preview-type"><span>원본 보고서 템플릿 선택</span><select id="report-template-preview-type" value={previewTemplateCategoryCode} onChange={(event) => setPreviewTemplateCategoryCode(event.target.value)}>{authoring?.templateLibrary.map((category) => <option key={category.categoryCode} value={category.categoryCode}>{category.matchesCurrentType ? '● ' : ''}{category.categoryCode} · {category.displayName} · {category.uploadedSourceCount}/{category.expectedSourceCount}</option>)}</select></label>
           <Button aria-label="선택 템플릿 완제품 보기" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>원본 완제품·분석 보기</Button>
           <small>● 표시는 현재 프로젝트 {authoring?.claimType ?? selectedCase?.claimType}에 연결된 원본 분류입니다. PDF는 웹에서 바로 열고 HWP·HWPX·XLSX는 원본으로 내려받습니다.</small>
         </div>
+        </div>
+        {!loading && loadedCaseId === selectedCaseId && authoring && !authoring.available && <p className="error-box" role="alert">{authoring.unavailableReason ?? '이 프로젝트 유형에 승인된 보고서 템플릿이 없습니다. 관리자에게 등록을 요청하세요.'}</p>}
         <p className="muted">회사 원본 32개는 공개 웹 자산이 아니라 로그인으로 보호된 Google Drive에 저장됩니다. 관리자가 원본 폴더를 등록하면 처음 작성할 때와 초안 수정 중 언제든 열람할 수 있습니다.</p>
         {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="프로젝트별 보고서 최신본을 불러오고 있습니다." /> : <section className="report-stage-section report-source-readiness" aria-labelledby="report-source-readiness-title">
-          <header><div><span>PROJECT EVIDENCE MAP</span><h3 id="report-source-readiness-title">AI 참고자료 준비 상태</h3><p>제안서·착수회의·현장조사·물량산출·자료실·법원자료 중 현재 프로젝트에 연결된 기록만 확인합니다.</p></div><strong>{authoring?.sourceGroups.filter((group) => group.status === 'READY').length ?? 0}/{authoring?.sourceGroups.length ?? 0}<small>READY</small></strong></header>
+          <header><div><span>PROJECT EVIDENCE MAP</span><h3 id="report-source-readiness-title">참고자료 준비상태</h3><p>제안서·착수회의·현장조사·물량산출·자료실·법원자료 중 현재 프로젝트에 연결된 기록만 확인합니다.</p></div><strong>{authoring?.sourceGroups.filter((group) => group.status === 'READY').length ?? 0}/{authoring?.sourceGroups.length ?? 0}<small>READY</small></strong></header>
           <div className="report-source-grid">{authoring?.sourceGroups.map((group) => <button key={group.code} type="button" data-source-state={group.status} onClick={() => onNavigate(withProjectContext(group.route))}><span aria-hidden="true">{group.status === 'READY' ? '✓' : group.status === 'PARTIAL' ? '!' : '+'}</span><div><strong>{group.label}</strong><small>{group.detail}</small></div><em>{group.status === 'READY' ? '준비됨' : group.status === 'PARTIAL' ? '일부 준비' : '자료 연결'}</em></button>)}</div>
           <p className="report-source-policy"><strong>근거 사용 원칙</strong> 파일 본문을 확인하지 못한 내용은 추측하지 않고 <b>[확인 필요]</b>로 남깁니다.</p>
         </section>}

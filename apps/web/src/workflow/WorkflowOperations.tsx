@@ -443,14 +443,11 @@ export const WorkflowOperations: React.FC<{
   return (
     <section className="workflow-operations" aria-labelledby="workflow-operations-title">
       <header className="workflow-operations-hero" style={{ '--stage-color': stage.color } as React.CSSProperties}>
-        <div><span>PROJECT DELIVERY · STEP {stageId}</span><h2 id="workflow-operations-title">{stage.name}</h2><p>{stage.description}</p></div>
+        <div><span>PROJECT DELIVERY</span><h2 id="workflow-operations-title">{stage.name}</h2><p>{stage.description}</p></div>
         <div className="workflow-save-state"><strong>업무 기록 자동 저장</strong><span>입력값·변경 이력 자동 보존</span></div>
       </header>
 
-      <nav className="workflow-stepper" aria-label="프로젝트 6단계">
-        {WORKFLOW_STAGES.map((entry) => <button key={entry.id} className={entry.id === stageId ? 'is-active' : ''} style={{ '--step-color': entry.color } as React.CSSProperties} onClick={() => onNavigate(entry.path)}><span>{String(entry.id).padStart(2, '0')}</span><strong>{entry.name}</strong></button>)}
-      </nav>
-
+      <div className="workflow-project-context">
       <div className="workflow-project-selector">
         <Select id="workflow-case" searchable searchPlaceholder="프로젝트 번호·이름 검색" label="현재 프로젝트" value={selectedCaseId} disabled={Boolean(busy)} onChange={(event) => selectCase(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />
         {data && <span>{data.case.claimType} · {data.case.status}</span>}
@@ -468,6 +465,7 @@ export const WorkflowOperations: React.FC<{
           <div className="shared-stage-schedule-actions"><div><strong>담당 PM</strong><span>{scheduleProject.responsiblePm?.name ?? '미지정 · 프로젝트 일정표에서 먼저 지정'}</span></div><Button variant="secondary" onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(scheduleProject.id)}`)}>전체 일정표에서 확인·수정</Button>{scheduleProject.canManageSchedule && <Button className="shared-schedule-save-button" onClick={() => void saveSharedSchedule()} disabled={Boolean(busy) || !scheduleDraft.startDate || !scheduleDraft.endDate}>{busy === '기준 일정 저장' ? '저장 중…' : scheduleDraft.explicit ? '일정 수정 저장' : '일정 저장'}</Button>}</div>
         </> : <div className="shared-stage-schedule-empty"><strong>아직 수행 프로젝트가 아닙니다.</strong><span>프로젝트 접수에서 제안서를 연동하고 수주 확정하면 일정 저장 기능이 열립니다.</span><Button variant="secondary" onClick={() => onNavigate(`/workflow/award?caseId=${encodeURIComponent(selectedCaseId)}`)}>프로젝트 접수 확인</Button></div>}
       </section>}
+      </div>
 
       {loading && <div className="workflow-feedback">프로젝트 업무 데이터를 불러오는 중입니다.</div>}
       {failure && <div className="workflow-feedback is-error" role="alert"><strong>처리하지 못했습니다.</strong><span>{failure}</span><Button size="sm" variant="secondary" onClick={() => void loadWorkflow(selectedCaseId)}>다시 불러오기</Button></div>}
@@ -786,7 +784,7 @@ const AllocationEditor: React.FC<{
       <header><div><span>TAKEOFF & RESOURCE PLAN</span><h3>산출 범위·팀 투입 일정</h3></div><em>한국 개인 · 베트남 팀</em></header>
       <div className="workflow-form-grid">
         <label className="is-wide">투입 조직<select value={form.unitKey} disabled={disabled} onChange={(event) => { const unit=WORKFORCE_OPTIONS.find((item)=>item.key===event.target.value);setForm((current) => ({ ...current, unitKey:event.target.value, memberName:unit?.members?.[0]??'' })); }}>{WORKFORCE_OPTIONS.map((unit) => <option key={unit.key} value={unit.key}>{unit.organization} · {unit.unit} · {unit.size}명 · {unit.schedulingMode === 'TEAM' ? '팀 일정' : '인원 일정'}</option>)}</select></label>
-        <label className="is-wide">실제 투입 담당자<select value={form.memberName} disabled={disabled} onChange={(event)=>setForm((current)=>({...current,memberName:event.target.value}))}><option value="">담당자 선택</option>{(WORKFORCE_OPTIONS.find((unit)=>unit.key===form.unitKey)?.members??[]).map((member)=><option key={member} value={member}>{member}</option>)}</select></label>
+        <label className="is-wide">산출 및 내역 PM<select value={form.memberName} disabled={disabled} onChange={(event)=>setForm((current)=>({...current,memberName:event.target.value}))}><option value="">담당자 선택</option>{(WORKFORCE_OPTIONS.find((unit)=>unit.key===form.unitKey)?.members??[]).map((member)=><option key={member} value={member}>{member}</option>)}</select></label>
         <label className="is-wide">산출 범위<textarea value={form.scopeText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, scopeText: event.target.value }))} placeholder="도면·동·공종·산출 제외 범위를 구체적으로 입력" /></label>
         <label className="is-wide">산출 기준<textarea value={form.basisText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, basisText: event.target.value }))} placeholder="설계도서, 현장실측, 계약내역, 감정 기준" /></label>
         <label>시작일<input type="date" value={form.startDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} /></label>
