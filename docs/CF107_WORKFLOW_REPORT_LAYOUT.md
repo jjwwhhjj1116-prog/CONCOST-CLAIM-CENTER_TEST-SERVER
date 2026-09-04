@@ -37,3 +37,12 @@ git diff --check
 ## 배포 제한
 
 개발 환경 `wrangler.development.jsonc` / `concost-claim-center-development`에만 배포한다. 실제 Chrome 세션은 로그인 화면이므로 로그인된 업무 데이터로의 사용자 경로 검수와 합성 화면 검수를 구분한다.
+
+## 개발 서버 배포 결과 · 2026-09-04
+
+- 소스 커밋 `c5d605a`, `test-server/fix/CF73-workflow-minutes-parity`에 푸시.
+- Worker 버전 `2cb37017-9831-4733-b53c-6075c2351f2b`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev
+- `/health` 200 `ok`, `/readiness` 200 `ready`, Google Drive 연결 유지.
+- `/reports/studio`의 HTML에서 새 `index-DqsWzJJ6.js` 참조를 확인했다. 해당 JS, `index.es-CIKpov5t.js`, `index-Bjn473Uk.css`의 배포 SHA-256이 검증한 로컬 빌드와 일치한다.
+- 개발 환경만 반영. DB migration·실제 회사 데이터 수정 없음. 로그인된 실제 업무 경로와 최종 시각 캡처는 앞서 명시한 검수 한계로 남긴다.
