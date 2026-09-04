@@ -23,6 +23,7 @@ node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.de
 - `CF106_EXPORT_DIR`을 지정하면 짧은/긴/넓은 영문 QA XLSX를 출력한다. `CF106_BASELINE`으로 수정 전 XLSX에 경계 검사를 실행할 수 있다.
 - Excel 2013에서 수정 전후 파일을 직접 열어 비교했다. 복구 경고 없음, 병합 표 선과 본문 외곽 정상.
 - 짧은 메모: A4 세로 1페이지. 긴 참석자 및 90줄 메모: 4페이지, 1~90번 내용·후속업무·기한·마지막 각주까지 확인했다.
+- 넓은 영문 W/O 각 1,104자 스트레스 파일: Excel 2013 A4 세로 2페이지, 마지막 `END OF WIDE TEXT` 및 각주 표시, 잘림/복구 경고 없음.
 - 기존 CF83 전체 검사 중 제안서 재진입 및 가로 출력 기대 2건은 수정 전에도 실패하는 별개 항목이다. 이번 변경은 회의록 생성기만 대상으로 한다.
 
 ## 배포 범위
@@ -31,3 +32,11 @@ node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.de
 - URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev
 - 마이그레이션 없음. 실제 회사 데이터는 검수용으로 수정하지 않았다.
 - 네이티브 Excel 출력 검수와 별도로, 로그인된 웹 화면에서 다시 다운로드하는 최종 경로는 세션 상태에 따라 확인한다.
+
+## 개발 서버 배포 확인 (2026-09-04)
+
+- 소스 커밋: `58f6de5`, `test-server/fix/CF73-workflow-minutes-parity`에 푸시.
+- Worker 버전: `43eb41ae-d4d8-4fe4-9523-3fa4da532211`.
+- `/health` 200 `ok`, `/readiness` 200 `ready`, Google Drive 연결 유지.
+- 배포 HTML의 `index-CTvc5BIx.js` 참조 및 해당 정적 파일 SHA-256이 로컬 검증 빌드와 일치함을 확인.
+- 배포 후 Chrome과 앱 브라우저 모두 로그인 화면이다. 사용자에게 로그인 요청을 전달했으며, 실제 계정의 웹 다운로드 재검수는 로그인 대기 상태다. 네이티브 Excel 검수는 동일 생성기의 테스트 파일로 완료했다.
