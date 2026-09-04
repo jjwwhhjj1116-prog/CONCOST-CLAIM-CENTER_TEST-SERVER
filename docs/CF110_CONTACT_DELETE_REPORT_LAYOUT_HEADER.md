@@ -28,3 +28,11 @@
 - 1440px에서 챕터/판례 각 531px 동등 2열, 삭제 대상 패널 0개. 편집기 시작 위치는 변경 전보다 약 476px 올라왔다. 기존 본문 textarea 규칙이 머리글에 적용되던 240px 높이는 최종 64px로 보정했다.
 - 390px에서는 두 영역이 세로 배치되고 가로 넘침이 없다. 머리글 끄기→자동 저장→재진입, 켜기→문구 편집→STEP4 동기화, Markdown fallback의 본문·표·이미지 보존을 실제 DOM에서 확인했다.
 - 명함 삭제 취소(요청 없음), 503 실패(카드 유지·재시도 가능), 재시도 성공(목록 제외), DB관리 보관→복원, 직원 계정 삭제/복원 버튼 미노출을 합성 화면에서 확인했다.
+
+## 개발 서버 배포
+
+- 소스 커밋 `2784f4c`, 기존 `test-server`의 `fix/CF73-workflow-minutes-parity`에 푸시.
+- 개발 Worker `cb1531cb-dd20-475d-b3e3-b0bd3f767c64` 배포 성공. 운영 서버·DB/migration·실제 업무 자료 변경 없음.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/reports/studio
+- `/health` 200 `ok`, `/readiness` 200 `ready`; `/contacts`와 `/reports/studio` 모두 200 및 새 JS 참조 확인.
+- 서버의 `index-fLjsdxJK.js`, `index.es-sEL6eAFd.js`, `index-BnF-xfgB.css` SHA-256이 로컬 빌드와 동일함을 확인했다.
