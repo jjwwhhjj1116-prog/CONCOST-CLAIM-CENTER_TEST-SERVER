@@ -133,3 +133,61 @@ test('CF84 treats generated citation markers as identity links pending human rev
   assert.match(workerSource,/status=markerAt>=0\?'REVIEW_REQUIRED':'INSUFFICIENT'/u);
   assert.doesNotMatch(workerSource,/status=markerAt>=0\?'VERIFIED'/u);
 });
+
+test('CF120 AI query suggestions use actual provider context, work without LAW OC and never replace saved sources',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const caseId='79000000-0000-4000-8000-000000000120';
+    insertCase(sql,caseId,'CC-2026-79120','CF120 판례 추천 합성 프로젝트');
+    const chapterId=String(sql.exec("SELECT id FROM preview_report_chapter_prompts WHERE chapter_code='CH-01' LIMIT 1")[0].values[0][0]);
+    const selected=await worker.fetch(req('/api/report-authoring/case-law/select',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId,precIds:['12345']})}),env);
+    assert.equal(selected.status,201);
+    const before=sql.exec('SELECT * FROM preview_report_case_law_sources');
+    const calls:Record<string,unknown>[]=[];
+    env.OPENAI_API_KEY='SYNTHETIC_CF120_ONLY';
+    env.OPENAI_TEST_FETCH=async(_input,init)=>{calls.push(JSON.parse(String(init?.body)));return Response.json({output_text:JSON.stringify({suggestions:['공기연장 간접비','지체상금 면책']})});};
+    env.GEMINI_TEST_FETCH=async()=>{throw new Error('Unexpected provider in isolated test');};
+    let lawCalls=0;
+    env.LAW_API_TEST_FETCH=async()=>{lawCalls++;throw new Error('AI query suggestion must not call the law API');};
+    delete env.LAW_API_OC;
+    const ask=async(body:Record<string,unknown>)=>worker.fetch(req('/api/report-authoring/case-law/issues',ADMIN_TOKEN,{method:'POST',body:JSON.stringify(body)}),env);
+    const payload={caseId,chapterId,chapterText:'공기 연장에 따른 현장관리비 정산 검토 원문',topic:'추가 공사 간접비'};
+    const response=await ask(payload);assert.equal(response.status,200);
+    const result=await response.json() as {suggestions:string[];source:string;apiConfigured:boolean};
+    assert.deepEqual({suggestions:result.suggestions,source:result.source,apiConfigured:result.apiConfigured},{suggestions:['공기연장 간접비','지체상금 면책'],source:'AI',apiConfigured:false});
+    assert.equal(calls.length,1);assert.equal(lawCalls,0);
+    assert.match(String(calls[0].input),/추가 공사 간접비/u);
+    assert.match(String(calls[0].input),/현장관리비 정산 검토 원문/u);
+    assert.match(String(calls[0].input),/하자보수보증금과 지체상금 쟁점/u);
+    assert.equal((await ask({caseId,chapterId,chapterText:'이전 클라이언트 본문'})).status,200,'topic is backward-compatible and optional');
+    assert.equal((await ask({...payload,topic:'가'.repeat(201)})).status,400);
+    assert.equal(calls.length,2,'invalid input must not call AI');
+    delete env.OPENAI_API_KEY;
+    assert.equal((await ask(payload)).status,503);
+    assert.equal(calls.length,2,'missing credentials must not call AI or fabricate suggestions');
+    assert.deepEqual(sql.exec('SELECT * FROM preview_report_case_law_sources'),before);
+  } finally {sql.close();}
+});
+
+test('CF120 malformed AI search queries reject without heuristic fallback or saved-source changes',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const caseId='79000000-0000-4000-8000-000000000121';
+    insertCase(sql,caseId,'CC-2026-79121','CF120 응답 검증');
+    const chapterId=String(sql.exec("SELECT id FROM preview_report_chapter_prompts WHERE chapter_code='CH-01' LIMIT 1")[0].values[0][0]);
+    env.OPENAI_API_KEY='SYNTHETIC_CF120_ONLY';
+    let output='';let calls=0;
+    env.OPENAI_TEST_FETCH=async()=>{calls++;return Response.json({output_text:output});};
+    const invalid=[[],['가'],['가'.repeat(81)],['하자보수','하자보수'],['하자 보수','하자  보수'],['https://www.law.go.kr'],['www.law.go.kr'],['2024다12345'],['<b>하자보수</b>'],['가나','다라','마바','사아','자차'],[123],['하자보수',null]];
+    for(const suggestions of invalid){
+      output=JSON.stringify({suggestions});
+      const response=await worker.fetch(req('/api/report-authoring/case-law/issues',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId,chapterText:'원문',topic:'하자보수'})}),env);
+      assert.equal(response.status,502,JSON.stringify(suggestions));
+      assert.equal((await response.json() as {suggestions?:unknown}).suggestions,undefined);
+    }
+    output='not JSON';
+    assert.equal((await worker.fetch(req('/api/report-authoring/case-law/issues',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId,chapterText:'원문'})}),env)).status,502);
+    assert.equal(calls,invalid.length+1);
+    assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_report_case_law_sources')[0].values[0][0]),0);
+  } finally {sql.close();}
+});

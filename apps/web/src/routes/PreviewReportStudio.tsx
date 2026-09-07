@@ -230,9 +230,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [caseLawQuery, setCaseLawQuery] = useState('');
   const [caseLawResults, setCaseLawResults] = useState<CaseLawCandidate[]>([]);
   const [selectedPrecIds, setSelectedPrecIds] = useState<string[]>([]);
-  const [caseLawBusy, setCaseLawBusy] = useState<'issues' | 'search' | 'select' | 'exclude' | ''>('');
+  const [caseLawBusy, setCaseLawBusy] = useState<'load' | 'issues' | 'search' | 'select' | 'exclude' | ''>('');
   const [caseLawNotice, setCaseLawNotice] = useState('');
-  const [caseLawApiConfigured, setCaseLawApiConfigured] = useState(true);
+  const [caseLawError, setCaseLawError] = useState('');
+  const [caseLawApiConfigured, setCaseLawApiConfigured] = useState<boolean | null>(null);
+  const caseLawRequestSequence = useRef(0);
   const [useCaseLaw, setUseCaseLaw] = useState(false);
   const reportExcelInputRef = useRef<HTMLInputElement | null>(null);
   const reportDocxInputRef = useRef<HTMLInputElement | null>(null);
@@ -522,54 +524,83 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const loadCaseLaw = useCallback(async (caseId: string, chapterId: string) => {
     if (!caseId || !chapterId) return;
+    const sequence = ++caseLawRequestSequence.current;
+    setCaseLawBusy('load'); setCaseLawError('');
     try {
       const payload = await apiRequest<CaseLawPayload>(`/api/report-authoring/case-law?caseId=${encodeURIComponent(caseId)}&chapterId=${encodeURIComponent(chapterId)}`);
-      if (selectedCaseRef.current !== caseId || selectedChapterRef.current !== chapterId) return;
+      if (sequence !== caseLawRequestSequence.current || selectedCaseRef.current !== caseId || selectedChapterRef.current !== chapterId) return;
       setCaseLawSources(payload.sources ?? []); setCaseLawCitations(payload.citations ?? []); setCaseLawApiConfigured(payload.apiConfigured !== false);
       setUseCaseLaw((current) => current || Boolean(payload.sources?.length));
     } catch {
-      if (selectedCaseRef.current === caseId && selectedChapterRef.current === chapterId) { setCaseLawSources([]); setCaseLawCitations([]); }
+      if (sequence === caseLawRequestSequence.current && selectedCaseRef.current === caseId && selectedChapterRef.current === chapterId) setCaseLawError('판례 연결 상태와 저장된 근거를 불러오지 못했습니다. 연결 상태를 다시 확인해 주세요.');
+    } finally {
+      if (sequence === caseLawRequestSequence.current && selectedCaseRef.current === caseId && selectedChapterRef.current === chapterId) setCaseLawBusy('');
     }
   }, []);
 
   useEffect(() => {
+    caseLawRequestSequence.current++;
+    setCaseLawSources([]); setCaseLawCitations([]); setUseCaseLaw(false); setCaseLawApiConfigured(null);
+    setCaseLawIssues([]); setCaseLawQuery(''); setCaseLawResults([]); setSelectedPrecIds([]); setCaseLawNotice(''); setCaseLawError(''); setCaseLawBusy('');
     if (!selectedCaseId || !selectedChapterId || loadedCaseId !== selectedCaseId) return;
-    setCaseLawIssues([]); setCaseLawResults([]); setSelectedPrecIds([]); setCaseLawNotice('');
     void loadCaseLaw(selectedCaseId, selectedChapterId);
+    return () => { caseLawRequestSequence.current++; };
   }, [loadedCaseId, loadCaseLaw, selectedCaseId, selectedChapterId]);
 
+  const currentCaseLawRequest = (sequence: number, caseId: string, chapterId: string) => sequence === caseLawRequestSequence.current && selectedCaseRef.current === caseId && selectedChapterRef.current === chapterId;
+  const updateCaseLawQuery = (query: string) => {
+    caseLawRequestSequence.current++;
+    setCaseLawQuery(query); setCaseLawIssues([]); setCaseLawResults([]); setSelectedPrecIds([]); setCaseLawNotice(''); setCaseLawError(''); setCaseLawBusy('');
+  };
+  const fetchCaseLawResults = async (query: string, sequence: number, caseId: string, chapterId: string) => {
+    const payload = await apiRequest<{results:CaseLawCandidate[]}>('/api/report-authoring/case-law/search',{method:'POST',timeoutMs:25_000,body:JSON.stringify({caseId,chapterId,query})});
+    if (!currentCaseLawRequest(sequence,caseId,chapterId)) return;
+    if (!Array.isArray(payload.results)) throw new Error('공식 판례 응답 형식이 올바르지 않습니다. 다시 검색해 주세요.');
+    setCaseLawResults(payload.results); setSelectedPrecIds([]);
+    setCaseLawNotice(payload.results.length?`공식 판례 ${payload.results.length}건을 찾았습니다. 원문을 확인하고 사용할 판례를 1~3건 선택하세요.`:'공식 검색 결과가 없습니다. 다른 추천어를 선택하거나 검색어를 더 짧게 바꿔 보세요.');
+  };
   const findCaseLawIssues = async () => {
-    if (!selectedChapterId || caseLawBusy) return;
-    setCaseLawBusy('issues'); setError(''); setCaseLawNotice('');
+    if (!selectedChapterId || caseLawBusy || loadedCaseId !== selectedCaseId) return;
+    const caseId=selectedCaseId,chapterId=selectedChapterId,sequence=++caseLawRequestSequence.current;
+    setCaseLawBusy('issues'); setCaseLawError(''); setCaseLawNotice(''); setCaseLawResults([]); setSelectedPrecIds([]);
     try {
-      const payload=await apiRequest<{suggestions:string[]}>('/api/report-authoring/case-law/issues',{method:'POST',body:JSON.stringify({caseId:selectedCaseId,chapterId:selectedChapterId,chapterText:reportChapterBlock(content,selectedChapter?.chapterCode??'')})});
-      setCaseLawIssues(payload.suggestions); if(payload.suggestions[0])setCaseLawQuery(payload.suggestions[0]);
-      setCaseLawNotice(payload.suggestions.length?'현재 챕터와 프로젝트에서 검색할 법률 쟁점 후보를 만들었습니다.':'자동 추출할 쟁점이 부족합니다. 검색어를 직접 입력해 주세요.');
-    } catch(reason){setError(reason instanceof Error?reason.message:String(reason));}
-    finally{setCaseLawBusy('');}
+      const payload=await apiRequest<{suggestions:string[];source:'AI';apiConfigured:boolean}>('/api/report-authoring/case-law/issues',{method:'POST',timeoutMs:70_000,body:JSON.stringify({caseId,chapterId,topic:caseLawQuery.trim(),chapterText:reportChapterBlock(content,selectedChapter?.chapterCode??'')})});
+      if (!currentCaseLawRequest(sequence,caseId,chapterId)) return;
+      if (payload.source!=='AI'||!Array.isArray(payload.suggestions)||payload.suggestions.length<1||payload.suggestions.length>4||payload.suggestions.some(issue=>typeof issue!=='string'||issue.trim().length<2||issue.length>80)) throw new Error('AI 검색어 응답 형식이 올바르지 않습니다. 다시 추천해 주세요.');
+      setCaseLawIssues(payload.suggestions); setCaseLawQuery(payload.suggestions[0]); setCaseLawApiConfigured(payload.apiConfigured===true);
+      if (payload.apiConfigured) { setCaseLawBusy('search'); await fetchCaseLawResults(payload.suggestions[0],sequence,caseId,chapterId); }
+      else setCaseLawNotice('AI 검색어를 추천했습니다. 추천어를 누르면 국가법령정보센터에서 바로 검색합니다. 앱 안의 판례 조회·근거 저장은 공식 API 승인·연결 후 사용할 수 있습니다.');
+    } catch(reason){if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawError(reason instanceof Error?reason.message:String(reason));}
+    finally{if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawBusy('');}
   };
 
   const searchCaseLaw = async (queryOverride?:string) => {
     const query=(queryOverride??caseLawQuery).trim();if(query.length<2||caseLawBusy)return;
-    setCaseLawBusy('search');setError('');setCaseLawNotice('');setCaseLawQuery(query);
-    try{const payload=await apiRequest<{results:CaseLawCandidate[]}>('/api/report-authoring/case-law/search',{method:'POST',body:JSON.stringify({caseId:selectedCaseId,chapterId:selectedChapterId,query})});setCaseLawResults(payload.results);setSelectedPrecIds([]);setCaseLawNotice(payload.results.length?`공식 판례 ${payload.results.length}건을 찾았습니다. 사용할 판례를 1~3건 선택하세요.`:'공식 검색 결과가 없습니다. 쟁점을 더 구체적으로 바꿔 보세요.');}
-    catch(reason){setError(reason instanceof Error?reason.message:String(reason));}
-    finally{setCaseLawBusy('');}
+    const caseId=selectedCaseId,chapterId=selectedChapterId,sequence=++caseLawRequestSequence.current;
+    setCaseLawError('');setCaseLawNotice('');setCaseLawQuery(query);setCaseLawResults([]);setSelectedPrecIds([]);
+    if(caseLawApiConfigured!==true){setCaseLawNotice('검색어를 선택했습니다. 공식 API 연결 전에는 추천어를 복사해 국가법령정보센터에서 검색해 주세요.');return;}
+    setCaseLawBusy('search');
+    try{await fetchCaseLawResults(query,sequence,caseId,chapterId);}
+    catch(reason){if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawError(reason instanceof Error?reason.message:String(reason));}
+    finally{if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawBusy('');}
   };
 
   const saveCaseLawSelection = async () => {
     if(selectedPrecIds.length<1||selectedPrecIds.length>3||caseLawBusy)return;
-    setCaseLawBusy('select');setError('');setCaseLawNotice('');
-    try{const payload=await apiRequest<CaseLawPayload>('/api/report-authoring/case-law/select',{method:'POST',body:JSON.stringify({caseId:selectedCaseId,chapterId:selectedChapterId,precIds:selectedPrecIds})});setCaseLawSources(payload.sources);setCaseLawCitations(payload.citations);setUseCaseLaw(true);setCaseLawNotice('선택 판례의 원문·공식 링크·조회시각·무결성 확인값을 근거 이력에 보존했습니다.');}
-    catch(reason){setError(reason instanceof Error?reason.message:String(reason));}
-    finally{setCaseLawBusy('');}
+    const caseId=selectedCaseId,chapterId=selectedChapterId,sequence=++caseLawRequestSequence.current;
+    setCaseLawBusy('select');setCaseLawError('');setCaseLawNotice('');
+    try{const payload=await apiRequest<CaseLawPayload>('/api/report-authoring/case-law/select',{method:'POST',timeoutMs:30_000,body:JSON.stringify({caseId,chapterId,precIds:selectedPrecIds})});if(!currentCaseLawRequest(sequence,caseId,chapterId))return;setCaseLawSources(payload.sources);setCaseLawCitations(payload.citations);setUseCaseLaw(true);setCaseLawNotice('선택 판례의 원문·공식 링크·조회시각·무결성 확인값을 근거 이력에 보존했습니다.');}
+    catch(reason){if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawError(reason instanceof Error?reason.message:String(reason));}
+    finally{if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawBusy('');}
   };
 
   const excludeCaseLaw = async (sourceId:string) => {
-    if(caseLawBusy)return;setCaseLawBusy('exclude');setError('');
-    try{const payload=await apiRequest<CaseLawPayload>(`/api/report-authoring/case-law/${encodeURIComponent(sourceId)}`,{method:'PUT',body:JSON.stringify({action:'EXCLUDE'})});setCaseLawSources(payload.sources);setCaseLawCitations(payload.citations);setUseCaseLaw(Boolean(payload.sources.length));setCaseLawNotice('선택 판례를 이번 챕터 근거에서 제외했습니다. 원본 스냅샷은 감사 이력으로 보존됩니다.');}
-    catch(reason){setError(reason instanceof Error?reason.message:String(reason));}
-    finally{setCaseLawBusy('');}
+    if(caseLawBusy)return;
+    const caseId=selectedCaseId,chapterId=selectedChapterId,sequence=++caseLawRequestSequence.current;
+    setCaseLawBusy('exclude');setCaseLawError('');
+    try{const payload=await apiRequest<CaseLawPayload>(`/api/report-authoring/case-law/${encodeURIComponent(sourceId)}`,{method:'PUT',body:JSON.stringify({action:'EXCLUDE'})});if(!currentCaseLawRequest(sequence,caseId,chapterId))return;setCaseLawSources(payload.sources);setCaseLawCitations(payload.citations);setUseCaseLaw(Boolean(payload.sources.length));setCaseLawNotice('선택 판례를 이번 챕터 근거에서 제외했습니다. 원본 스냅샷은 감사 이력으로 보존됩니다.');}
+    catch(reason){if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawError(reason instanceof Error?reason.message:String(reason));}
+    finally{if(currentCaseLawRequest(sequence,caseId,chapterId))setCaseLawBusy('');}
   };
 
   const withProjectContext = (route: string) => {
@@ -1191,9 +1222,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <section className="report-outline-column report-outline-current" aria-labelledby="report-outline-current-title">
                 <header><h4 id="report-outline-current-title">사용할 목차 · 직접 편집</h4><p>기본 목차에서 시작합니다. 제목을 누르면 그 자리에서 수정할 수 있습니다.</p></header>
                 <ol>{authoring.chapters.map(chapter => <li className="report-outline-current-row" key={chapter.id}>
+                  <span className="report-outline-number" aria-hidden="true">{String(chapter.ordinal).padStart(2,'0')}</span>
+                  <div className="report-outline-current-content">
                   <span className="report-outline-code">{chapter.chapterCode}</span>
                   {editingOutlineChapterId === chapter.id ? <input autoFocus aria-label={`${chapter.chapterCode} 목차 제목`} maxLength={300} value={outlineTitles[chapter.id] ?? chapter.title} disabled={outlineEditingBlocked} onChange={event => { setOutlineTitles(current => ({ ...current, [chapter.id]: event.target.value })); setOutlineDirty(true); setOutlineSyncNotice(''); }} onBlur={() => setEditingOutlineChapterId(null)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.currentTarget.blur(); }} />
                     : <button type="button" className="report-outline-edit-title" aria-label={`${chapter.chapterCode} 목차 제목 직접 수정`} disabled={outlineEditingBlocked} onClick={() => setEditingOutlineChapterId(chapter.id)}><strong>{outlineTitles[chapter.id] ?? chapter.title}</strong><span>직접 수정</span></button>}
+                  </div>
                 </li>)}</ol>
                 <p className="report-outline-help">저장하면 검수·미리보기의 챕터 제목도 함께 반영됩니다. 본문·표·이미지는 유지됩니다.</p>
               </section>
@@ -1234,9 +1268,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </div>
             {selectedChapter && <section className="report-case-law" aria-labelledby="report-case-law-title">
               <header><h3 id="report-case-law-title">판례 근거 추가</h3><em>{caseLawSources.length}/3 선택</em></header>
-              <div className="report-case-law__search"><label><span>법률 쟁점·판례 검색어</span><input value={caseLawQuery} maxLength={200} onChange={(event)=>setCaseLawQuery(event.target.value)} placeholder="예: 지체상금 면책 하자보수보증금" /></label><Button variant="secondary" onClick={()=>void findCaseLawIssues()} disabled={Boolean(caseLawBusy)}>{caseLawBusy==='issues'?'쟁점 추출 중…':'현재 챕터에서 쟁점 찾기'}</Button><Button className="report-action-ai" onClick={()=>void searchCaseLaw()} disabled={caseLawQuery.trim().length<2||Boolean(caseLawBusy)}>{caseLawBusy==='search'?'공식 API 검색 중…':'공식 판례 검색'}</Button></div>
-              {caseLawIssues.length>0&&<div className="report-case-law__issues" aria-label="추천 판례 검색어">{caseLawIssues.map((issue)=><button key={issue} type="button" onClick={()=>void searchCaseLaw(issue)} disabled={Boolean(caseLawBusy)}>{issue}</button>)}</div>}
-              {!caseLawApiConfigured&&<p className="error-box">테스트 서버의 <code>LAW_API_OC</code> 설정이 필요합니다. 설정 전에도 저장된 판례 근거와 검수 이력은 볼 수 있습니다.</p>}
+              <div className="report-case-law__search"><label><span>검색 주제·판례 검색어</span><input value={caseLawQuery} maxLength={200} onChange={(event)=>updateCaseLawQuery(event.target.value)} disabled={['load','select','exclude'].includes(caseLawBusy)} placeholder="예: 공기 연장으로 늘어난 간접비 · 비우면 현재 챕터로 추천" /></label><Button className="report-action-ai" onClick={()=>void findCaseLawIssues()} disabled={Boolean(caseLawBusy)||!editable}>{caseLawBusy==='issues'?'AI 검색어 추천 중…':caseLawApiConfigured===false?'AI 검색어 추천':'AI 추천·판례 검색'}</Button><Button variant="secondary" onClick={()=>void searchCaseLaw()} disabled={caseLawApiConfigured!==true||caseLawQuery.trim().length<2||Boolean(caseLawBusy)}>{caseLawBusy==='search'?'공식 판례 검색 중…':'검색어 그대로 검색'}</Button></div>
+              <p className="report-case-law__help">입력한 주제를 우선으로, 비워 두면 현재 챕터로 검색어를 추천합니다. API 연결 시 첫 추천어를 자동 검색합니다.</p>
+              {caseLawIssues.length>0&&<div><p className="report-case-law__query-label">AI 추천 검색어 · 판례 원문이 아닙니다.</p><div className="report-case-law__issues" aria-label="추천 판례 검색어">{caseLawIssues.map(issue=>caseLawApiConfigured===false?<a key={issue} href={`https://www.law.go.kr/precSc.do?section=&menuId=7&subMenuId=47&tabMenuId=213&eventGubun=060101&query=${encodeURIComponent(issue)}`} target="_blank" rel="noreferrer" title="국가법령정보센터에서 이 검색어로 검색">{issue} · 공식 사이트 검색</a>:<button key={issue} type="button" onClick={()=>void searchCaseLaw(issue)} disabled={Boolean(caseLawBusy)}>{issue}</button>)}</div></div>}
+              {caseLawApiConfigured===false&&<p className="report-case-law__setup-notice">공식 판례 API 승인·연결 전입니다. AI 추천어로 공식 사이트를 검색할 수 있으며, 앱 안의 판례 조회·근거 저장은 연결 후 사용할 수 있습니다. 저장된 판례와 검수 이력은 유지됩니다.</p>}
+              <div className="report-case-law__external"><a href={`https://www.law.go.kr/precSc.do?section=&menuId=7&subMenuId=47&tabMenuId=213&eventGubun=060101&query=${encodeURIComponent(caseLawQuery.trim())}`} target="_blank" rel="noreferrer">국가법령정보센터에서 검색</a><Button variant="secondary" size="sm" disabled={caseLawQuery.trim().length<2} onClick={()=>{const sequence=caseLawRequestSequence.current;void navigator.clipboard.writeText(caseLawQuery.trim()).then(()=>{if(sequence===caseLawRequestSequence.current)setCaseLawNotice('검색어를 복사했습니다. 국가법령정보센터에서 검색해 주세요.');}).catch(()=>{if(sequence===caseLawRequestSequence.current)setCaseLawError('검색어를 자동 복사하지 못했습니다. 입력칸의 검색어를 직접 복사해 주세요.');});}}>추천 검색어 복사</Button></div>
+              <details className="report-case-law__setup"><summary>공식 판례 API 연결 안내</summary><p>Gemini·Claude 등 AI 키와 별도로, 국가법령정보 공동활용에서 판례 API 사용 승인을 받고 API 인증값(OC)을 발급받아야 합니다.</p><ol><li><a href="https://open.law.go.kr/LSO/information/guide.do" target="_blank" rel="noreferrer">공동활용 신청·승인 절차 확인</a></li><li>승인 후 관리자가 각 서버의 보안 환경변수 <code>LAW_API_OC</code>에 인증값을 등록합니다. 인증값은 보고서나 채팅에 적지 마세요.</li><li>등록 후 아래에서 연결 상태를 다시 확인합니다.</li></ol><Button variant="secondary" size="sm" disabled={Boolean(caseLawBusy)} onClick={()=>void loadCaseLaw(selectedCaseId,selectedChapterId)}>{caseLawBusy==='load'?'설정 확인 중…':'연결 상태 다시 확인'}</Button></details>
+              {caseLawError&&<p className="error-box" role="alert">{caseLawError}</p>}
               {caseLawResults.length>0&&<details className="report-case-law__details" open><summary>검색 결과 {caseLawResults.length}건</summary><div className="report-case-law__results">{caseLawResults.map((candidate)=>{const checked=selectedPrecIds.includes(candidate.precId);return <label key={candidate.precId} className={checked?'is-selected':''}><input type="checkbox" checked={checked} disabled={!checked&&selectedPrecIds.length>=3} onChange={(event)=>setSelectedPrecIds((current)=>event.target.checked?[...current,candidate.precId]:current.filter((id)=>id!==candidate.precId))}/><span><strong>{candidate.caseName}</strong><small>{candidate.courtName} · {candidate.caseNumber} · {candidate.decisionDate}</small><em>{candidate.summaryText||candidate.holdingText||'판시사항·판결요지는 원문 선택 후 확인합니다.'}</em></span><a href={candidate.officialUrl} target="_blank" rel="noreferrer">공식 원문</a></label>})}<Button className="report-action-confirm" onClick={()=>void saveCaseLawSelection()} disabled={selectedPrecIds.length<1||Boolean(caseLawBusy)}>{caseLawBusy==='select'?'원문 보존 중…':`선택 ${selectedPrecIds.length}건 근거로 저장`}</Button></div></details>}
               {caseLawSources.length>0?<details className="report-case-law__details"><summary>선택한 판례 {caseLawSources.length}건 확인·사용 설정</summary><div className="report-case-law__selected"><label className="report-case-law__toggle"><input type="checkbox" checked={useCaseLaw} onChange={(event)=>setUseCaseLaw(event.target.checked)}/><span><strong>선택 판례를 이번 AI 초안의 법리 근거로 사용</strong><small>문장별 판례 ID를 기록하고 4단계에서 인용 상태를 검수합니다.</small></span></label>{caseLawSources.map((source)=><article key={source.id}><div><strong>{source.caseName}</strong><span>{source.courtName} · {source.caseNumber} · {source.decisionDate}</span><small>SHA {source.sourceSha256.slice(0,12)}… · {new Date(source.fetchedAt).toLocaleString('ko-KR')}</small></div><p>{source.summaryText||source.holdingText}</p><footer><a href={source.officialUrl} target="_blank" rel="noreferrer">국가법령정보 원문 확인</a><Button variant="secondary" size="sm" onClick={()=>void excludeCaseLaw(source.id)} disabled={Boolean(caseLawBusy)}>이번 챕터에서 제외</Button></footer></article>)}</div></details>:<p className="muted">판례 없이 프로젝트 근거만으로도 작성할 수 있습니다.</p>}
               {caseLawNotice&&<p className="notice-box" role="status">{caseLawNotice}</p>}

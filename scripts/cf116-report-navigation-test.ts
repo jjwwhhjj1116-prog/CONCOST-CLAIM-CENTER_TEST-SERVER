@@ -130,7 +130,7 @@ test('CF116 report save failures pause autosave, remain visible and preserve nav
     await t.test('generic feature error does not pause or get cleared by successful autosave', async () => {
       const page = await open('step=3');
       try {
-        await page.getByRole('button', { name: '현재 챕터에서 쟁점 찾기', exact: true }).click();
+        await page.getByRole('button', { name: /^AI (?:추천·판례 검색|검색어 추천)$/u }).click();
         await page.getByRole('alert').filter({ hasText: 'CF114: 미등록 합성 쓰기 차단' }).waitFor();
         assert.equal(await saveAlert(page).count(), 0);
         await editor(page).fill('판례 검색 오류와 무관하게 자동 저장할 본문');
