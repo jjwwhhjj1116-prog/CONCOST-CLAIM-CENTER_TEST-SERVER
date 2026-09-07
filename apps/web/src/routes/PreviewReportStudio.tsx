@@ -349,6 +349,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   useEffect(() => { if (selectedCaseId) void loadDraft(selectedCaseId); else setLoading(false); }, [selectedCaseId, loadDraft]);
 
   const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL', syncOutline = false, force = false): Promise<boolean> => {
+    if (chapterSaveInFlight.current) return false;
     if (generationInFlight.current && !force) return false;
     if (saveError && saveKind !== 'MANUAL') return false;
     if (!editable || saving || draftSaveInFlight.current || (outlineSaveInFlight.current && !syncOutline) || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return false;
@@ -390,10 +391,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [activeStep, content, dirty, editable, editorJson, reportHeader, loadedCaseId, loadSavedWorkspaces, saveError, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
-    if (saveError || generationInFlight.current || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
+    if (saveError || generationInFlight.current || chapterSaveInFlight.current || chapterBusy || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
     const timer = window.setTimeout(() => { void saveNow('AUTO'); }, 3000);
     return () => window.clearTimeout(timer);
-  }, [activeStep, content, dirty, saveError, saveNow, saving, savingOutline, outlineSyncPending, selectedChapterId, title, workspaceDirty]);
+  }, [activeStep, chapterBusy, content, dirty, saveError, saveNow, saving, savingOutline, outlineSyncPending, selectedChapterId, title, workspaceDirty]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (saving || improving || linkingHwp || generationInFlight.current || chapterSaveInFlight.current || chaptersDirty || dirty || outlineDirty || workspaceDirty || outlineSaveInFlight.current || outlineSyncPendingRef.current) { event.preventDefault(); event.returnValue = ''; } };
@@ -649,7 +650,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     if (!editable || !authoring?.available || generatingOutline || savingOutline || loadedCaseId !== selectedCaseId) return;
     const requestCaseId = selectedCaseId;
     setGeneratingOutline(true); setError(''); setAiGeneration({ kind: 'outline', status: 'running', title: '보고서 목차 작성계획을 만들고 있습니다' });
-    const templateTitles = selectedTemplateCategory?.outline ?? [];
+    // Other claim types are reference-only, never the current project's defaults.
+    const templateTitles = (selectedTemplateCategory?.matchesCurrentType ? selectedTemplateCategory : authoring.templateLibrary.find(category => category.matchesCurrentType))?.outline ?? [];
     const applyTemplateOutline = () => {
       setOutlineTitles(Object.fromEntries(authoring.chapters.map((chapter, index) => {
         const sourceTitle = templateTitles[index]?.replace(/^\s*(?:\d+[.)]|[IVX]+[.)]|CH-?\d+\s*[.)-]?)\s*/iu, '').trim();
@@ -777,6 +779,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const importReportExcel = async (file: File | undefined) => {
     if(!file)return;
+    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) { if (reportExcelInputRef.current) reportExcelInputRef.current.value=''; setError('진행 중인 저장·챕터 반영이 끝난 뒤 파일을 다시 선택해 주세요. 기존 내용은 유지됩니다.'); return; }
     setSaving(true);setError('');
     try{
       const values=await readReportStudioWorkbook(file);
@@ -796,6 +799,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const importReportDocx = async (file: File | undefined) => {
     if(!file)return;
+    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) { if (reportDocxInputRef.current) reportDocxInputRef.current.value=''; setError('진행 중인 저장·챕터 반영이 끝난 뒤 파일을 다시 선택해 주세요. 기존 내용은 유지됩니다.'); return; }
     setSaving(true);setError('');
     try{
       const values=await readReportDocx(file);
@@ -815,6 +819,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const openAndLinkReportHwp = async (file: File | undefined) => {
     if (!file) return;
+    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) { if (hwpInputRef.current) hwpInputRef.current.value=''; setError('진행 중인 저장·챕터 반영이 끝난 뒤 파일을 다시 선택해 주세요. 기존 내용은 유지됩니다.'); return; }
     setHwpSourceFile(file);
     setHwpEditorOpen(true);
     setLinkedHwpName(file.name);
@@ -837,6 +842,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const applyHwpTextToCurrentChapter = (importedContent: string) => {
+    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) return;
     if (!selectedChapter) {
       setError('HWP 내용을 넣을 보고서 챕터를 먼저 선택해 주세요.');
       return;
@@ -848,6 +854,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const applyHwpTextToWholeReport = (importedContent: string) => {
+    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) return;
     const nextContent = wholeReportDocument(importedContent);
     contentRef.current = nextContent;
     setContent(nextContent);
@@ -1052,13 +1059,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const reportDocumentTools=(stepId: ReportWizardStep)=>stepId === 1 || stepId === 3 || stepId === 4 ? <DocumentToolMenus groups={[
     {id:'excel',label:'Excel',actions:[
       {id:'export',label:stepId===4?'현재 챕터 Excel 내보내기':'보고서 입력 양식 내보내기',onClick:exportReportExcel},
-      {id:'import',label:stepId===4?'현재 챕터 Excel 가져오기':stepId===3?'Excel 전체 문서 적용':'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:saving},
+      {id:'import',label:stepId===4?'현재 챕터 Excel 가져오기':stepId===3?'Excel 전체 문서 적용':'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy)},
     ]},
     {id:'docx',label:'DOCX',actions:[
-      {id:'import',label:stepId===4?'현재 챕터에 DOCX 반영':stepId===3?'DOCX 전체 문서 적용':'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:saving},
+      {id:'import',label:stepId===4?'현재 챕터에 DOCX 반영':stepId===3?'DOCX 전체 문서 적용':'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy)},
     ]},
     {id:'hwp',label:'HWP',actions:[
-      {id:'import',label:stepId===4?'현재 챕터에 HWP 반영':stepId===3?'HWP 전체 문서 적용':'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
+      {id:'import',label:stepId===4?'현재 챕터에 HWP 반영':stepId===3?'HWP 전체 문서 적용':'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy) || linkingHwp},
     ]},
   ]}/> : null;
   const renderReportHeaderControls = (step: 3 | 4) => <div className="report-header-controls">
@@ -1217,7 +1224,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </Card>
         <Card title="" className="report-step-card report-step-card--4 report-stage-card">
           {renderStageHeader(4)}
-          <fieldset className="form-stack report-review-fields" disabled={savingOutline}>
+          <fieldset className="form-stack report-review-fields" disabled={savingOutline || Boolean(chapterBusy)}>
             {authoring?.available && selectedChapter && <section className="report-review-outline" aria-labelledby="report-review-outline-heading">
               <h3 id="report-review-outline-heading">목차 제목 수정</h3>
               <p>검수 중에도 제목을 수정할 수 있습니다. 저장하면 2단계 목차와 본문·미리보기에 함께 반영됩니다.</p>

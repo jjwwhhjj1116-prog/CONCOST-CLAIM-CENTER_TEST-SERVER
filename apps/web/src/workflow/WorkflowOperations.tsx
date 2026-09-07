@@ -179,6 +179,7 @@ export const WorkflowOperations: React.FC<{
   const [formDirty, setFormDirty] = useState(false);
   const [notice, setNotice] = useState('');
   const [failure, setFailure] = useState('');
+  const [scheduleFailure, setScheduleFailure] = useState('');
   const [scheduleProject, setScheduleProject] = useState<SharedScheduleProject | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState({ startDate: '', endDate: '', status: 'PLANNED', noteText: '', version: 0, explicit: false });
   const allocationKeys = useRef(new Map<string, string>());
@@ -218,7 +219,7 @@ export const WorkflowOperations: React.FC<{
     });
   };
 
-  const syncSharedSchedule = (projects: SharedScheduleProject[], payload: WorkflowPayload) => {
+  const syncSharedSchedule = (projects: SharedScheduleProject[], payload: WorkflowPayload, syncDates = true) => {
     const project = projects.find((entry) => entry.caseId === selectedCaseRef.current) ?? null;
     const item = project?.stages.find((entry) => entry.stageCode === sharedStageCode[routeId]);
     setScheduleProject(project);
@@ -230,7 +231,7 @@ export const WorkflowOperations: React.FC<{
       version: item?.scheduleVersion ?? 0,
       explicit: item?.scheduleExplicit ?? false
     });
-    if (!item?.startDate || !item.endDate) return;
+    if (!syncDates || !item?.startDate || !item.endDate) return;
     if (routeId === 'WF-03' && !payload.kickoff) setKickoff((current) => ({ ...current, meetingAt: `${item.startDate}T${current.meetingAt.split('T')[1] ?? '10:00'}` }));
     if (routeId === 'WF-04' && !payload.siteSurveys.length) setSurvey((current) => ({ ...current, surveyDate: item.startDate ?? current.surveyDate }));
     if (routeId === 'WF-05') setAllocation((current) => ({ ...current, startDate: item.startDate ?? current.startDate, endDate: item.endDate ?? current.endDate }));
@@ -241,20 +242,38 @@ export const WorkflowOperations: React.FC<{
     if (!requestCaseId || requestCaseId !== selectedCaseRef.current) return;
     setLoading(true);
     setFailure('');
+    setScheduleFailure('');
     try {
       const [payload, schedule] = await Promise.all([
         apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(requestCaseId)}/workflow`),
-        apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule')
+        apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule').catch(error => {
+          if (requestCaseId === selectedCaseRef.current) { setScheduleProject(null); setScheduleFailure(messageFrom(error)); }
+          return null;
+        })
       ]);
       if (requestCaseId !== selectedCaseRef.current) return;
       setData(payload);
       if (sync) syncForms(payload);
-      syncSharedSchedule(schedule.projects, payload);
+      if (schedule) syncSharedSchedule(schedule.projects, payload);
     } catch (error) {
       if (requestCaseId === selectedCaseRef.current) setFailure(messageFrom(error));
     } finally {
       if (requestCaseId === selectedCaseRef.current) setLoading(false);
     }
+  };
+
+  const reloadSchedule = async () => {
+    if (!data || busy || importBusy) return;
+    const requestCaseId = selectedCaseId;
+    setBusy('기준 일정 불러오기');
+    try {
+      const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
+      if (selectedCaseRef.current !== requestCaseId) return;
+      // Retry only the unavailable calendar, never reload or initialize entered notes/dates.
+      syncSharedSchedule(schedule.projects, data, false);
+      setScheduleFailure('');
+    } catch (error) { if (selectedCaseRef.current === requestCaseId) setScheduleFailure(messageFrom(error)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setBusy(''); }
   };
 
   useEffect(() => {
@@ -487,12 +506,12 @@ export const WorkflowOperations: React.FC<{
             <label className="is-note">일정 메모<input value={scheduleDraft.noteText} maxLength={5000} disabled={Boolean(busy) || !scheduleProject.canManageSchedule} onChange={(event) => setScheduleDraft((current) => ({ ...current, noteText:event.target.value }))} placeholder="현장·담당팀·마감 특이사항" /></label>
           </div>
           <div className="shared-stage-schedule-actions"><div><strong>담당 PM</strong><span>{scheduleProject.responsiblePm?.name ?? '미지정 · 프로젝트 일정표에서 먼저 지정'}</span></div><Button variant="secondary" onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(scheduleProject.id)}`)}>전체 일정표에서 확인·수정</Button>{scheduleProject.canManageSchedule && <Button className="shared-schedule-save-button" onClick={() => void saveSharedSchedule()} disabled={Boolean(busy) || !scheduleDraft.startDate || !scheduleDraft.endDate}>{busy === '기준 일정 저장' ? '저장 중…' : scheduleDraft.explicit ? '일정 수정 저장' : '일정 저장'}</Button>}</div>
-        </> : <div className="shared-stage-schedule-empty"><strong>아직 수행 프로젝트가 아닙니다.</strong><span>프로젝트 접수에서 제안서를 연동하고 수주 확정하면 일정 저장 기능이 열립니다.</span><Button variant="secondary" onClick={() => onNavigate(`/workflow/award?caseId=${encodeURIComponent(selectedCaseId)}`)}>프로젝트 접수 확인</Button></div>}
+        </> : scheduleFailure ? <div className="shared-stage-schedule-empty" role="alert"><strong>기준 일정을 불러오지 못했습니다.</strong><span>{scheduleFailure} · 아래 기록 입력과 파일 가져오기는 계속 사용할 수 있습니다.</span><Button variant="secondary" disabled={Boolean(busy) || importBusy} onClick={() => void reloadSchedule()}>기준 일정 다시 불러오기</Button></div> : <div className="shared-stage-schedule-empty"><strong>아직 수행 프로젝트가 아닙니다.</strong><span>프로젝트 접수에서 제안서를 연동하고 수주 확정하면 일정 저장 기능이 열립니다.</span><Button variant="secondary" onClick={() => onNavigate(`/workflow/award?caseId=${encodeURIComponent(selectedCaseId)}`)}>프로젝트 접수 확인</Button></div>}
       </section>}
       </div>
 
       {loading && <div className="workflow-feedback">프로젝트 업무 데이터를 불러오는 중입니다.</div>}
-      {failure && <div className="workflow-feedback is-error" role="alert"><strong>처리하지 못했습니다.</strong><span>{failure}</span><Button size="sm" variant="secondary" onClick={() => void loadWorkflow(selectedCaseId)}>다시 불러오기</Button></div>}
+      {failure && <div className="workflow-feedback is-error" role="alert"><strong>처리하지 못했습니다.</strong><span>{failure}</span><Button size="sm" variant="secondary" disabled={loading || Boolean(busy) || importBusy} onClick={() => { if (!formDirty || window.confirm('저장하지 않은 입력·자동정리 결과를 닫고 저장된 기록을 다시 불러올까요?')) void loadWorkflow(selectedCaseId); }}>다시 불러오기</Button></div>}
       {notice && <div className="workflow-feedback is-success" role="status">{notice}</div>}
 
       {!loading && data && stageId === 3 && <KickoffEditor key={selectedCaseId} caseId={selectedCaseId} form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy) || importBusy} onSave={saveKickoff} onGenerate={generateSummary} onConfirm={confirmKickoff} busy={importBusy ? '파일 자동정리' : busy} onImportBusy={setImportBusy} onDirtyChange={setFormDirty} onNavigate={onNavigate} />}

@@ -4129,6 +4129,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   if (!existing) {
     if (expectedVersion !== 0) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: 0 }, 409);
     const now = new Date().toISOString();
+    let stage = 'DRAFT_PREPARE';
     try {
       const insertDraft = workspaceSchema
         ? editorSchema
@@ -4137,23 +4138,31 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
         : editorSchema
           ? env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, editor_json, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, editorJson, user.id, user.id, now, now)
           : env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, user.id, user.id, now, now);
+      stage = 'REVISION_PREPARE';
       const insertRevision = editorSchema
         ? env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, editor_json, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, editorJson, contentSha256, user.id, now)
         : env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, contentSha256, user.id, now);
+      stage = 'ACTIVITY_PREPARE';
       const statements = [
         insertDraft,
         insertRevision,
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', '보고서 초안 저장 · v1', title, now)
       ];
+      stage = 'BACKUP_PREPARE';
       if (backupSchema) statements.push(
         env.DB.prepare('INSERT OR IGNORE INTO preview_report_hourly_backups (id,organization_id,case_id,report_version,title,content,editor_json,content_sha256,backup_hour,saved_by,saved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
           .bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,1,title,content,editorJson,contentSha256,kstHourKey(new Date(now)),user.id,now)
       );
+      stage = 'BATCH_EXECUTE';
       await env.DB.batch(statements);
     } catch (reason) {
       const canonical = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ?').bind(caseId).first<{ version: number }>();
       if (canonical) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(canonical.version) }, 409);
-      console.error(JSON.stringify({ event: 'REPORT_INITIAL_SAVE_FAILED', category: reason instanceof Error && /constraint|SQLITE_CONSTRAINT/i.test(reason.message) ? 'CONSTRAINT' : 'STORAGE' }));
+      const errorName = reason instanceof TypeError ? 'TypeError' : reason instanceof RangeError ? 'RangeError' : reason instanceof ReferenceError ? 'ReferenceError' : 'Error';
+      const details: string[] = [];
+      for (let cause: unknown = reason, depth = 0; cause instanceof Error && depth < 4; cause = cause.cause, depth++) details.push(cause.message);
+      const diagnostic = ['D1_TYPE_ERROR','D1_BIND_ERROR','FOREIGN KEY','UNIQUE constraint','CHECK constraint','NOT NULL','no such table','no such column','has no column named','syntax error','not authorized','too many SQL variables','LIKE or GLOB pattern too complex'].find(code => details.some(message => message.includes(code))) ?? 'UNCLASSIFIED';
+      console.error(JSON.stringify({ event: 'REPORT_INITIAL_SAVE_FAILED', category: details.some(message => /constraint|SQLITE_CONSTRAINT/i.test(message)) ? 'CONSTRAINT' : 'STORAGE', stage, errorName, diagnostic }));
       return json({ error: '보고서 초기 저장에 실패해 다음 단계로 이동하지 않았습니다. 입력 내용은 화면에 유지됩니다. 저장을 다시 시도해 주세요.', code: 'REPORT_STORAGE_FAILED' }, 503);
     }
     return previewReportPayload(env, caseId);

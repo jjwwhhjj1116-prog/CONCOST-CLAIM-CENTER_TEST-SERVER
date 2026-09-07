@@ -369,12 +369,15 @@ async function zipEntry(bytes: Uint8Array, wantedName: string, optional = false)
   throw new Error('제안서 작성 시트를 찾지 못했습니다. 내보낸 양식을 사용하세요.');
 }
 
-const unescapeXml = (value: string) => value
-  .replaceAll('&lt;', '<')
-  .replaceAll('&gt;', '>')
-  .replaceAll('&quot;', '"')
-  .replaceAll('&apos;', "'")
-  .replaceAll('&amp;', '&');
+// Decode once: a literal &amp;#10; must remain &#10;, not become a newline.
+const unescapeXml = (value: string) => value.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|quot|apos|amp);/giu, (_entity, reference: string) => {
+  if (!reference.startsWith('#')) return ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' } as Record<string, string>)[reference] ?? _entity;
+  const point = reference[1].toLowerCase() === 'x' ? Number.parseInt(reference.slice(2), 16) : Number(reference.slice(1));
+  if (![9, 10, 13].includes(point) && !(point >= 0x20 && point <= 0xD7FF) && !(point >= 0xE000 && point <= 0xFFFD) && !(point >= 0x10000 && point <= 0x10FFFF)) {
+    throw new Error('문서에 유효하지 않은 XML 문자가 있습니다. 원본을 다시 저장한 뒤 가져오세요. 기존 내용은 유지됩니다.');
+  }
+  return String.fromCodePoint(point);
+});
 
 /**
  * Excel rewrites inline strings to a shared string table when a user opens and
@@ -595,7 +598,6 @@ function proposalDocxHeading(value: string): { number: number; title: string } |
 export async function readProposalDocx(file: File): Promise<ProposalDocxChapter[]> {
   if(!file.name.toLowerCase().endsWith('.docx')||file.size>15_000_000)throw new Error('15MB 이하의 Word DOCX 제안서만 가져올 수 있습니다. HWP는 Word에서 DOCX로 저장한 뒤 가져오세요.');
   const documentXml=await zipEntry(new Uint8Array(await file.arrayBuffer()),'word/document.xml');
-  const unescapeXml=(value:string)=>value.replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&quot;','"').replaceAll('&apos;',"'").replaceAll('&amp;','&');
   const paragraphs:string[]=[];
   for(const paragraph of documentXml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/gu)){
     const parts=[...paragraph[1].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gu)].map((match)=>unescapeXml(match[1]));
@@ -626,6 +628,9 @@ export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   // a text-only subset while silently dropping its pictures, equations or notes.
   if (elements.some(element=>['drawing','pict','object','altChunk','oMath','oMathPara','footnoteReference','endnoteReference'].includes(element.localName))) {
     throw new Error('이 Word 문서에는 그림·개체·수식 또는 각주가 포함되어 있습니다. 해당 내용을 누락하지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. Word 원본에서 내용을 확인하고, 텍스트·표만 있는 DOCX를 가져오거나 필요한 내용을 편집기에 직접 추가하세요.');
+  }
+  if (elements.some(element => element.localName === 'numPr')) {
+    throw new Error('이 Word 문서에는 자동 번호·글머리표가 있습니다. 번호가 누락되지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. Word에서 번호를 일반 텍스트로 바꾼 사본을 가져오거나 목록을 편집기에 직접 추가하세요.');
   }
   const child = (element: Element, name: string) => [...element.children].find(item=>item.localName===name);
   const attr = (element: Element | undefined, name='val') => element?.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main',name) ?? element?.getAttribute(`w:${name}`) ?? '';
@@ -704,7 +709,10 @@ export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   if(!body||!plainText(body).trim())throw new Error('Word 보고서에서 읽을 수 있는 본문을 찾지 못했습니다.');
   const blocks=[...body.children].filter(element=>element.localName!=='sectPr');
   const firstParagraph=blocks[0]?.localName==='p'?blocks[0]:undefined;
-  const title=firstParagraph?plainText(firstParagraph).replace(/\s+/gu,' ').trim().slice(0,300):file.name.replace(/\.docx$/iu,'');
-  const content=blocks.length>1&&firstParagraph&&title?blocks.slice(1):blocks;
+  const firstText=firstParagraph?plainText(firstParagraph).replace(/\s+/gu,' ').trim():'';
+  const titleStyle=firstParagraph&&attr(child(firstParagraph,'pPr')&&child(child(firstParagraph,'pPr')!,'pStyle'));
+  const hasDocumentTitle=titleStyle==='Title'&&firstText.length>0&&firstText.length<=300&&blocks.length>1;
+  const title=hasDocumentTitle?firstText:file.name.replace(/\.docx$/iu,'').slice(0,300);
+  const content=hasDocumentTitle?blocks.slice(1):blocks;
   return{reportTitle:title||file.name.replace(/\.docx$/iu,''),reportContent:content.map(render).join('\n')};
 }

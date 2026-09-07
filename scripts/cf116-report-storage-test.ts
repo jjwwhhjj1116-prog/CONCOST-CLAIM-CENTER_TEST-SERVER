@@ -65,7 +65,7 @@ async function fixture() {
   const now = new Date().toISOString();
   db.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)', [ADMIN, 'cf116@example.invalid', '1'.repeat(32), '2'.repeat(64), 100000, '합성 관리자', 'cf116@example.invalid', '["admin"]', now]);
   // Seed an administrator before migrations whose approved template rows reference one.
-  for (const name of readdirSync(migrationRoot).filter(name => /^\d{4}_.+\.sql$/u.test(name) && Number(name.slice(0, 4)) <= 59 && !foundation.includes(name)).sort()) apply(name);
+  for (const name of readdirSync(migrationRoot).filter(name => /^\d{4}_.+\.sql$/u.test(name) && Number(name.slice(0, 4)) <= 61 && !foundation.includes(name)).sort()) apply(name);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(TOKEN));
   const hash = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
   db.run('INSERT INTO preview_sessions (id_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)', [hash, ADMIN, now, new Date(Date.now() + 3_600_000).toISOString()]);
@@ -118,7 +118,7 @@ test('CF116 late backup constraint failure returns 503, rolls back all initial w
     assert.equal(failed.code, 'REPORT_STORAGE_FAILED'); assert.equal(failed.currentVersion, undefined);
     assert.deepEqual(snapshot(db), before, 'failed final statement must roll back draft, revision, activity and backup together');
     assert.equal((await json(await get())).draft, null);
-    assert.deepEqual(logs.map(value => JSON.parse(String(value))), [{ event: 'REPORT_INITIAL_SAVE_FAILED', category: 'CONSTRAINT' }], 'logs must not contain raw SQL, names, credentials or document content');
+    assert.deepEqual(logs.map(value => JSON.parse(String(value))), [{ event: 'REPORT_INITIAL_SAVE_FAILED', category: 'CONSTRAINT', stage:'BATCH_EXECUTE',errorName:'Error',diagnostic:'UNCLASSIFIED' }], 'logs must not contain raw SQL, names, credentials or document content');
     db.exec('DROP TRIGGER cf116_test_backup_failure');
     const saved = await json(await put(body));
     assert.equal(saved.draft.version, 1); assert.equal(saved.draft.content, body.content);
@@ -140,7 +140,7 @@ test('CF116 incompatible backup storage is not mislabeled as a version conflict 
     assert.equal(failed.code, 'REPORT_STORAGE_FAILED'); assert.equal(failed.currentVersion, undefined);
     assert.equal((await json(await get())).draft, null);
     assert.equal(rows(db, 'preview_report_revisions'), 0); assert.equal(rows(db, 'preview_report_hourly_backups'), 0);
-    assert.deepEqual(logs.map(value => JSON.parse(String(value))), [{ event: 'REPORT_INITIAL_SAVE_FAILED', category: 'STORAGE' }]);
+    assert.deepEqual(logs.map(value => JSON.parse(String(value))), [{ event: 'REPORT_INITIAL_SAVE_FAILED', category: 'STORAGE',stage:'BATCH_EXECUTE',errorName:'Error',diagnostic:'has no column named' }]);
     db.exec('ALTER TABLE preview_report_hourly_backups RENAME COLUMN cf116_missing_editor_json TO editor_json');
     assert.deepEqual(snapshot(db), before);
     const retry = await json(await put({ ...emptyDraft, editorJson: null }));
