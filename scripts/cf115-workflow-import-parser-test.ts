@@ -22,7 +22,7 @@ test('CF115 provider parser retains company form fields, full source and separat
 });
 
 test('CF115 missing schema, unreadable output and invalid dates/form values fail closed', () => {
-  for (const value of [null, [], {}, { ...valid, minutesFields: undefined }, { ...valid, readable: false }, { ...valid, status: 'UNREADABLE' }, { ...valid, sourceNotes: '읽을 수 없습니다.' }, { ...valid, summary: '' }, { ...valid, timeline: [] }, { ...valid, participants: [''] }, { ...valid, meetingAt: '2026-02-30T10:00:00+09:00' }, { ...valid, meetingAt: '2026-09-07T24:00:00+09:00' }, { ...valid, surveyDate: '2026-02-30' }, { ...valid, minutesFields: { ...valid.minutesFields, meetingEndTime: '25:00' } }, { ...valid, minutesFields: { unknown: 'unsupported' } }]) {
+  for (const value of [null, [], {}, { ...valid, minutesFields: undefined }, { ...valid, readable: false }, { ...valid, status: 'UNREADABLE' }, { ...valid, sourceNotes: '읽을 수 없습니다.' }, { ...valid, summary: '' }, { ...valid, participants: [''] }, { ...valid, meetingAt: '2026-02-30T10:00:00+09:00' }, { ...valid, meetingAt: '2026-09-07T24:00:00+09:00' }, { ...valid, surveyDate: '2026-02-30' }, { ...valid, minutesFields: { ...valid.minutesFields, meetingEndTime: '25:00' } }, { ...valid, minutesFields: { unknown: 'unsupported' } }]) {
     assert.equal(parse(value), null, JSON.stringify(value));
   }
 });

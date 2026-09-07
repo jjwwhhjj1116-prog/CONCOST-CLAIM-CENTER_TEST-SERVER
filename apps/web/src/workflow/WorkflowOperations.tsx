@@ -564,7 +564,8 @@ const WORKFLOW_FIELD_LABELS: Record<string, string> = {
   sourceNotes:'원문', meetingContent:'회의내용 및 지시사항', summary:'정리 내용', timeline:'결정사항·후속업무'
 };
 function workflowFieldLabel(field: string): string {
-  const key = field.replace(/^minutesFields\./u, '');
+  const annotatedKey = /\((?:minutesFields\.)?([A-Za-z]+)\)\s*$/u.exec(field)?.[1];
+  const key = annotatedKey && Object.hasOwn(WORKFLOW_FIELD_LABELS, annotatedKey) ? annotatedKey : field.replace(/^minutesFields\./u, '');
   return Object.hasOwn(WORKFLOW_FIELD_LABELS, key) ? WORKFLOW_FIELD_LABELS[key] : field;
 }
 

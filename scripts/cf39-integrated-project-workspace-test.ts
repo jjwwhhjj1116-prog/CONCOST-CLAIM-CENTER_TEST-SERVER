@@ -508,8 +508,8 @@ test('CF115 real company XLSX goes as complete text with the 12-field schema, th
   const bytes = meetingMinutesWorkbook({ ...fields, meetingDate: '2026. 09. 07', meetingTime: '10:00', location: '합성 회의실', summary: notes });
   env.GEMINI_TEST_FETCH = async (_url, init) => {
     bodies.push(JSON.parse(String(init?.body)));
-    // Deliberately shorten provider sourceNotes: locally extracted Office source must win.
-    return geminiResult({ ...workflowResult, sourceNotes: '짧은 전사문', meetingContent: notes, minutesFields: fields });
+    // A model may mix parties or copy the form footer; explicit source fields/body must win.
+    return geminiResult({ ...workflowResult, participants: ['김검수', '박실무', '이발주'], sourceNotes: '짧은 전사문', meetingContent: notes + '\n※ 거래처 명함은 PDF 파일로 업로드', minutesFields: { ...fields, authorDepartment: 'AI가 추측한 부서', participants: fields.participants + ', ' + fields.clientParticipants } });
   };
   for (const kind of ['KICKOFF', 'SITE_SURVEY'] as const) {
     const before = workflowSnapshot(sql);
@@ -527,6 +527,9 @@ test('CF115 real company XLSX goes as complete text with the 12-field schema, th
     }
     assert.equal(imported.meetingContent, notes);
     assert.deepEqual(imported.minutesFields, fields);
+    assert.deepEqual(imported.participants, ['김검수', '박실무']);
+    assert.doesNotMatch(parts[0].text, /명함/u, 'template upload guidance must not be sent as meeting content');
+    assert.match(imported.sourceNotes, /명함/u, 'the complete original remains available separately');
     assert.equal(body.generationConfig.responseMimeType, 'application/json');
     assert.deepEqual(new Set(body.generationConfig.responseSchema.properties.minutesFields.required), new Set(Object.keys(minutesFieldDefaults)));
     assert.ok(body.generationConfig.responseSchema.required.includes('meetingContent'));

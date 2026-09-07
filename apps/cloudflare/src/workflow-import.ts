@@ -23,10 +23,15 @@ const record = (value: unknown): value is Record<string, unknown> => Boolean(val
 const bounded = (value: unknown, limit: number): value is string => typeof value === 'string' && value.length <= limit && !value.includes('\0');
 const list = (value: unknown, count: number, width: number): value is string[] => Array.isArray(value) && value.length <= count && value.every(item => bounded(item, width) && item.trim());
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
-const unreadable = /^(?:unreadable|cannot read|추출 실패|판독 불가|읽을 수 없(?:음|습니다)|내용 없음)[.!]?$/iu;
+const unreadable = (text: string) => text.trim().split(/\r?\n/u).filter(line => line.trim()).every(line => /^(?:unreadable|cannotread|inaudible|unintelligible|추출실패|판독불가|청취불가|전사불가|음성없음|읽을수없(?:음|습니다)|내용없음)$/iu.test(line
+  .replace(/^\s*(?:\[\s*)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*\])?\s*[:：-]?\s*/u, '')
+  .replace(/[\s()[\]{}<>.!。…]/gu, '')));
+const minutePrecision = (value: string) => value.trim().replace(/^((?:[01]\d|2[0-3]):[0-5]\d):[0-5]\d$/u, '$1');
+const unsupportedUrgency = (text: string, source: string) => text.replace(/((?:기한|마감일?|완료일|제출일)\s*[:：]\s*)(즉시|즉각|당일|오늘|내일|금일|익일|이번\s*주(?:\s*[월화수목금토일]요일)?)(?:까지)?(?=\s*(?:$|[\n.,;·|)]))/gu,
+  (match, label: string, deadline: string) => source.replace(/\s/gu, '').includes(deadline.replace(/\s/gu, '')) ? match : `${label}확인 필요`);
 
 /** Reject incomplete/oversized provider output; never silently truncate evidence. */
-export function parseWorkflowAiImport(content: string, kind: WorkflowImportKind): WorkflowAiImportResult | null {
+export function parseWorkflowAiImport(content: string, kind: WorkflowImportKind, sourceText?: string | null): WorkflowAiImportResult | null {
   try {
     if (content.length > 250_000) return null;
     const value: unknown = JSON.parse(content.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, ''));
@@ -34,19 +39,42 @@ export function parseWorkflowAiImport(content: string, kind: WorkflowImportKind)
     for (const [key, limit] of Object.entries({ location: 300, agenda: 12_000, leadUnit: 120, sourceNotes: sourceLimit, summary: 30_000 })) {
       if (!bounded(value[key], limit)) return null;
     }
-    if (!String(value.sourceNotes).trim() || !String(value.summary).trim() || unreadable.test(String(value.sourceNotes).trim()) || unreadable.test(String(value.summary).trim())) return null;
+    if (!String(value.sourceNotes).trim() || !String(value.summary).trim() || unreadable(String(value.sourceNotes)) || unreadable(String(value.summary))) return null;
     if (value.meetingContent !== undefined && !bounded(value.meetingContent, sourceLimit)) return null;
+    let meetingContent = String(value.meetingContent ?? '').trim();
+    if (!meetingContent) {
+      // Prefer the exact document body, not the provider's copy or a sheet-address dump.
+      const source = localWorkflowAiImport('', kind, sourceText ?? String(value.sourceNotes));
+      meetingContent = source.meetingContent ?? (/^\[[^\]\n]+\]\s*\n[A-Z]{1,4}\d+:/u.test(source.sourceNotes) ? '' : source.sourceNotes);
+    }
+    if (!meetingContent.trim() || unreadable(meetingContent)) return null;
     if (value.meetingAt !== null && (!bounded(value.meetingAt, 40) || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/u.test(value.meetingAt) || !validDate(value.meetingAt.slice(0, 10)) || Number.isNaN(Date.parse(value.meetingAt)))) return null;
     if (value.surveyDate !== null && (!bounded(value.surveyDate, 10) || !validDate(value.surveyDate))) return null;
-    if (!list(value.participants, 30, 120) || !list(value.missingFields, 20, 120) || !Array.isArray(value.timeline) || value.timeline.length < 1 || value.timeline.length > 20) return null;
+    if (!list(value.participants, 30, 120) || !list(value.missingFields, 20, 120) || !Array.isArray(value.timeline) || value.timeline.length > 20) return null;
     const timeline: WorkflowAiImportResult['timeline'] = [];
+    const originalSource = sourceText ?? String(value.sourceNotes);
+    let deadlineNeedsReview = false;
     for (const item of value.timeline) {
       if (!record(item) || !bounded(item.title, 160) || !item.title.trim() || !bounded(item.detail, 1200) || !item.detail.trim()) return null;
-      timeline.push({ order: timeline.length + 1, title: item.title.trim(), detail: item.detail.trim() });
+      const detail = unsupportedUrgency(item.detail.trim(), originalSource);
+      if (detail.length > 1200) return null;
+      deadlineNeedsReview ||= detail !== item.detail.trim();
+      timeline.push({ order: timeline.length + 1, title: item.title.trim(), detail });
     }
-    const minutesFields = normalizeMinutesFields(value.minutesFields);
+    if (!record(value.minutesFields)) return null;
+    const fieldInput = { ...value.minutesFields };
+    for (const key of ['meetingStartTime', 'meetingEndTime']) {
+      if (fieldInput[key] !== undefined) {
+        if (!bounded(fieldInput[key], 2000)) return null;
+        fieldInput[key] = minutePrecision(fieldInput[key]);
+      }
+    }
+    const minutesFields = normalizeMinutesFields(fieldInput);
     if (!minutesFields) return null;
     const missingFields = value.missingFields.map(item => item.trim());
+    const summary = unsupportedUrgency(String(value.summary).trim(), originalSource);
+    if (summary.length > 30_000) return null;
+    if ((deadlineNeedsReview || summary !== String(value.summary).trim()) && !missingFields.includes('후속 업무 기한')) missingFields.push('후속 업무 기한');
     if (!String(value.agenda).trim()) {
       const label = kind === 'KICKOFF' ? '회의 안건' : '조사 범위';
       if (!missingFields.includes(label)) missingFields.push(label);
@@ -55,8 +83,8 @@ export function parseWorkflowAiImport(content: string, kind: WorkflowImportKind)
     return {
       meetingAt: value.meetingAt === null ? null : new Date(String(value.meetingAt)).toISOString(), surveyDate: value.surveyDate as string | null,
       location: String(value.location).trim(), agenda: String(value.agenda).trim(), leadUnit: String(value.leadUnit).trim(),
-      participants: value.participants.map(item => item.trim()), sourceNotes: String(value.sourceNotes).trim(), summary: String(value.summary).trim(),
-      ...(value.meetingContent !== undefined ? { meetingContent: String(value.meetingContent).trim() } : {}), timeline, missingFields, minutesFields
+      participants: value.participants.map(item => item.trim()), sourceNotes: String(value.sourceNotes).trim(), summary,
+      meetingContent: meetingContent.trim(), timeline, missingFields, minutesFields
     };
   } catch { return null; }
 }
@@ -122,13 +150,14 @@ function formRows(source: string): string[][] {
 function formDate(value = ''): string | null {
   // Bare Excel serials have no date-system metadata here (1900 versus 1904).
   // Leave the date missing instead of guessing a date four years away.
-  const match = /^(\d{4})\s*[년.\/-]\s*(\d{1,2})\s*[월.\/-]\s*(\d{1,2})(?:\s*일|\.)?(?:\s|$)/u.exec(value);
+  const match = /^(\d{4})\s*[년.\/-]\s*(\d{1,2})\s*[월.\/-]\s*(\d{1,2})(?:\s*일|\.)?(?:\s*\([월화수목금토일](?:요일)?\))?(?=\s|$)/u.exec(value);
   if (!match) return null;
   const date = `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
   return validDate(date) ? date : null;
 }
 
 function formTime(value = ''): string {
+  value = minutePrecision(value);
   if (/^0(?:\.\d+)?$/u.test(value)) {
     const minutes = Math.round(Number(value) * 1440);
     if (minutes < 1440) return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
@@ -160,6 +189,8 @@ export function localWorkflowAiImport(fileName: string, kind: WorkflowImportKind
       if (bodyHeading(label)) { inBody = true; foundBody = true; if (pair?.[2]) body.push(pair[2]); continue; }
       const key = labels[normalizeLabel(label)];
       if (!key || values[key]) continue;
+      // An explicit empty form field is not a missing label: preserve its blank value.
+      values[key] ??= '';
       const candidate = pair?.[2] || row[index + 1] || (row.length === 1 && rows[rowIndex + 1]?.length === 1 ? rows[rowIndex + 1][0] : '');
       if (!present(candidate) || labels[normalizeLabel(candidate)] || bodyHeading(candidate)) continue;
       values[key] = candidate.trim();

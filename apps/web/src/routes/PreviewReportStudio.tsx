@@ -157,6 +157,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [authoring, setAuthoring] = useState<AuthoringConfig | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState('');
@@ -269,8 +270,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const loadDraft = useCallback(async (caseId: string) => {
     const sequence = ++loadSequence.current;
-    setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false); setWorkspaceDirty(false);
-    outlineSyncPendingRef.current = false; setOutlineSyncPending(false); setOutlineSyncNotice('');
+    setLoading(true); setError(''); setLoadedCaseId('');
     try {
       const [result, reviewResult, finalizationResult, authoringResult, collaborationResult] = await Promise.all([
         apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
@@ -280,6 +280,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         apiRequest<ReportChapterCollaboration>(`/api/report-chapter-collaboration?caseId=${encodeURIComponent(caseId)}`)
       ]);
       if (sequence !== loadSequence.current || selectedCaseRef.current !== caseId) return;
+      setSaveError(''); setDirty(false); setWorkspaceDirty(false);
+      outlineSyncPendingRef.current = false; setOutlineSyncPending(false); setOutlineSyncNotice('');
       const caseRecord = cases.find((record) => record.id === caseId);
       const loadedTitle = result.draft?.title ?? `${caseRecord?.title ?? '사건'} 보고서`;
       const loadedContent = result.draft?.content ?? '';
@@ -348,8 +350,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL', syncOutline = false, force = false): Promise<boolean> => {
     if (generationInFlight.current && !force) return false;
+    if (saveError && saveKind !== 'MANUAL') return false;
     if (!editable || saving || draftSaveInFlight.current || (outlineSaveInFlight.current && !syncOutline) || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return false;
-    if (!force && !dirty && !workspaceDirty && !outlineSyncPendingRef.current && !syncOutline && versionRef.current > 0) return true;
+    if (!force && !saveError && !dirty && !workspaceDirty && !outlineSyncPendingRef.current && !syncOutline && versionRef.current > 0) return true;
     const requestCaseId = selectedCaseId;
     // Outline saves and navigation can run in the same render: always use the latest document/version.
     const requestTitle = titleRef.current;
@@ -359,15 +362,17 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const requestWizardStep = activeStepRef.current;
     const requestChapterId = selectedChapterRef.current || null;
     draftSaveInFlight.current = true;
-    setSaving(true); setError('');
+    setSaving(true);
     try {
       const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(requestCaseId)}`, {
         method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, editorJson: requestEditorJson, expectedVersion: requestVersion, wizardStep: requestWizardStep, selectedChapterId: requestChapterId, saveKind })
       });
-      if (selectedCaseRef.current !== requestCaseId || !result.draft) return false;
+      if (selectedCaseRef.current !== requestCaseId) return false;
+      if (!result.draft) throw new Error('저장 완료 응답을 확인하지 못했습니다. 화면의 편집 내용은 유지됩니다. 저장을 다시 시도해 주세요.');
       setVersion(result.draft.version);
       setSavedAt(result.draft.updatedAt);
       setBackups(result.backups ?? []);
+      setSaveError('');
       const unsavedChanges = titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current)) !== JSON.stringify(requestEditorJson);
       setDirty(unsavedChanges);
       setWorkspaceDirty(activeStepRef.current !== requestWizardStep || (selectedChapterRef.current || null) !== requestChapterId);
@@ -376,19 +381,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       return !unsavedChanges;
     } catch (reason) {
       if (selectedCaseRef.current !== requestCaseId) return false;
-      setError(reason instanceof ApiError && reason.status === 409 ? '다른 탭에서 보고서가 먼저 저장되었습니다. 최신본을 다시 불러온 뒤 계속 작성해 주세요.' : reason instanceof Error ? reason.message : String(reason));
+      setSaveError(reason instanceof ApiError && reason.status === 409 ? '서버의 보고서 버전이 변경되어 저장하지 않았습니다. 편집 내용은 유지됩니다. 현재 내용을 파일로 내려받아 보관한 뒤 최신본을 불러와 비교해 주세요.' : reason instanceof Error ? reason.message : String(reason));
       return false;
     } finally {
       draftSaveInFlight.current = false;
       if (selectedCaseRef.current === requestCaseId) setSaving(false);
     }
-  }, [activeStep, content, dirty, editable, editorJson, reportHeader, loadedCaseId, loadSavedWorkspaces, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
+  }, [activeStep, content, dirty, editable, editorJson, reportHeader, loadedCaseId, loadSavedWorkspaces, saveError, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
-    if (generationInFlight.current || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
+    if (saveError || generationInFlight.current || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
     const timer = window.setTimeout(() => { void saveNow('AUTO'); }, 3000);
     return () => window.clearTimeout(timer);
-  }, [activeStep, content, dirty, saveNow, saving, savingOutline, outlineSyncPending, selectedChapterId, title, workspaceDirty]);
+  }, [activeStep, content, dirty, saveError, saveNow, saving, savingOutline, outlineSyncPending, selectedChapterId, title, workspaceDirty]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (saving || improving || linkingHwp || generationInFlight.current || chapterSaveInFlight.current || chaptersDirty || dirty || outlineDirty || workspaceDirty || outlineSaveInFlight.current || outlineSyncPendingRef.current) { event.preventDefault(); event.returnValue = ''; } };
@@ -401,6 +406,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const project = WORKFLOW_PROJECTS.find((candidate) => candidate.caseId === caseId);
     const projectQuery = project ? `&projectId=${encodeURIComponent(project.id)}` : '';
     onNavigate(`/reports/studio?caseId=${encodeURIComponent(caseId)}${projectQuery}`);
+  };
+
+  const reloadLatestDraft = () => {
+    if (!selectedCaseId || loading || saving || savingOutline || generating || generatingOutline || improving || linkingHwp || chapterBusy || navigationBusy) return;
+    if ((dirty || workspaceDirty || outlineDirty || chaptersDirty || outlineSyncPending) && !window.confirm('저장하지 않은 본문·목차·협업 원고가 서버의 최신본으로 바뀝니다. 필요한 내용을 파일로 보관했나요? 최신본을 불러오려면 확인을 눌러 주세요.')) return;
+    void loadDraft(selectedCaseId);
   };
 
   const applyCollaborationPayload = (payload: ReportChapterCollaboration) => {
@@ -622,7 +633,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setNavigationBusy(true);
     try {
       if (outlineDirty && !await saveOutline(outlineStatus)) return;
-      if (editable && !await saveNow('NAVIGATION')) return;
+      if (editable && !await saveNow('MANUAL')) return;
       for (const chapterId of dirtyChapterIds) {
         const assignment = chapterCollaboration?.assignments.find(item => item.chapterId === chapterId);
         if (!assignment || !await saveChapterCollaboration('SAVE', assignment)) return;
@@ -674,7 +685,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     : !editable ? '담당 PM 또는 관리자만 보고서 AI 초안을 작성할 수 있습니다.'
     : !authoring?.available ? authoring?.unavailableReason || '이 유형의 챕터 프롬프트 활성화가 필요합니다.'
     : !authoring.aiConnected ? `${authoring.providerLabel || '보고서 작성 AI'} 키가 연결되지 않았습니다. AI 설정 후 연결 상태를 다시 확인해 주세요.`
-    : outlineStatus !== 'CONFIRMED' || outlineDirty || outlineSyncPending ? '2단계에서 변경한 목차를 확정해 주세요.'
+    : outlineDirty || outlineSyncPending ? '2단계에서 변경한 목차를 확정해 주세요.'
+    : outlineStatus !== 'CONFIRMED' ? '2단계에서 목차를 먼저 확정해 주세요.'
     : saving || savingOutline || improving || chapterBusy ? '현재 저장·편집 작업이 끝나면 작성할 수 있습니다.'
     : generating ? 'AI 작성 중입니다.' : '';
   const [refreshingAi, setRefreshingAi] = useState(false);
@@ -1116,6 +1128,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       </nav>
 
       {activeStep !== 1 && selectedCase&&<div className="report-current-project report-current-project--persistent" aria-live="polite"><span>현재 프로젝트</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>}
+      {saveError && <section className="error-box" role="alert" aria-label="보고서 저장 오류">
+        <strong>{saving ? '보고서 저장 재시도 중' : '자동 저장 일시 중단 · 저장이 완료되지 않았습니다'}</strong>
+        <p>{saveError}</p>
+        <p>작성 중인 내용은 화면에 유지됩니다. 저장이 완료되어야 다음 단계로 이동할 수 있습니다. 자동으로 재시도하지 않습니다.</p>
+        <div className="action-row">
+          <Button disabled={!editable || loading || saving || savingOutline || generating || generatingOutline || improving || linkingHwp || Boolean(chapterBusy) || navigationBusy} onClick={() => void saveNow('MANUAL')}>{saving ? '저장 중…' : '저장 다시 시도'}</Button>
+          <Button variant="secondary" disabled={loading || saving || savingOutline || generating || generatingOutline || improving || linkingHwp || Boolean(chapterBusy) || navigationBusy} onClick={reloadLatestDraft}>최신본 다시 불러오기</Button>
+        </div>
+      </section>}
+      {error && <p className="error-box" role="alert">{error}</p>}
       {memoryNotice&&<p className="notice-box report-document-notice" role="status">{memoryNotice}</p>}
 
       <Card title="" className="report-step-card report-step-card--1 report-stage-card">
@@ -1124,8 +1146,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <div className="report-project-choice">
           <Select searchable searchPlaceholder="프로젝트 번호·이름 검색" required label="프로젝트 선택" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row report-autosave-status" aria-live="polite" aria-label="지금 저장 상태">
-            <span className="preview-pill">{error ? '자동 저장 일시 중단' : saving ? '자동 저장 중' : dirty || workspaceDirty || outlineDirty ? '변경사항 감지 · 잠시 후 자동 저장' : version ? `자동 저장 완료 · ${savedAt ? new Date(savedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : `v${version}`}` : '첫 입력 후 자동 저장'}</span>
-            {error && <Button className="report-action-danger" onClick={() => selectedCaseId && void loadDraft(selectedCaseId)}>최신본 다시 불러오기</Button>}
+            <span className="preview-pill">{saving ? '자동 저장 중' : saveError ? '자동 저장 일시 중단' : dirty || workspaceDirty || outlineDirty ? '변경사항 감지 · 잠시 후 자동 저장' : version ? `자동 저장 완료 · ${savedAt ? new Date(savedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : `v${version}`}` : '첫 입력 후 자동 저장'}</span>
           </div>
         </div>
         <div className="report-template-viewer-control">
@@ -1155,7 +1176,6 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 대기'}</span><Button className="report-action-ai" disabled={!editable || generatingOutline || savingOutline || saving || outlineSyncPending} onClick={() => void generateOutline()}>{generatingOutline ? '템플릿 목차 불러오는 중…' : '✦ AI·템플릿으로 목차 자동 만들기'}</Button><Button className="report-action-review" variant="secondary" disabled={!editable || savingOutline || saving || outlineSyncPending || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '수정한 목차 저장'}</Button><Button className="report-action-confirm" disabled={!editable || savingOutline || saving || outlineSyncPending || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 확정 · 다음 단계'}</Button></div>
             {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장 기능을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
             {outlineFeedback}
-            {error && <p className="error-box" role="alert">{error}</p>}
           </div>}
         </Card>
         <Card title="" className="report-step-card report-step-card--3 report-stage-card">
@@ -1229,7 +1249,6 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             {activeStep === 4 && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || saving || Boolean(chapterBusy)} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
             {editable && selectedChapter && <details className="report-memory-feedback report-advanced-panel"><summary>AI 개선 피드백 등록</summary><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>APPROVED MEMORY</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</details>}
             <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
-            {error && <p className="error-box" role="alert">{error}</p>}
           </fieldset>
           <details id="report-backups" className="report-revision-history"><summary>시간별 백업 불러오기 · 최근 {backups.length}건</summary>{backups.length ? <ul className="dashboard-work-list">{backups.map((backup) => <li key={backup.id}><span><strong>{backup.backupHour.replace('T',' ')}시 백업 · {backup.title}</strong><small>보고서 v{backup.version} · {new Date(backup.savedAt).toLocaleString('ko-KR')} · {backup.savedBy.name} · 무결성 확인 {backup.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(backup)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">첫 자동 저장 때 백업이 생성되고, 이후 변경된 작업은 1시간 단위로 안전하게 보관됩니다.</p>}</details>
         </Card>

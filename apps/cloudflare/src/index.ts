@@ -941,7 +941,19 @@ async function generateWorkflowAiImport(
   catch (reason) {
     return { modelCode, redactionCount: 0, response: json({ error: reason instanceof Error ? reason.message : '파일을 읽지 못했습니다.', code: reason instanceof IntakeSourceError ? reason.code : 'WORKFLOW_SOURCE_UNREADABLE' }, 422) };
   }
-  const redacted = source.text !== null ? redactExternalAiText(source.text) : { text: '', count: 0 };
+  let companyForm: WorkflowAiImportResult | null = null;
+  if (source.text !== null) {
+    const labels = source.text.replace(/\s/gu, '');
+    if (labels.includes('참석자(컨코스트)') && labels.includes('참석자(거래처)')) {
+      try {
+        const parsed = localWorkflowAiImport(file.name, kind, source.text);
+        if (parsed.meetingContent?.trim()) companyForm = parsed;
+      } catch { /* Unrecognized forms still use the validated document-analysis path. */ }
+    }
+  }
+  // Known form fields are facts, not a model rewrite. Exclude template-only footers from AI analysis.
+  const analysisText = companyForm ? JSON.stringify({ minutesFields: companyForm.minutesFields, meetingAt: companyForm.meetingAt, surveyDate: companyForm.surveyDate, location: companyForm.location, meetingContent: companyForm.meetingContent }) : source.text;
+  const redacted = analysisText !== null ? redactExternalAiText(analysisText) : { text: '', count: 0 };
   const fieldNames = ['author', 'authorDepartment', 'authorPosition', 'clientName', 'reportingDepartment', 'referenceDepartments', 'clientParticipants', 'attachmentName', 'meetingStartTime', 'meetingEndTime', 'participants', 'meetingTitle'];
   const stringSchema = { type: 'STRING' };
   const responseSchema = {
@@ -951,7 +963,7 @@ async function generateWorkflowAiImport(
       meetingAt: { type: 'STRING', nullable: true }, surveyDate: { type: 'STRING', nullable: true },
       location: stringSchema, agenda: stringSchema, participants: { type: 'ARRAY', items: stringSchema },
       leadUnit: stringSchema, sourceNotes: stringSchema, meetingContent: stringSchema, summary: stringSchema,
-      timeline: { type: 'ARRAY', items: { type: 'OBJECT', required: ['title','detail'], properties: { title: stringSchema, detail: stringSchema } } },
+      timeline: { type: 'ARRAY', maxItems: 20, items: { type: 'OBJECT', required: ['title','detail'], properties: { title: stringSchema, detail: stringSchema } } },
       missingFields: { type: 'ARRAY', items: stringSchema },
       minutesFields: { type: 'OBJECT', required: fieldNames, properties: Object.fromEntries(fieldNames.map(key => [key, stringSchema])) }
     }
@@ -962,10 +974,13 @@ async function generateWorkflowAiImport(
     '정해진 회의록 양식이 아닌 메모·문서·이미지·스캔 PDF·음성도 읽습니다. 음성은 들리는 발언을 전사하고, 스캔은 읽히는 글자를 추출하세요.',
     'sourceNotes는 읽거나 들을 수 있는 전체 내용의 전사입니다. 요약으로 바꾸거나 뒷부분을 생략하지 마세요. 판독 불가 구간은 [판독 불가], 들리지 않는 구간은 [청취 불가]로 표시하세요.',
     'meetingContent는 서식의 작성자·날짜 등 머리 부분을 제외한 회의내용 및 지시사항 본문 원문입니다. 일반 메모·음성이면 전사 본문을 넣으세요.',
+    '명함 PDF 업로드·기재 방법 같은 양식 고정 안내는 회의 발언·결정·후속업무가 아닙니다. 회의 내용과 요약·후속업무에 섞지 마세요. JSON 양식 자료가 주어지면 meetingContent에 기록된 내용만 논의 근거로 사용하세요.',
     'summary는 실제 논의 내용, 결정사항, 미결 쟁점, 지시·후속 업무를 구분한 상세 한국어 회의록입니다. 무엇을 논의했고 무엇이 결정됐는지 명확히 쓰세요.',
     'timeline은 주요 논의와 결정·후속업무 목록입니다. 각 detail에 원문에 있는 담당자·기한을 포함하고 미기재는 확인 필요로 표시하세요. 제목 160자, 상세 1200자, 최대 20항목입니다.',
+    '자료가 필요하다는 말은 즉시 제출하라는 기한 확정이 아닙니다. 원문에 없는 즉시·당일·오늘·내일·이번 주 등의 기한을 만들지 마세요. 기한이 명시되지 않았으면 반드시 기한: 확인 필요로 쓰세요.',
     '이름·날짜·장소·금액·결론을 추측하지 마세요. 음성 화자를 알 수 없으면 화자 미확인으로 쓰세요. 확인되지 않은 필드는 빈 문자열/null, missingFields에 확인 항목을 넣으세요.',
     'minutesFields에 작성자(author), 소속(authorDepartment), 직급(authorPosition), 거래처명(clientName), 보고부서(reportingDepartment), 참조부서(referenceDepartments), 참석자(컨코스트)(participants), 참석자(거래처)(clientParticipants), 회의명(meetingTitle), 첨부파일명(attachmentName), 시작/종료 시간(HH:mm)을 각각 연결하세요. 참조부서 미기재는 모든 부서입니다.',
+    'participants 배열과 minutesFields.participants는 컨코스트 참석자만 넣고, 거래처 참석자는 clientParticipants에만 넣으세요. 두 소속을 합치거나 중복하지 마세요.',
     'meetingAt은 시간대 포함 ISO 일시(KST +09:00), surveyDate는 YYYY-MM-DD입니다. 파일명·프로젝트 정보만으로 회의 사실을 만들어내지 마세요.',
     'JSON만 출력하세요. 전사가 너무 길어 전체를 담지 못하면 내용을 자르지 말고 summary를 빈 문자열로 반환하세요.'
   ].join('\n');
@@ -982,10 +997,19 @@ async function generateWorkflowAiImport(
   if (Array.isArray(candidates) && candidates.some(candidate => candidate.finishReason && candidate.finishReason !== 'STOP')) {
     return { modelCode, redactionCount: redacted.count, response: json({ error: 'AI가 원문 분석을 끝까지 완료하지 못했습니다. 부분 결과는 반영하지 않습니다. 긴 녹음·문서는 나누어 다시 가져와 주세요.', code: 'WORKFLOW_AI_OUTPUT_INCOMPLETE' }, 502) };
   }
-  const result = parseWorkflowAiImport(generated.content ?? '', kind);
+  const result = parseWorkflowAiImport(generated.content ?? '', kind, source.text);
   if (!result) return { modelCode, redactionCount: redacted.count, response: json({ error: 'AI 결과가 비어 있거나 길이·양식 검증을 통과하지 못했습니다. 원본은 유지됩니다. 긴 자료는 구간을 나누어 다시 가져와 주세요.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502) };
   // Keep the exact local extraction independently of the provider's transcription.
   if (source.text !== null) result.sourceNotes = source.text;
+  if (companyForm) {
+    result.minutesFields = companyForm.minutesFields;
+    result.participants = companyForm.participants;
+    result.meetingContent = companyForm.meetingContent;
+    result.meetingAt = companyForm.meetingAt;
+    result.surveyDate = companyForm.surveyDate;
+    result.location = companyForm.location;
+    result.agenda = companyForm.agenda;
+  }
   return { result, modelCode, redactionCount: redacted.count };
 }
 
@@ -1079,6 +1103,7 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     });
   }
   if (action === 'ai-import' && request.method === 'POST') {
+    try {
     const form = await request.formData().catch(() => null);
     const file = form?.get('file');
     const kind = form?.get('workflowKind');
@@ -1129,9 +1154,11 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     const generated = await generateWorkflowAiImport(env, caseRow, user, workflowKind, file, validated.bytes, validated.mimeType);
     const now = new Date().toISOString();
     if (generated.response) {
+      const failure = await generated.response.clone().json().catch(() => null) as { code?: unknown } | null;
+      const failureCode = typeof failure?.code === 'string' && /^[A-Z0-9_]{1,100}$/.test(failure.code) ? failure.code : 'PROVIDER_OR_FORMAT_FAILURE';
       await env.DB.prepare(
-        "INSERT INTO preview_workflow_ai_imports (id,organization_id,case_id,workflow_kind,original_name,mime_type,byte_size,source_sha256,data_class,redaction_count,provider_kind,model_code,status,error_code,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?, 'GEMINI',?,'FAILED','PROVIDER_OR_FORMAT_FAILURE',?,?)"
-      ).bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,workflowKind,file.name,validated.mimeType,file.size,validated.sha256,classification,generated.redactionCount,generated.modelCode,user.id,now).run();
+        "INSERT INTO preview_workflow_ai_imports (id,organization_id,case_id,workflow_kind,original_name,mime_type,byte_size,source_sha256,data_class,redaction_count,provider_kind,model_code,status,error_code,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?, 'GEMINI',?,'FAILED',?,?,?)"
+      ).bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,workflowKind,file.name,validated.mimeType,file.size,validated.sha256,classification,generated.redactionCount,generated.modelCode,failureCode,user.id,now).run();
       return generated.response;
     }
     await env.DB.prepare(
@@ -1144,6 +1171,14 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
       generator: 'GEMINI',
       phase: 'CF115_WORKFLOW_IMPORT_AND_DRAFT'
     });
+    } catch (reason) {
+      const storage = reason instanceof Error && /D1_|SQLITE_|constraint|database/i.test(reason.message);
+      console.error(JSON.stringify({ event: 'WORKFLOW_IMPORT_FAILED', category: storage ? 'AUDIT_STORAGE' : 'UNEXPECTED' }));
+      return json({ error: storage
+        ? 'AI 처리 이력을 저장하지 못했습니다. 보관된 원본은 유지됩니다. 관리자에게 오류 코드 WORKFLOW_AUDIT_FAILED를 알려 주세요.'
+        : '파일 자동정리 중 서버 오류가 발생했습니다. 보관된 원본은 유지되며 다시 시도할 수 있습니다.',
+        code: storage ? 'WORKFLOW_AUDIT_FAILED' : 'WORKFLOW_IMPORT_FAILED' }, 503);
+    }
   }
 
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
@@ -4115,9 +4150,11 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
           .bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,1,title,content,editorJson,contentSha256,kstHourKey(new Date(now)),user.id,now)
       );
       await env.DB.batch(statements);
-    } catch {
+    } catch (reason) {
       const canonical = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ?').bind(caseId).first<{ version: number }>();
-      return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(canonical?.version ?? 0) }, 409);
+      if (canonical) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(canonical.version) }, 409);
+      console.error(JSON.stringify({ event: 'REPORT_INITIAL_SAVE_FAILED', category: reason instanceof Error && /constraint|SQLITE_CONSTRAINT/i.test(reason.message) ? 'CONSTRAINT' : 'STORAGE' }));
+      return json({ error: '보고서 초기 저장에 실패해 다음 단계로 이동하지 않았습니다. 입력 내용은 화면에 유지됩니다. 저장을 다시 시도해 주세요.', code: 'REPORT_STORAGE_FAILED' }, 503);
     }
     return previewReportPayload(env, caseId);
   }

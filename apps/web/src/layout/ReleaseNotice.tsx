@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-09-07';
 export const RELEASE_DATE_LABEL = '2026년 9월 7일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v2:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v3:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,8 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  { title: '9월 7일 추가 수정 · 회의록 자동정리 권한', text: '관리자가 프로젝트를 열 수 있는데도 AI 처리 기록이 차단되던 권한 불일치를 수정했습니다. 원본 보관과 자동정리 실패를 구분하고, 빈 후속업무·초 단위 시간·요일이 붙은 날짜 등 회의록 변형 양식의 처리를 보완했습니다. 회사 자료의 외부 AI 전송 승인 조건은 유지합니다.' },
+  { title: '9월 7일 추가 수정 · 보고서 단계 이동 안내', text: '초기 저장 실패가 버전 충돌로 잘못 표시되던 경우를 구분했습니다. 저장 오류와 재시도 버튼을 모든 단계 상단에 표시하고, 실패 후 자동 반복 요청을 중지합니다. 편집 내용은 유지하며 저장 성공을 확인한 뒤 다음 단계로 이동합니다.' },
   { title: '파일 가져오기 → AI 회의록·조사기록 작성', text: '파일을 선택하면 원본 보관 후 AI 정리까지 이어집니다. 문서·녹음·사진·스캔 PDF의 내용을 읽어 회의록 양식, 논의·결정사항과 후속 업무에 연결합니다. 정리 결과는 검수 후 기록과 함께 저장하며, 실패한 단계는 원본을 유지한 채 다시 실행할 수 있습니다.' },
   { title: '자료 등록·자동정리 연결', text: '자료실의 회의·조사 자료에서도 AI 작성 화면으로 이어집니다. AI 버전 비교가 불가능할 때는 동의 후 기존 파일을 유지하고 별도 자료로 보관할 수 있습니다. AI가 실행되지 않은 원문 가져오기는 자동정리 완료와 구분하여 표시합니다.' },
   { title: '보고서 저장·협업 안정성', text: '단계·챕터를 이동하는 것만으로 승인 버전이 바뀌지 않도록 수정했습니다. 협업 원고의 미저장 변경을 안내하고, 이동 전 저장과 충돌 확인을 강화했습니다. AI 문장 개선도 원문이 바뀌면 덮어쓰지 않습니다.' },
