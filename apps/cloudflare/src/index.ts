@@ -37,6 +37,7 @@ import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './pr
 import { ErpBridgeError, registerProjectInErp } from './erp-bridge';
 import { normalizeMinutesFields } from './company-minutes';
 import { joinReportPresentation, splitReportPresentation } from '../../../packages/document-engine/src/report-presentation';
+import { mergeGeneratedChapter, type ReportNode } from '../../../packages/document-engine/src/report-chapter';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -4192,7 +4193,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
   const backupSchema = await previewReportHourlyBackupSchemaAvailable(env);
 
-  const existing = await env.DB.prepare(`SELECT version, ${workspaceSchema ? 'wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'selected_chapter_id' : 'NULL'} AS selectedChapterId, updated_at AS updatedAt FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?`).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; wizardStep: number; selectedChapterId: string | null; updatedAt: string }>();
+  const existing = await env.DB.prepare(`SELECT title, content, ${editorSchema ? 'editor_json' : 'NULL'} AS editorJson, version, ${workspaceSchema ? 'wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'selected_chapter_id' : 'NULL'} AS selectedChapterId, updated_at AS updatedAt FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?`).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; editorJson: string | null; version: number; wizardStep: number; selectedChapterId: string | null; updatedAt: string }>();
   const wizardStep = requestedWizardStep ?? Number(existing?.wizardStep ?? 1);
   const selectedChapterId = requestedChapterId === undefined ? existing?.selectedChapterId ?? null : requestedChapterId;
   const contentSha256 = await sha256Hex(content);
@@ -4228,6 +4229,15 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   }
 
   if (expectedVersion !== Number(existing.version)) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(existing.version) }, 409);
+  // Moving between steps/chapters must not invalidate an approved content version.
+  if (existing.title === title && existing.content === content && (!editorSchema || existing.editorJson === editorJson)) {
+    if (workspaceSchema && (wizardStep !== Number(existing.wizardStep) || selectedChapterId !== existing.selectedChapterId)) {
+      const result = await env.DB.prepare('UPDATE preview_report_drafts SET wizard_step=?, selected_chapter_id=? WHERE case_id=? AND organization_id=? AND version=?')
+        .bind(wizardStep, selectedChapterId, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion).run();
+      if (result.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    }
+    return previewReportPayload(env, caseId);
+  }
   const nextVersion = Number(existing.version) + 1;
   const now = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString();
   const updateDraft = workspaceSchema
@@ -4397,7 +4407,7 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
 
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body || !exactObjectKeys(body, ['action','chapterId','draftText','expectedVersion','expectedReportVersion']) || !['SAVE','MARK_READY','APPLY'].includes(String(body.action)) || typeof body.chapterId !== 'string' || typeof body.draftText !== 'string' || !Number.isInteger(body.expectedVersion) || !Number.isInteger(body.expectedReportVersion) || body.draftText.length > 200000) {
+  if (!body || !exactObjectKeys(body, ['action','chapterId','draftText','draftEditorJson','expectedVersion','expectedReportVersion']) || !['SAVE','MARK_READY','APPLY'].includes(String(body.action)) || typeof body.chapterId !== 'string' || typeof body.draftText !== 'string' || !Number.isInteger(body.expectedVersion) || !Number.isInteger(body.expectedReportVersion) || body.draftText.length > 200000 || (body.draftEditorJson !== undefined && (body.draftEditorJson === null || typeof body.draftEditorJson !== 'object' || Array.isArray(body.draftEditorJson) || JSON.stringify(body.draftEditorJson).length > 2_000_000))) {
     return json({ error: 'Chapter collaboration payload is invalid', code: 'INVALID_CHAPTER_COLLABORATION' }, 400);
   }
   const current = await env.DB.prepare(
@@ -4431,6 +4441,7 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
 
   if (!canManage) return json({ error: '담당 PM 또는 관리자만 검수 완료 챕터를 보고서에 반영할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
   if (current.status !== 'READY') return json({ error: '담당자가 검수 완료로 제출한 챕터만 반영할 수 있습니다.', code: 'CHAPTER_NOT_READY' }, 409);
+  if (draftText !== current.draftText.trim()) return json({ error: '협업 원고가 제출본과 다릅니다. 먼저 저장하고 검수 완료로 다시 제출해 주세요.', code: 'CHAPTER_NOT_READY' }, 409);
   const report = await env.DB.prepare('SELECT title,content,editor_json AS editorJson,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
     .bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; editorJson: string | null; version: number; updatedAt: string }>();
   const expectedReportVersion = Number(body.expectedReportVersion);
@@ -4441,20 +4452,27 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   const nextReportVersion = expectedReportVersion + 1;
   const reportNow = new Date(Math.max(Date.now(), Date.parse(report.updatedAt) + 1, Date.parse(now) + 1)).toISOString();
   const reportSha = await sha256Hex(nextContent);
-  // The body is replaced from chapter text; retain only document presentation metadata.
-  const presentation = joinReportPresentation(null, splitReportPresentation(parsePreviewEditorJson(report.editorJson)).header);
+  // Preserve unrelated chapter nodes and their reviewed formatting.
+  const stored = splitReportPresentation(parsePreviewEditorJson(report.editorJson));
+  let merged = stored.body as (Record<string, unknown> & ReportNode) | null;
+  if (merged) {
+    if (!body.draftEditorJson) return json({ error: '서식 보존을 위해 화면을 새로고침한 뒤 챕터를 다시 반영해 주세요.', code: 'EDITOR_RELOAD_REQUIRED' }, 409);
+    try { merged = mergeGeneratedChapter(merged, current.chapterCode, body.draftEditorJson as ReportNode); }
+    catch (reason) { return json({ error: reason instanceof Error ? reason.message : '챕터 구분을 확인해 주세요.', code: 'INVALID_CHAPTER_DOCUMENT' }, 400); }
+  }
+  const presentation = joinReportPresentation(merged, stored.header);
   const editorJson = presentation ? JSON.stringify(presentation) : null;
   const results = await env.DB.batch([
-    env.DB.prepare('UPDATE preview_report_drafts SET content=?,editor_json=?,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=?')
-      .bind(nextContent, editorJson, body.chapterId, user.id, reportNow, caseId, PREVIEW_ORGANIZATION_ID, expectedReportVersion),
+    env.DB.prepare("UPDATE preview_report_drafts SET content=?,editor_json=?,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=? AND EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND status='READY')")
+      .bind(nextContent, editorJson, body.chapterId, user.id, reportNow, caseId, PREVIEW_ORGANIZATION_ID, expectedReportVersion, caseId, body.chapterId, expectedVersion),
     env.DB.prepare('INSERT INTO preview_report_revisions (id,case_id,version,title,content,editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)')
       .bind(crypto.randomUUID(), caseId, nextReportVersion, report.title, nextContent, editorJson, reportSha, user.id, reportNow, caseId, nextReportVersion, reportNow),
-    env.DB.prepare("UPDATE preview_report_chapter_assignments SET status='APPLIED',version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND status='READY'")
-      .bind(user.id, reportNow, caseId, body.chapterId, expectedVersion),
+    env.DB.prepare("UPDATE preview_report_chapter_assignments SET status='APPLIED',version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND status='READY' AND EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)")
+      .bind(user.id, reportNow, caseId, body.chapterId, expectedVersion, caseId, nextReportVersion, reportNow),
     env.DB.prepare("INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,'APPLIED',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)")
       .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, draftText, chapterSha, user.id, reportNow, caseId, body.chapterId, nextVersion, reportNow),
-    env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'REPORT_CHAPTER_APPLIED','검수 챕터 보고서 반영',?,?)")
-      .bind(crypto.randomUUID(), caseId, user.id, `${current.chapterCode} · 보고서 v${nextReportVersion}`, reportNow)
+    env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'REPORT_CHAPTER_APPLIED','검수 챕터 보고서 반영',?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)")
+      .bind(crypto.randomUUID(), caseId, user.id, `${current.chapterCode} · 보고서 v${nextReportVersion}`, reportNow, caseId, nextReportVersion, reportNow)
   ]) as Array<{ meta?: { changes?: number } }>;
   if (results.slice(0, 4).some((entry) => entry.meta?.changes !== 1)) return json({ error: 'Report or chapter changed before apply', code: 'VERSION_CONFLICT' }, 409);
   return json({ ...(await previewReportChapterCollaborationPayload(env, user, caseId)), reportVersion: nextReportVersion, applied: true });
@@ -7161,6 +7179,14 @@ async function handlePreviewFinalOutput(request: Request, env: CloudflareEnv, ur
     }
     const payload = await finalizationList(env, user, body.caseId);
     return new Response(payload.body, { status: 201, headers: payload.headers });
+  }
+  const documentMatch = url.pathname.match(/^\/api\/report-finalizations\/([0-9a-f-]{36})\/document$/iu);
+  if (documentMatch && request.method === 'GET') {
+    const document = await finalDocument(env, documentMatch[1]);
+    if (!document || !await accessiblePreviewCase(env, user, document.finalization.caseId)) return json({ error: 'Finalization was not found', code: 'FINALIZATION_NOT_FOUND' }, 404);
+    const revision = await env.DB.prepare('SELECT editor_json AS editorJson FROM preview_report_revisions WHERE id=? AND case_id=?')
+      .bind(document.finalization.reportRevisionId, document.finalization.caseId).first<{ editorJson: string | null }>();
+    return json({ document: { caseNumber: document.caseNumber, caseTitle: document.caseTitle, title: document.reportTitle, content: document.content, editorJson: parsePreviewEditorJson(revision?.editorJson ?? null), version: document.reportVersion } });
   }
   const outputMatch = url.pathname.match(/^\/api\/report-finalizations\/([0-9a-f-]{36})\/outputs$/iu);
   if (outputMatch && request.method === 'POST') {

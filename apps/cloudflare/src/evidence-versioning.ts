@@ -39,7 +39,7 @@ export async function evidenceVersions(db: EvidenceDatabase, caseId: string, fil
   // Older read-only databases stay readable; new uploads require the migration.
   const rows = await db.prepare('SELECT evidence_id AS id,group_id AS groupId,version_num AS versionNumber,is_latest AS isLatest,change_summary_json AS summary FROM preview_evidence_versions WHERE organization_id=? AND case_id=?')
     .bind('concost', caseId).all<{ id: string; groupId: string; versionNumber: number; isLatest: number; summary: string }>().catch((error) => { if (strict || !/no such table.*preview_evidence_versions/iu.test(String(error))) throw error; return { results: [] }; });
-  const byId = new Map(rows.results.map((row) => [row.id, row]));
+  const byId = new Map(rows.results.map((row) => [row.id, row] as const));
   return files.map((file) => {
     const row = byId.get(file.id);
     return { ...file, groupId: row?.groupId ?? file.id, versionNumber: Number(row?.versionNumber ?? 1), isLatest: row ? row.isLatest === 1 : true, changeSummary: row ? JSON.parse(row.summary) as string[] : [] };

@@ -93,6 +93,7 @@ test('CF108 collaboration APPLY uses the latest saved outline title, not the ass
   const { sql, env } = await setup();
   sql.exec(migration('0052_cf79_case_law_member_alerts_backups.sql'));
   sql.exec(migration('0054_cf84_claim_report_guideline_package.sql'));
+  sql.exec(migration('0059_cf114_report_workspace_version_guard.sql'));
   const caseId = '78000000-0000-4000-8000-000000000108';
   const now = new Date().toISOString();
   sql.run('INSERT INTO preview_cases (id,organization_id,case_number,title,claim_type,status,version,category_major,category_middle,category_minor,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [caseId,'concost','CC-2026-78108','목차 반영 테스트','TYPE-01','INQUIRY',1,'클레임','기술검토','보고서',ADMIN_ID,now,now]);
@@ -119,6 +120,10 @@ test('CF108 collaboration APPLY uses the latest saved outline title, not the ass
   assert.equal(deniedSave.status, 403);
   const uuidSave = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { ...savePayload, selectedChapterId: '78000000-0000-4000-8000-000000000109' });
   assert.equal(uuidSave.status, 200);
+  assert.equal((await uuidSave.json() as { draft: { version: number } }).draft.version, 1, 'chapter navigation retains the approved content version');
+  const actualEdit = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { ...savePayload, content: '기존 다른 챕터 보존\n\n추가 검수 본문' });
+  assert.equal(actualEdit.status, 200);
+  assert.equal((await actualEdit.json() as { draft: { version: number } }).draft.version, 2, 'a real content edit advances the version');
   const staleSave = await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', savePayload);
   assert.equal(staleSave.status, 409);
   const outline = await call('/api/report-authoring/outline', 'PUT', { caseId, status: 'CONFIRMED', expectedVersion: 0, items: config.chapters.map(ch => ({ chapterId: ch.id, chapterCode: ch.chapterCode, chapterTitle: ch.id === chapter.id ? '검수 중 수정한 최신 제목' : ch.title, promptVersion: ch.promptVersion, planningNote: '' })) });
@@ -138,6 +143,65 @@ test('CF108 collaboration APPLY uses the latest saved outline title, not the ass
   assert.ok(backups?.values.length);
   assert.deepEqual(JSON.parse(String(backups.values[0][0])),headerJson);
   sql.close();
+});
+
+test('CF114 collaboration APPLY preserves other structured chapters and refuses stale or mismatched submissions without partial writes', async () => {
+  const { sql, env } = await setup();
+  try {
+    sql.exec(migration('0052_cf79_case_law_member_alerts_backups.sql'));
+    sql.exec(migration('0054_cf84_claim_report_guideline_package.sql'));
+    sql.exec(migration('0059_cf114_report_workspace_version_guard.sql'));
+    const caseId = '78000000-0000-4000-8000-000000000114', now = new Date().toISOString();
+    sql.run('INSERT INTO preview_cases (id,organization_id,case_number,title,claim_type,status,version,category_major,category_middle,category_minor,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [caseId,'concost','CC-2026-78114','협업 서식 보존 테스트','TYPE-01','INQUIRY',1,'클레임','기술검토','보고서',ADMIN_ID,now,now]);
+    const call = (path: string, method: string, body: unknown, token = ADMIN_TOKEN) => worker.fetch(req(path, token, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), env);
+    const config = await (await worker.fetch(req(`/api/report-authoring/config?caseId=${caseId}`, ADMIN_TOKEN), env)).json() as { chapters: Array<{ id: string; chapterCode: string; title: string }> };
+    const [chapter, otherChapter] = config.chapters;
+    assert.ok(chapter && otherChapter);
+    const path = `/api/report-chapter-collaboration?caseId=${caseId}`;
+    assert.equal((await call(path, 'PUT', { chapterId: chapter.id, assigneeId: STAFF_ID, expectedVersion: 0 })).status, 200);
+    const draftText = '제출한 협업 원문 그대로';
+    assert.equal((await call(path, 'POST', { chapterId: chapter.id, action: 'MARK_READY', draftText, expectedVersion: 1, expectedReportVersion: 0 }, STAFF_TOKEN)).status, 200);
+    const marker = (code: string, edge: string) => ({ type: 'aiChapterMarker', attrs: { marker: `MANUAL-CHAPTER:${code}:${edge}` } });
+    const paragraph = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+    const untouched = [marker(otherChapter.chapterCode, 'START'), { type: 'heading', attrs: { level: 2, textAlign: 'center' }, content: [{ type: 'text', text: '다른 챕터 제목', marks: [{ type: 'underline' }] }] }, { type: 'paragraph', attrs: { textAlign: 'right' }, content: [{ type: 'text', text: '강조한 근거 123,456원', marks: [{ type: 'highlight' }] }] }, { type: 'image', attrs: { src: 'data:image/png;base64,iVBORw0KGgo=', width: 320, height: 120 } }, { type: 'table', content: [{ type: 'tableRow', content: [{ type: 'tableCell', attrs: { colspan: 2, colwidth: [100, 120] }, content: [paragraph('병합 셀 보존')] }] }] }, marker(otherChapter.chapterCode, 'END')];
+    const document = { type: 'doc', attrs: { reportHeader: { enabled: false, text: '사용자 머리글' } }, content: [marker(chapter.chapterCode, 'START'), paragraph('교체할 기존 챕터'), marker(chapter.chapterCode, 'END'), ...untouched] };
+    const content = `<!-- MANUAL-CHAPTER:${chapter.chapterCode}:START -->\n교체할 기존 챕터\n<!-- MANUAL-CHAPTER:${chapter.chapterCode}:END -->\n\n<!-- MANUAL-CHAPTER:${otherChapter.chapterCode}:START -->\n다른 챕터 제목\n강조한 근거 123,456원\n<!-- MANUAL-CHAPTER:${otherChapter.chapterCode}:END -->`;
+    assert.equal((await call(`/api/report-drafts?caseId=${caseId}`, 'PUT', { title: '협업 보고서', content, editorJson: document, expectedVersion: 0, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' })).status, 200);
+    const generated = { type: 'doc', content: [marker(chapter.chapterCode, 'START'), { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: `${chapter.chapterCode} ${chapter.title}` }] }, paragraph(draftText), marker(chapter.chapterCode, 'END')] };
+    const apply = { chapterId: chapter.id, action: 'APPLY', draftText, expectedVersion: 2, expectedReportVersion: 1 };
+    const snapshot = () => Object.fromEntries(['preview_report_drafts','preview_report_revisions','preview_report_chapter_assignments','preview_report_chapter_revisions','preview_case_activities'].map(table => [table, sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)]));
+    const before = snapshot();
+    for (const [body, status, code] of [
+      [apply, 409, 'EDITOR_RELOAD_REQUIRED'],
+      [{ ...apply, draftText: '제출 이후 바뀐 미저장 원고', draftEditorJson: generated }, 409, 'CHAPTER_NOT_READY'],
+      [{ ...apply, draftEditorJson: { type: 'doc', content: [marker(otherChapter.chapterCode, 'START'), paragraph(draftText), marker(otherChapter.chapterCode, 'END')] } }, 400, 'INVALID_CHAPTER_DOCUMENT']
+    ] as const) {
+      const response = await call(path, 'POST', body);
+      assert.equal(response.status, status); assert.equal((await response.json() as { code: string }).code, code);
+      assert.deepEqual(snapshot(), before, code);
+    }
+    // A chapter can change after the route's initial read but before D1's batch.
+    // Simulate that precise race; the report/revision/activity writes must all skip.
+    const d1 = env.DB as unknown as SqlD1, batch = d1.batch.bind(d1);
+    let afterConcurrentSave: ReturnType<typeof snapshot> | undefined;
+    d1.batch = async statements => {
+      d1.batch = batch;
+      sql.run('UPDATE preview_report_chapter_assignments SET version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=?', [STAFF_ID, new Date(Date.now() + 1000).toISOString(), caseId, chapter.id]);
+      afterConcurrentSave = snapshot();
+      return batch(statements);
+    };
+    const raced = await call(path, 'POST', { ...apply, draftEditorJson: generated });
+    assert.equal(raced.status, 409); assert.deepEqual(snapshot(), afterConcurrentSave);
+    const applied = await call(path, 'POST', { ...apply, expectedVersion: 3, draftEditorJson: generated });
+    assert.equal(applied.status, 200, await applied.text());
+    const stored = sql.exec('SELECT content,editor_json,version FROM preview_report_drafts WHERE case_id=?', [caseId])[0].values[0];
+    const expected = { ...document, content: [...generated.content, ...untouched] };
+    assert.deepEqual(JSON.parse(String(stored[1])), expected, 'only the requested chapter is replaced; all other image, table, mark, alignment and header attributes survive');
+    assert.match(String(stored[0]), /제출한 협업 원문 그대로/u); assert.match(String(stored[0]), /강조한 근거 123,456원/u); assert.doesNotMatch(String(stored[0]), /교체할 기존 챕터/u);
+    assert.equal(stored[2], 2);
+    assert.deepEqual(JSON.parse(String(sql.exec('SELECT editor_json FROM preview_report_revisions WHERE case_id=? AND version=2', [caseId])[0].values[0][0])), expected);
+    assert.deepEqual(sql.exec('SELECT status,version FROM preview_report_chapter_assignments WHERE case_id=?', [caseId])[0].values, [['APPLIED', 4]]);
+  } finally { sql.close(); }
 });
 
 test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the original in Drive, and supports admin-only soft archive',async()=>{

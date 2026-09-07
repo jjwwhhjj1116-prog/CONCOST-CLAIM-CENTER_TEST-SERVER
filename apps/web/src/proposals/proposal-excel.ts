@@ -257,7 +257,23 @@ export function proposalChapterWorkbook(values: ProposalChapterExcelValues, proj
 }
 
 export function reportStudioWorkbook(values: ReportStudioExcelValues, projectLabel: string, templateName: string): Uint8Array {
-  const dataRows=reportStudioFields.map((field,index)=>{const row=index+4;return `<row r="${row}" ht="${field.code==='reportContent'?220:52}" customHeight="1">${cell(`A${row}`,field.code,'2')}${cell(`B${row}`,field.label,'2')}${cell(`C${row}`,values[field.code],'3')}${cell(`D${row}`,field.guide,'4')}</row>`;}).join('');
+  // Excel permits 32,767 UTF-16 characters and 253 line feeds per cell.
+  // Keep the original first-part code so existing single-cell workbooks import.
+  const contentParts: string[] = [];
+  let part = '', lineFeeds = 0;
+  for (const character of values.reportContent) {
+    if (part.length + character.length > 30_000 || (character === '\n' && lineFeeds === 200)) {
+      contentParts.push(part); part = ''; lineFeeds = 0;
+    }
+    part += character;
+    if (character === '\n') lineFeeds += 1;
+  }
+  contentParts.push(part);
+  const rows = reportStudioFields.flatMap(field => field.code === 'reportContent'
+    ? contentParts.map((value, index) => ({...field, code:index ? `reportContent:${index + 1}` : 'reportContent', label:contentParts.length > 1 ? `보고서 본문 (${index + 1}/${contentParts.length})` : field.label, value, guide:contentParts.length > 1 ? '본문이 이어지는 순서입니다. FIELD_CODE 행을 모두 유지하고 C열을 수정하세요.' : field.guide}))
+    : [{...field, value:values[field.code]}]);
+  if (contentParts.length > 1) rows.push({code:'reportContentParts',label:'본문 조각 수',value:String(contentParts.length),guide:'본문 누락 확인용 정보입니다. 변경하지 마세요.'});
+  const dataRows=rows.map((field,index)=>{const row=index+4;return `<row r="${row}"${field.code==='reportContentParts'?' hidden="1"':''} ht="${field.code.startsWith('reportContent')?220:52}" customHeight="1">${cell(`A${row}`,field.code,'2')}${cell(`B${row}`,field.label,'2')}${cell(`C${row}`,field.value,'3')}${cell(`D${row}`,field.guide,'4')}</row>`;}).join('');
   const worksheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="22" customWidth="1" hidden="1"/><col min="2" max="2" width="24" customWidth="1"/><col min="3" max="3" width="90" customWidth="1"/><col min="4" max="4" width="54" customWidth="1"/></cols><sheetData><row r="1" ht="32" customHeight="1">${cell('A1','클레임센터 스튜디오 · 프로젝트 보고서 작성 양식','1')}</row><row r="2">${cell('A2',`프로젝트: ${projectLabel} · 템플릿: ${templateName}`,'4')}</row><row r="3">${cell('A3','FIELD_CODE','2')}${cell('B3','작성 항목','2')}${cell('C3','프로젝트별 수정 내용','2')}${cell('D3','작성 안내','2')}</row>${dataRows}</sheetData><mergeCells count="2"><mergeCell ref="A1:D1"/><mergeCell ref="A2:D2"/></mergeCells></worksheet>`;
   const styles='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><color rgb="FF17326D"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF107C41"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF7CF"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border></borders><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="1" applyFill="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>';
   return zipStore([
@@ -481,9 +497,26 @@ export async function readReportStudioWorkbook(file: File): Promise<ReportStudio
   const sheetPath=await workbookFirstSheetPath(bytes);
   const [sheetXml,sharedStrings]=await Promise.all([zipEntry(bytes,sheetPath),workbookSharedStrings(bytes)]);
   const result={} as ReportStudioExcelValues;
+  const contentParts = new Map<number, string>();
+  let expectedParts: number | undefined;
   for(const cellValues of worksheetRows(sheetXml,sharedStrings)){
-    const code=cellValues.get('A') as keyof ReportStudioExcelValues;
-    if(reportStudioFields.some((field)=>field.code===code))result[code]=(cellValues.get('C')??'').trim();
+    const code=cellValues.get('A')??'';
+    const partMatch = /^reportContent(?::([1-9]\d*))?$/u.exec(code);
+    if (partMatch) {
+      const index = partMatch[1] ? Number(partMatch[1]) : 1;
+      if (!Number.isSafeInteger(index) || contentParts.has(index)) throw new Error('보고서 본문 순서가 중복되거나 올바르지 않습니다. FIELD_CODE 행을 확인하세요.');
+      contentParts.set(index, cellValues.get('C')??'');
+    } else if (code.startsWith('reportContent:')) throw new Error('보고서 본문 순서가 올바르지 않습니다. FIELD_CODE 행을 확인하세요.');
+    else if(code==='reportContentParts') {
+      if (expectedParts !== undefined) throw new Error('보고서 본문 조각 수가 중복되었습니다. 원본 양식을 확인하세요.');
+      expectedParts=Number(cellValues.get('C'));
+      if (!Number.isSafeInteger(expectedParts) || expectedParts < 1) throw new Error('보고서 본문 조각 수가 올바르지 않습니다. 원본 양식을 확인하세요.');
+    } else if(code==='reportTitle')result.reportTitle=(cellValues.get('C')??'').trim();
+  }
+  if (contentParts.size) {
+    const ordered = [...contentParts].sort(([left],[right])=>left-right);
+    if ((expectedParts !== undefined && expectedParts !== ordered.length) || ordered.some(([index], position)=>index!==position+1)) throw new Error('보고서 본문 일부가 누락되었습니다. FIELD_CODE 행을 모두 포함해 다시 가져오세요.');
+    result.reportContent=ordered.map(([,value])=>value).join('');
   }
   if(!reportStudioFields.every((field)=>typeof result[field.code]==='string'))throw new Error('보고서 필수 항목이 없습니다. 내보낸 양식의 FIELD_CODE 열을 변경하지 마세요.');
   return result;
@@ -586,14 +619,92 @@ export async function readProposalDocx(file: File): Promise<ProposalDocxChapter[
 export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   if(!file.name.toLowerCase().endsWith('.docx')||file.size>20_000_000)throw new Error('20MB 이하의 Word DOCX 보고서만 가져올 수 있습니다.');
   const documentXml=await zipEntry(new Uint8Array(await file.arrayBuffer()),'word/document.xml');
-  const paragraphs:string[]=[];
-  for(const paragraph of documentXml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/gu)){
-    const parts=[...paragraph[1].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gu)].map((match)=>unescapeXml(match[1]));
-    const text=parts.join('').replaceAll('\u00a0',' ').replace(/\s+/gu,' ').trim();
-    if(text)paragraphs.push(text);
+  const document = new DOMParser().parseFromString(documentXml, 'application/xml');
+  const elements = [...document.getElementsByTagName('*')];
+  if (elements.some(element=>element.localName==='parsererror')) throw new Error('Word 문서 구조를 읽지 못했습니다. DOCX 원본을 확인하세요.');
+  // These objects need their own importer. Never replace a reviewed report with
+  // a text-only subset while silently dropping its pictures, equations or notes.
+  if (elements.some(element=>['drawing','pict','object','altChunk','oMath','oMathPara','footnoteReference','endnoteReference'].includes(element.localName))) {
+    throw new Error('이 Word 문서에는 그림·개체·수식 또는 각주가 포함되어 있습니다. 해당 내용을 누락하지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. Word 원본에서 내용을 확인하고, 텍스트·표만 있는 DOCX를 가져오거나 필요한 내용을 편집기에 직접 추가하세요.');
   }
-  if(!paragraphs.length)throw new Error('Word 보고서에서 읽을 수 있는 본문을 찾지 못했습니다.');
-  const title=paragraphs[0].slice(0,300);
-  const body=paragraphs.slice(1).join('\n\n').trim()||paragraphs[0];
-  return{reportTitle:title,reportContent:body};
+  const child = (element: Element, name: string) => [...element.children].find(item=>item.localName===name);
+  const attr = (element: Element | undefined, name='val') => element?.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main',name) ?? element?.getAttribute(`w:${name}`) ?? '';
+  const enabled = (element: Element | undefined) => Boolean(element && !['0','false','off','none'].includes(attr(element)));
+  const escape = (value: string) => value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+  const plainText = (element: Element) => [...element.getElementsByTagName('*')].filter(item=>item.localName==='t').map(item=>item.textContent??'').join('');
+  const pageBreak = '<div data-document-page-break="true"></div>';
+  const inline = (element: Element): string => {
+    const name=element.localName;
+    if (name==='t') return escape(element.textContent??'');
+    if (name==='tab') return '&#160;'.repeat(4);
+    if (name==='br') return attr(element,'type')==='page' ? pageBreak : '<br>';
+    if (name==='cr') return '<br>';
+    if (name==='noBreakHyphen') return '\u2011';
+    if (name==='softHyphen') return '\u00ad';
+    if (['rPr','pPr','del','delText','instrText'].includes(name)) return '';
+    let html=[...element.children].map(inline).join('');
+    if (name==='r') {
+      const properties=child(element,'rPr');
+      if (properties) {
+        const color=attr(child(properties,'color')), size=Number(attr(child(properties,'sz')));
+        const styles=[/^[\da-f]{6}$/iu.test(color)?`color:#${color}`:'',size>0&&size<=400?`font-size:${size/2}pt`:''].filter(Boolean);
+        html=html.split(pageBreak).map(part=>{
+          if (enabled(child(properties,'b'))) part=`<strong>${part}</strong>`;
+          if (enabled(child(properties,'i'))) part=`<em>${part}</em>`;
+          if (enabled(child(properties,'u'))) part=`<u>${part}</u>`;
+          if (enabled(child(properties,'strike'))) part=`<s>${part}</s>`;
+          if (styles.length) part=`<span style="${styles.join(';')}">${part}</span>`;
+          return part;
+        }).join(pageBreak);
+      }
+    }
+    return html;
+  };
+  const render = (element: Element): string => {
+    if (element.localName==='p') {
+      const properties=child(element,'pPr');
+      const alignment=attr(properties&&child(properties,'jc'));
+      const style=alignment&&['left','right','center','both'].includes(alignment)?` style="text-align:${alignment==='both'?'justify':alignment}"`:'';
+      const heading=/^Heading([1-6])$/iu.exec(attr(properties&&child(properties,'pStyle')));
+      const tag=heading?`h${heading[1]}`:'p';
+      const html=[...element.children].map(inline).join('');
+      return `${enabled(properties&&child(properties,'pageBreakBefore'))?pageBreak:''}${html.split(pageBreak).map(part=>`<${tag}${style}>${part||'<br>'}</${tag}>`).join(pageBreak)}`;
+    }
+    if (element.localName==='tbl') {
+      type ImportedCell = { html:string; colspan:number; rowspan:number; heading:boolean };
+      const rows: ImportedCell[][]=[];
+      let previous = new Map<number,ImportedCell>();
+      for (const row of [...element.children].filter(item=>item.localName==='tr')) {
+        const cells: ImportedCell[]=[]; const next=new Map<number,ImportedCell>();
+        let column=0;
+        for (const cellNode of [...row.children].filter(item=>item.localName==='tc')) {
+          const properties=child(cellNode,'tcPr');
+          const colspan=Math.max(1,Number(attr(properties&&child(properties,'gridSpan')))||1);
+          const merge=properties&&child(properties,'vMerge');
+          if (merge && attr(merge)!=='restart') {
+            const anchor=previous.get(column);
+            if (!anchor || anchor.colspan!==colspan || plainText(cellNode).trim()) throw new Error('Word 표의 세로 병합 구조를 안전하게 옮길 수 없습니다. Word에서 해당 표를 확인한 뒤 다시 가져오세요. 기존 보고서는 유지됩니다.');
+            anchor.rowspan+=1;
+            for(let offset=0;offset<colspan;offset+=1)next.set(column+offset,anchor);
+          } else {
+            const cell={html:[...cellNode.children].map(render).join(''),colspan,rowspan:1,heading:enabled(child(row,'trPr')&&child(child(row,'trPr')!,'tblHeader'))};
+            cells.push(cell);
+            if(merge)for(let offset=0;offset<colspan;offset+=1)next.set(column+offset,cell);
+          }
+          column+=colspan;
+        }
+        rows.push(cells);previous=next;
+      }
+      return `<table><tbody>${rows.map(row=>`<tr>${row.map(cell=>{const tag=cell.heading?'th':'td';return `<${tag}${cell.colspan>1?` colspan="${cell.colspan}"`:''}${cell.rowspan>1?` rowspan="${cell.rowspan}"`:''}>${cell.html}</${tag}>`;}).join('')}</tr>`).join('')}</tbody></table>`;
+    }
+    if (['tcPr','tblPr','tblGrid','sectPr','del'].includes(element.localName)) return '';
+    return [...element.children].map(render).join('');
+  };
+  const body=elements.find(element=>element.localName==='body');
+  if(!body||!plainText(body).trim())throw new Error('Word 보고서에서 읽을 수 있는 본문을 찾지 못했습니다.');
+  const blocks=[...body.children].filter(element=>element.localName!=='sectPr');
+  const firstParagraph=blocks[0]?.localName==='p'?blocks[0]:undefined;
+  const title=firstParagraph?plainText(firstParagraph).replace(/\s+/gu,' ').trim().slice(0,300):file.name.replace(/\.docx$/iu,'');
+  const content=blocks.length>1&&firstParagraph&&title?blocks.slice(1):blocks;
+  return{reportTitle:title||file.name.replace(/\.docx$/iu,''),reportContent:content.map(render).join('\n')};
 }

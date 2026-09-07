@@ -524,6 +524,16 @@ const createTurndown = () => {
     filter: node => node instanceof HTMLElement && node.hasAttribute('data-document-spacer'),
     replacement: (_content, node) => `\n\n${spacerMarker((node as HTMLElement).getAttribute('data-document-spacer'))}\n\n`
   });
+  // Markdown has no paragraph alignment, underline or highlight syntax. Keep
+  // these editor fragments as HTML so a later import retains their formatting.
+  service.addRule('alignedDocumentBlock', {
+    filter: node => node instanceof HTMLElement && /^(P|H[1-6])$/u.test(node.tagName) && ['left', 'center', 'right', 'justify'].includes(node.style.textAlign),
+    replacement: (_content, node) => `\n\n${DOMPurify.sanitize((node as HTMLElement).outerHTML, { ADD_ATTR: ['style'] })}\n\n`
+  });
+  service.addRule('documentInlineEmphasis', {
+    filter: ['u', 'mark'],
+    replacement: (_content, node) => DOMPurify.sanitize((node as HTMLElement).outerHTML)
+  });
   service.addRule('documentTextStyle', {
     filter: (node) => node instanceof HTMLElement && node.tagName === 'SPAN' && Boolean(normalizeFontFamily(node.style.fontFamily) || normalizeFontSize(node.style.fontSize) || normalizeTextColor(node.style.color)),
     replacement: (content, node) => {
@@ -667,6 +677,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [selectedCellCount, setSelectedCellCount] = useState(0);
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState('');
+  const [blockStyle, setBlockStyle] = useState('paragraph');
   const [inheritedFontSize, setInheritedFontSize] = useState('16');
   const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
   const [copyStatus, setCopyStatus] = useState('');
@@ -695,6 +706,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   };
 
   const syncContextualControls = (activeEditor: Editor) => {
+    setBlockStyle(activeEditor.isActive('heading') ? `h${activeEditor.getAttributes('heading').level}` : 'paragraph');
     const selection = activeEditor.state.selection;
     let cellCount = 0;
     if (selection instanceof CellSelection) selection.forEachCell(() => { cellCount++; });
@@ -793,6 +805,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     },
     immediatelyRender: false,
     onUpdate: ({ editor: activeEditor, transaction }) => {
+      if (!transaction.docChanged) return;
       const imageSize = transaction.getMeta('document-image-resize');
       if (imageSize) {
         const action: RepeatableDocumentAction = { kind: 'attributes', target: 'image', attrs: imageSize };
@@ -820,7 +833,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   useEffect(() => {
     if (!editor?.isInitialized || editor.isDestroyed) return;
-    editor.setEditable(!readOnly);
+    editor.setEditable(!readOnly, false);
   }, [editor, readOnly]);
 
   useEffect(() => {
@@ -850,8 +863,16 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     if (!fullscreen) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = previous; };
-  }, [fullscreen]);
+    const closeFullscreen = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+      if (tableDialogOpen) { event.preventDefault(); setTableDialogOpen(false); return; }
+      if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) return;
+      event.preventDefault(); setFullscreen(false);
+    };
+    // ProseMirror can consume Escape while the editing surface has focus.
+    window.addEventListener('keydown', closeFullscreen, true);
+    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', closeFullscreen, true); };
+  }, [fullscreen, tableDialogOpen]);
 
   const deleteSelectedImageNode = (): { deleted: boolean; src?: string } => {
     if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return { deleted: false };
@@ -1083,6 +1104,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     </header>
     {!readOnly && !preview && <div className="structured-editor__toolbar" role="toolbar" aria-label="문서 서식 도구">
       <div className="structured-editor__format-ribbon" role="group" aria-label="글자 서식">
+      <div className="structured-editor__toolbar-group structured-editor__paragraph-controls" data-label="문단">
+        <label><span>문단 스타일</span><select aria-label="문단 스타일" value={blockStyle} onChange={event => {
+          if (event.target.value === 'paragraph') editor?.chain().focus().setParagraph().run();
+          else editor?.chain().focus().setHeading({ level: Number(event.target.value.slice(1)) as 1 | 2 | 3 }).run();
+        }}><option value="paragraph">본문</option>{[1, 2, 3].map(level => <option key={level} value={`h${level}`}>제목 {level}</option>)}{['h4', 'h5', 'h6'].includes(blockStyle) && <option value={blockStyle}>제목 {blockStyle.slice(1)}</option>}</select></label>
+        <ToolbarButton label="글머리 기호 목록" active={editor?.isActive('bulletList')} onClick={() => editor?.chain().focus().toggleBulletList().run()}>글머리 목록</ToolbarButton>
+        <ToolbarButton label="번호 매기기 목록" active={editor?.isActive('orderedList')} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>번호 목록</ToolbarButton>
+      </div>
       <div className="structured-editor__toolbar-group structured-editor__text-controls" data-label="글자">
         <label><span>기본 글꼴</span><select aria-label="선택 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{['기본','한글 기본·시스템','무료 한글 글꼴','영문 글꼴'].map((group) => <optgroup key={group} label={group}>{FONT_FAMILIES.filter((font) => font.group === group).map((font) => <option key={font.label} value={font.value} style={font.value ? { fontFamily: font.value } : undefined}>{font.label}</option>)}</optgroup>)}</select></label>
         <label><span>크기</span><select aria-label="선택 글자 크기" value={fontSize} onChange={(event) => applyTextFormatting({ fontSize: event.target.value })}>{availableFontSizes.map((size) => <option key={size || 'default'} value={size}>{size ? `${size}px` : `${inheritedFontSize}px (기본)`}</option>)}</select></label>

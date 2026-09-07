@@ -129,6 +129,15 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
     const isFittedSheet = elements[index].dataset.exportPagePolicy === 'fit';
     if (index === 0 || index === elements.length - 1 || (index + 1) % 3 === 0) onProgress?.(`미리보기 ${index + 1}/${elements.length} 페이지를 고해상도로 변환하고 있습니다.`);
     const captureId = `final-export-page-${Date.now()}-${index}`;
+    // html2canvas's cloned document can apply a different list reset. Preserve
+    // the reviewed markers, continuation markers and indentation explicitly.
+    const listProperties = ['display', 'list-style-type', 'list-style-position',
+      'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+      'margin-top', 'margin-right', 'margin-bottom', 'margin-left'];
+    const listStyles = Array.from(elements[index].querySelectorAll<HTMLElement>('ol, ul, li'), (node) => {
+      const computed = getComputedStyle(node);
+      return listProperties.map((property) => [property, computed.getPropertyValue(property)] as const);
+    });
     elements[index].dataset.finalExportCapture = captureId;
     const canvas = await html2canvas(elements[index], {
       backgroundColor: '#ffffff',
@@ -148,6 +157,9 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
         if (isFittedSheet) clonedPage.style.overflow = 'hidden';
         clonedPage.style.margin = '0';
         clonedPage.style.boxSizing = 'border-box';
+        clonedPage.querySelectorAll<HTMLElement>('ol, ul, li').forEach((node, listIndex) => {
+          listStyles[listIndex]?.forEach(([property, value]) => node.style.setProperty(property, value, 'important'));
+        });
       },
     });
     delete elements[index].dataset.finalExportCapture;
@@ -180,7 +192,8 @@ const createDocx = async (pages: CapturedPage[], orientation: FinalDocumentOrien
     sections: [{
       properties: {
         page: {
-          size: { width: layout.docxWidth, height: layout.docxHeight, orientation: orientation === 'portrait' ? PageOrientation.PORTRAIT : PageOrientation.LANDSCAPE },
+          // docx swaps the portrait base dimensions when LANDSCAPE is selected.
+          size: { width: Math.min(layout.docxWidth, layout.docxHeight), height: Math.max(layout.docxWidth, layout.docxHeight), orientation: orientation === 'portrait' ? PageOrientation.PORTRAIT : PageOrientation.LANDSCAPE },
           margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 },
         },
       },

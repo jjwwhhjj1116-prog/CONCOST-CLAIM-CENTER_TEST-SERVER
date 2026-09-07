@@ -6,17 +6,31 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
   const pages: string[] = [];
   let overflow = height < 40;
   const fits = () => tester.scrollHeight <= height + 1 && tester.scrollWidth <= source.clientWidth + 1;
-  const commit = () => { if (tester.childNodes.length) { pages.push(tester.innerHTML); tester.replaceChildren(); } };
+  const commit = (explicitBreak = false) => { if (tester.childNodes.length || explicitBreak) { pages.push(tester.innerHTML); tester.replaceChildren(); } };
   const appendAtomic = (node: Node) => {
     const copy = node.cloneNode(true); tester.append(copy);
     if (fits()) return;
     copy.parentNode?.removeChild(copy); commit(); tester.append(copy);
     if (!fits()) overflow = true;
   };
+  const retainListOrdinals = (root: HTMLElement) => {
+    for (const list of [...(root.tagName==='OL'?[root]:[]), ...root.querySelectorAll<HTMLOListElement>('ol')]) {
+      const items=[...list.children].filter(item=>item.tagName==='LI');
+      const reversed=list.hasAttribute('reversed');
+      let ordinal=Number(list.getAttribute('start')??(reversed?items.length:1));
+      for(const item of items){
+        if(item.hasAttribute('value'))ordinal=Number(item.getAttribute('value'));
+        item.setAttribute('value',String(ordinal));ordinal+=reversed?-1:1;
+      }
+    }
+  };
   // DOM ranges retain inline formatting, links, line breaks and images when a
   // paragraph is taller than a sheet. Only text/BR boundaries can be split.
   const splitTextBlock = (block: HTMLElement) => {
     let rest = block.cloneNode(true) as HTMLElement;
+    // A nested ordered list may begin half-way down a later page. Persist each
+    // item's display ordinal in this render-only clone before ranges split it.
+    retainListOrdinals(rest);
     while (rest.childNodes.length) {
       tester.append(rest);
       if (fits()) return;
@@ -37,8 +51,24 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
       }
       const fragment = (at: number, tail = false) => {
         const range = document.createRange(); range.selectNodeContents(rest);
-        if (tail) range.setStart(...positions[at]); else range.setEnd(...positions[at]);
-        const shell = rest.cloneNode(false) as HTMLElement; shell.append(range.cloneContents()); return shell;
+        const continuation: HTMLElement[]=[];
+        if (tail) {
+          let [container,offset]=positions[at];
+          // Starting at the end of a consumed LI otherwise leaves an empty
+          // numbered item in cloneContents(), shifting the following numbers.
+          while(container!==rest && offset===(container.nodeType===Node.TEXT_NODE?(container.textContent??'').length:container.childNodes.length)){
+            const parent=container.parentNode!;
+            offset=Array.prototype.indexOf.call(parent.childNodes,container)+1;container=parent;
+          }
+          range.setStart(container,offset);
+          for(let ancestor=container.nodeType===Node.ELEMENT_NODE?container as HTMLElement:container.parentElement;ancestor&&ancestor!==rest;ancestor=ancestor.parentElement){
+            if(ancestor.tagName==='LI'){ancestor.setAttribute('data-report-list-continuation','true');continuation.push(ancestor);}
+          }
+        } else range.setEnd(...positions[at]);
+        const shell = rest.cloneNode(false) as HTMLElement; shell.append(range.cloneContents());
+        for(const item of shell.querySelectorAll<HTMLElement>('[data-report-list-continuation]')){item.style.listStyleType='none';item.removeAttribute('data-report-list-continuation');}
+        continuation.forEach(item=>item.removeAttribute('data-report-list-continuation'));
+        return shell;
       };
       let low = 0, high = positions.length - 1, best = -1;
       while (low <= high) {
@@ -54,7 +84,6 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
       // A continuation is not a new indented paragraph/list item.
       rest.style.textIndent = '0';
       if (rest.tagName === 'LI') rest.style.listStyleType = 'none';
-      if (['UL', 'OL'].includes(rest.tagName) && rest.firstElementChild instanceof HTMLElement) rest.firstElementChild.style.listStyleType = 'none';
     }
   };
   const splitList = (list: HTMLOListElement) => {
@@ -101,8 +130,30 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
     if (!bodyRows.length && !fits()) { current.remove(); appendAtomic(table); }
   };
   try {
-    for (const node of [...source.childNodes].filter(node => node !== tester)) {
-      if (node instanceof HTMLElement && node.hasAttribute('data-document-page-break')) { commit(); continue; }
+    const nodes: Node[]=[];
+    for(const original of [...source.childNodes].filter(node=>node!==tester)){
+      if(!(original instanceof HTMLElement)||original.tagName==='TABLE'||original.querySelector('table')||!original.querySelector('[data-document-page-break]')){nodes.push(original);continue;}
+      const container=original.cloneNode(true) as HTMLElement;retainListOrdinals(container);
+      const range=document.createRange();range.selectNodeContents(container);
+      for(const marker of container.querySelectorAll('[data-document-page-break]')){
+        range.setEndBefore(marker);const contents=range.cloneContents();
+        if(contents.childNodes.length){const part=container.cloneNode(false);part.appendChild(contents);nodes.push(part);}
+        nodes.push(marker.cloneNode(true));
+        let boundary:Node=marker.parentNode!,offset=Array.prototype.indexOf.call(boundary.childNodes,marker)+1;
+        while(boundary!==container&&offset===boundary.childNodes.length){
+          const parent=boundary.parentNode!;offset=Array.prototype.indexOf.call(parent.childNodes,boundary)+1;boundary=parent;
+        }
+        range.setStart(boundary,offset);range.setEnd(container,container.childNodes.length);
+        // The next range may continue the same list item. Only its first sheet
+        // should show that marker; later siblings retain their own ordinals.
+        for(let ancestor=boundary as HTMLElement;ancestor&&ancestor!==container;ancestor=ancestor.parentElement!){
+          if(ancestor.tagName==='LI')ancestor.style.listStyleType='none';
+        }
+      }
+      const contents=range.cloneContents();if(contents.childNodes.length){const part=container.cloneNode(false);part.appendChild(contents);nodes.push(part);}
+    }
+    for (const node of nodes) {
+      if (node instanceof HTMLElement && node.hasAttribute('data-document-page-break')) { commit(true); continue; }
       const copy = node.cloneNode(true); tester.append(copy);
       if (fits()) continue;
       copy.parentNode?.removeChild(copy);

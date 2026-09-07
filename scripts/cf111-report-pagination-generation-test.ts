@@ -32,7 +32,7 @@ test('CF112 whole generation saves every chapter before next request and keeps f
   assert.match(source,/if \(!await saveNow\('MANUAL', false, true\)\)/);
   assert.match(source,/!authoredChapterCodes.has\(ch.chapterCode\)/);
   assert.match(source,/generationInFlight.current && !force/);assert.match(source,/if \(!renderedHtml.trim\(\)\) throw/);
-  assert.match(source,/readOnly=\{generating \|\| savingOutline\}/);assert.match(source,/generationBlockedReason \|\| \(dirty/);
+  assert.match(source,/readOnly=\{generating \|\| savingOutline \|\| improving \|\| saving \|\| Boolean\(chapterBusy\)\}/);assert.match(source,/generationBlockedReason \|\| \(dirty/);
   assert.match(source,/\/api\/report-authoring\/case-law\?caseId=\$\{encodeURIComponent\(requestCaseId\)\}&chapterId=\$\{encodeURIComponent\(chapter.id\)\}/);
 });
 test('CF111 actual landscape sheets are shared by preview and export; capture re-queries after refit',()=>{

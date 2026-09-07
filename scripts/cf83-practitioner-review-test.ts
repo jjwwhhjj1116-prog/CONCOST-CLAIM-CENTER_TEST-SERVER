@@ -39,10 +39,12 @@ test('CF83 proposal review re-entry and project-specific printing remain availab
   const claimTypes = read('apps/web/src/claim-types.ts');
 
   assert.doesNotMatch(proposal, /canResumeReviewerEdits/u);
-  assert.match(proposal, /target>=3&&\(!firstThreeComplete\|\|dirty\)/u);
+  assert.match(proposal, /target>=3&&\(!firstThreeComplete\|\|\(dirty&&!currentVersion\)\)/u);
+  assert.match(proposal, /target>=4&&\(!allChaptersComplete\|\|dirty\|\|!currentVersion\)/u);
   assert.match(proposal, /작성 기준/u);
   assert.match(proposal, /실명 제출이 원칙/u);
-  assert.match(proposal, /apiDownloadPost/u);
+  assert.match(proposal, /downloadFinalDocument/u);
+  assert.match(proposal, /orientation:'portrait'/u);
   assert.match(schedule, /이 프로젝트 상세 일정 출력/u);
   assert.match(print, /projectId/u);
   assert.match(print, /WORKFLOW_STAGES/u);
@@ -50,7 +52,7 @@ test('CF83 proposal review re-entry and project-specific printing remain availab
   assert.match(claimTypes, /현장조사 및 수량산출 클레임/u);
 });
 
-test('CF83 approved proposal DOCX and PDF use editable A4 landscape output', () => {
+test('CF83/CF95 approved proposal DOCX and PDF use editable A4 portrait output', () => {
   const document: ProposalExportDocument = {
     proposalId: 'proposal-cf83', versionId: 'version-cf83', versionNumber: 3,
     projectTitle: '실무자 검토 반영 제안서', clientName: '컨코스트 발주처', subtitle: '확정 출력 검수',
@@ -60,10 +62,10 @@ test('CF83 approved proposal DOCX and PDF use editable A4 landscape output', () 
   };
   const docxText = new TextDecoder().decode(generateProposalDocx(document));
   const pdfText = new TextDecoder().decode(generateProposalPdf(document));
-  assert.match(docxText, /w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/u);
+  assert.match(docxText, /w:pgSz w:w="11906" w:h="16838"/u);
   assert.match(docxText, /편집 가능한 본문/u);
-  assert.match(pdfText, /\/MediaBox \[0 0 842 595\]/u);
-  assert.doesNotMatch(pdfText, /\/MediaBox \[0 0 595 842\]/u);
+  assert.match(pdfText, /\/MediaBox \[0 0 595 842\]/u);
+  assert.doesNotMatch(pdfText, /\/MediaBox \[0 0 842 595\]/u);
 });
 
 test('CF83 reviewed meeting minutes download as the company-form XLSX instead of plain text', () => {

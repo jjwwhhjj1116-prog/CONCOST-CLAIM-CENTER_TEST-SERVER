@@ -5,7 +5,7 @@ import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 import { WorkspaceHelpCenter } from './WorkspaceHelpCenter';
 import { SoftLaunchNotice } from './SoftLaunchNotice';
-import { ReleaseNotice, hasSeenRelease, markReleaseSeen } from './ReleaseNotice';
+import { ReleaseNotice, RELEASE_DATE_LABEL, hasSeenRelease, markReleaseSeen } from './ReleaseNotice';
 
 const NAVIGATION_GROUPS: readonly {
   label: string;
@@ -291,7 +291,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
             <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
           </button>
-          <button type="button" className="theme-toggle" aria-label="2026년 9월 4일 업데이트 내역 보기" onClick={() => setReleaseOpen(true)}><span aria-hidden="true">↻</span><strong>업데이트</strong></button>
+          <button type="button" className="theme-toggle" aria-label={`${RELEASE_DATE_LABEL} 업데이트 내역 보기`} onClick={() => setReleaseOpen(true)}><span aria-hidden="true">↻</span><strong>업데이트</strong></button>
           <WorkspaceHelpCenter category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} suspended={releaseOpen || alertsOpen} onNavigate={go} />
           <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${memberAlerts.awards.length+memberAlerts.todos.length}건`} onClick={()=>setAlertsOpen(true)}>
             <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><strong>알림</strong>{memberAlerts.awards.length+memberAlerts.todos.length>0&&<em>{memberAlerts.awards.length+memberAlerts.todos.length}</em>}

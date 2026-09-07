@@ -41,7 +41,10 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /<StructuredDocumentEditor key=\{`proposal-\$\{activeProposal\.id\}-\$\{chapter\.number\}`\}/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);
-  assert.doesNotMatch(editor, /data-label="문단"/u);
+  assert.match(editor, /data-label="문단"/u);
+  assert.match(editor, /문단 스타일/u);
+  assert.match(editor, /toggleBulletList/u);
+  assert.match(editor, /toggleOrderedList/u);
   assert.doesNotMatch(editor, /data-label="목록"/u);
 });
 

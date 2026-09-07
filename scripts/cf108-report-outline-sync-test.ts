@@ -47,7 +47,7 @@ test('CF108 saves current document and version refs, locks concurrent saves and 
   assert.match(source, /!outlineSyncPending && !savingOutline/u);
   assert.match(source, /!rendered.trim\(\)/u);
   assert.match(source, /목차·본문 제목 저장/u);
-  assert.match(source, /readOnly=\{!editable \|\| savingOutline\}/u);
+  assert.match(source, /readOnly=\{!editable \|\| savingOutline \|\| improving \|\| saving \|\| Boolean\(chapterBusy\)\}/u);
   const worker = readFileSync('apps/cloudflare/src/index.ts', 'utf8');
   assert.match(worker, /const chapterTitle = outline.items.find/u);
   assert.match(worker, /replacePreviewReportChapter\(report.content, current.chapterCode, chapterTitle, draftText\)/u);

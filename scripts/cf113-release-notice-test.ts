@@ -5,7 +5,8 @@ const read = (path:string) => readFileSync(new URL('../'+path,import.meta.url),'
 const release = read('apps/web/src/layout/ReleaseNotice.tsx');
 const shell = read('apps/web/src/layout/AppShell.tsx');
 test('CF113 dated cumulative notice describes actual feature updates and connection limitations', () => {
-  assert.match(release,/RELEASE_DATE = '2026-09-04'/);
+  assert.match(release,/RELEASE_DATE = '2026-09-07'/);
+  assert.match(release,/2026년 8월 31일 가오픈 이후 9월 7일까지/);
   for (const label of ['보고서 AI 초안 작성','보고서 편집·A4 페이지','제안서 작성·편집','프로젝트 일정·업무 화면','회의록 양식·Excel 출력','Drive 자료실·명함 관리','이번 배포에 포함된 최근 개선사항','실제 메일 발송 기능이 아닙니다']) assert.ok(release.includes(label),label);
 });
 test('CF113 announcement persists by release and authenticated account, with permanent reopen', () => {
