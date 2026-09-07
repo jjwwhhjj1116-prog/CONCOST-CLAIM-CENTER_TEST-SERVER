@@ -108,7 +108,7 @@ test('CF103 company fields survive save/reopen, legacy clients, long event feeds
   sql.close();
 });
 
-test('CF11 persists kickoff, local structured minutes, site-survey folder plans, and team allocations', async () => {
+test('CF11 preserves reviewed imports without configured AI, site-survey folder plans, and team allocations', async () => {
   const { sql, env } = await setup();
   const initial = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow`), env);
   assert.equal(initial.status, 200);
@@ -126,12 +126,11 @@ test('CF11 persists kickoff, local structured minutes, site-survey folder plans,
   assert.equal((await saved.json() as { kickoff: { version: number } }).kickoff.version, 2);
 
   const generated = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff-summary`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ expectedVersion: 2 }) }), env);
-  assert.equal(generated.status, 200);
-  const generatedBody = await generated.json() as { kickoff: { version: number; status: string; summaryText: string; timeline: unknown[] } };
-  assert.equal(generatedBody.kickoff.version, 3);
-  assert.equal(generatedBody.kickoff.status, 'DRAFTED');
-  assert.match(generatedBody.kickoff.summaryText, /외부 AI 연결 전/u);
-  assert.equal(generatedBody.kickoff.timeline.length, 3);
+  assert.equal(generated.status, 423);
+  assert.equal((await generated.json() as any).code, 'PAID_NO_TRAINING_REQUIRED');
+  // No configured AI must not claim that a summary was generated. A reviewed import is saved atomically instead.
+  const imported = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ ...kickoffPayload, expectedVersion: 2, summaryText: '검수한 회의록 요약', timeline: [{ title: '후속 업무', detail: '마감팀이 20일까지 물량을 산출한다.' }] }) }), env);
+  assert.equal(imported.status, 200, await imported.text());
 
   const siteSurvey = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ surveyDate: '2030-08-14', location: '101동 외벽', scopeText: '외벽 균열 및 누수 전수 확인', leadUnit: '현장조사팀', rawNotes: '101동 동측 균열을 확인했고 누수 흔적은 추가 확인이 필요하다.', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 }) }), env);
   assert.equal(siteSurvey.status, 200);
@@ -142,12 +141,9 @@ test('CF11 persists kickoff, local structured minutes, site-survey folder plans,
   assert.match(surveyBody.siteSurveys[0].folderPath, /04_현장조사\/30\.08\.14/u);
 
   const surveyDraft = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey-summary`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ surveyDate: '2030-08-14', expectedVersion: 1 }) }), env);
-  assert.equal(surveyDraft.status, 200);
-  const surveyDraftBody = await surveyDraft.json() as { siteSurveys: Array<{ outputVersion: number; outputStatus: string; summaryText: string; timeline: unknown[] }> };
-  assert.equal(surveyDraftBody.siteSurveys[0].outputVersion, 2);
-  assert.equal(surveyDraftBody.siteSurveys[0].outputStatus, 'DRAFTED');
-  assert.match(surveyDraftBody.siteSurveys[0].summaryText, /현장조사/u);
-  assert.ok(surveyDraftBody.siteSurveys[0].timeline.length >= 1);
+  assert.equal(surveyDraft.status, 423);
+  const importedSurvey = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ surveyDate: '2030-08-14', location: '101동 외벽', scopeText: '외벽 균열 및 누수 전수 확인', leadUnit: '현장조사팀', rawNotes: '101동 동측 균열을 확인했고 누수 흔적은 추가 확인이 필요하다.', status: 'PLANNED', expectedVersion: 1, outputExpectedVersion: 1, summaryText: '현장조사: 균열 확인, 누수는 미확인.', timeline: [{ title: '추가 확인', detail: '누수 흔적 추가 확인 필요.' }] }) }), env);
+  assert.equal(importedSurvey.status, 200, await importedSurvey.text());
 
   const surveyConfirmed = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey-confirm`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ surveyDate: '2030-08-14', expectedVersion: 2 }) }), env);
   assert.equal(surveyConfirmed.status, 200);
@@ -167,6 +163,54 @@ test('CF11 persists kickoff, local structured minutes, site-survey folder plans,
   assert.deepEqual(restarted.exec('SELECT status, version FROM preview_workflow_kickoffs')[0].values[0], ['DRAFTED', 3]);
   assert.equal(restarted.exec('SELECT COUNT(*) FROM preview_workflow_events')[0].values[0][0], 6);
   restarted.close();
+  sql.close();
+});
+
+test('CF115 reviewed summary, timeline, raw source and form fields save atomically; invalid or stale writes change nothing', async () => {
+  const { sql, env } = await setup();
+  const base = `/api/cases/${CASE_ID}/workflow`;
+  const get = async () => { const response = await worker.fetch(request(base), env); assert.equal(response.status, 200); return response.json() as Promise<any>; };
+  const put = async (action: string, body: unknown, status = 200) => {
+    const response = await worker.fetch(request(base + action, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify(body) }), env);
+    assert.equal(response.status, status, await response.clone().text()); return response.json() as Promise<any>;
+  };
+  const snapshot = () => JSON.stringify(['preview_workflow_kickoffs', 'preview_site_surveys', 'preview_site_survey_outputs', 'preview_workflow_events'].map(table => sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)));
+  const rawNotes = '김검수: 당장 확정하지 않습니다.\n\n박실무: 담당자와 기한은 확인 필요합니다.\n원문 끝 🚧';
+  const summary = { summaryText: '검수 결과: 계약금액과 후속 담당자·기한은 미확정.', timeline: [{ title: '미확정 사항', detail: '담당자·기한 확인 필요, 임의 확정 금지.' }] };
+  const minutesFields = { author: '검수 담당자', authorDepartment: '기술부', authorPosition: '팀장', clientName: '합성 거래처', reportingDepartment: '클레임센터', referenceDepartments: '모든 부서', clientParticipants: '합성 발주처 담당자', attachmentName: '도면.pdf', meetingStartTime: '10:00', meetingEndTime: '11:20', participants: '김검수, 박실무', meetingTitle: '원문 근거 검토' };
+  const initial = await get();
+  const kickoff = { meetingAt: '2030-09-07T01:00:00.000Z', location: '회의실', agenda: '검토 안건', participantUnits: ['김검수', '박실무'], rawNotes, minutesFields, status: 'COMPLETED', expectedVersion: initial.kickoff.version, ...summary };
+  const saved = await put('/kickoff', kickoff);
+  const survey = { surveyDate: '2030-09-07', location: '조사 현장', scopeText: '조사 범위', leadUnit: '조사팀', rawNotes, minutesFields, status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0, ...summary };
+  const savedSurvey = await put('/site-survey', survey);
+  const row = savedSurvey.siteSurveys.find((entry: any) => entry.surveyDate === survey.surveyDate);
+  const currentInputs = [
+    ['/kickoff', { ...kickoff, expectedVersion: saved.kickoff.version }],
+    ['/site-survey', { ...survey, expectedVersion: row.version, outputExpectedVersion: row.outputVersion }]
+  ] as const;
+  const before = snapshot();
+  for (const [action, payload] of currentInputs) {
+    for (const invalid of [
+      { summaryText: '', timeline: [] }, { summaryText: '초과'.repeat(15001), timeline: [] },
+      { summaryText: '누락', timeline: undefined }, { summaryText: '잘못된 항목', timeline: [{ title: '제목', detail: '' }] },
+      { summaryText: '항목 수 초과', timeline: Array.from({ length: 21 }, () => ({ title: '확인', detail: '내용' })) }
+    ]) {
+      assert.equal((await put(action, { ...payload, ...invalid, rawNotes: '바뀌면 안 되는 원문' }, 400)).code, 'INVALID_SUMMARY_PAYLOAD');
+      assert.equal(snapshot(), before, action + ': invalid summary must roll back raw source and form metadata');
+    }
+    assert.equal((await put(action, { ...payload, expectedVersion: payload.expectedVersion - 1, rawNotes: '구버전 덮어쓰기' }, 409)).code, 'VERSION_CONFLICT');
+    assert.equal(snapshot(), before);
+  }
+  assert.equal((await put('/site-survey', { ...survey, expectedVersion: row.version, outputExpectedVersion: 0, scopeText: '부분 저장 금지' }, 409)).code, 'VERSION_CONFLICT');
+  assert.equal(snapshot(), before, 'stale output version cannot partially update survey details');
+  const fresh = await get();
+  for (const record of [fresh.kickoff, fresh.siteSurveys.find((entry: any) => entry.surveyDate === survey.surveyDate)]) {
+    assert.equal(record.rawNotes, rawNotes); assert.equal(record.summaryText, summary.summaryText);
+    assert.deepEqual(record.timeline, summary.timeline.map((entry, index) => ({ order: index + 1, ...entry })));
+    assert.deepEqual(record.minutesFields, minutesFields);
+  }
+  const edited = await put('/kickoff', { ...kickoff, rawNotes: rawNotes + '\n검수 후 원문 수정', expectedVersion: saved.kickoff.version, summaryText: undefined, timeline: undefined });
+  assert.equal(edited.kickoff.summaryText, ''); assert.deepEqual(edited.kickoff.timeline, [], 'source edits invalidate the previous summary');
   sql.close();
 });
 

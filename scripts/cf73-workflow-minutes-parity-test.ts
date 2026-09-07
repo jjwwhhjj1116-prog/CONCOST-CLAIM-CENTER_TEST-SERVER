@@ -43,21 +43,21 @@ test('CF73 keeps existing workflow data while adding the site-survey output ledg
   sql.close();
 });
 
-test('CF73 exposes independent import, automatic writing, persistent save, and right-side review for both workflows', () => {
+test('CF73 keeps persistence and review while CF115 connects import directly to automatic writing', () => {
   const source = readFileSync(rootFile('apps', 'web', 'src', 'workflow', 'WorkflowOperations.tsx'), 'utf8');
   const worker = readFileSync(rootFile('apps', 'cloudflare', 'src', 'index.ts'), 'utf8');
   const css = readFileSync(rootFile('apps', 'web', 'src', 'workflow', 'WorkflowOperations.css'), 'utf8');
 
-  assert.match(source, /1\. 파일 가져오기/u);
-  assert.match(source, /2\. 자동작성·정리/u);
-  assert.match(source, /3\. 회의 원문 저장/u);
-  assert.match(source, /4\. 저장본 자동작성·정리/u);
-  assert.match(source, /3\. 조사 원문 저장/u);
+  assert.match(source, /파일 선택·자동정리/u);
+  assert.match(source, /원본 보관 후 자동정리/u);
+  assert.match(source, /기록 저장/u);
+  assert.match(source, /저장본 자동정리/u);
+  assert.match(source, /원문 가져오기 완료 · AI 정리 미실행/u);
   assert.match(source, /현장조사 최종본 · 관찰사항 · 후속확인/u);
-  assert.match(source, /파일 자동작성 결과 · 저장 전/u);
+  assert.match(source, /파일 자동정리 결과 · 저장 전/u);
   assert.match(source, /archiveWorkflowResult/u);
   assert.match(source, /MEETING_MINUTES/u);
-  assert.match(source, /Google Drive 자동 저장 완료/u);
+  assert.match(source, /Google Drive (?:원본 보관|자동 저장) 완료/u);
   assert.match(source, /임시 보관 완료/u);
   assert.ok(source.indexOf('/workflow/kickoff`,') < source.indexOf('await persistSharedSchedule({ startDate: meetingDate'));
   assert.ok(source.indexOf('/workflow/site-survey`,') < source.indexOf('await persistSharedSchedule({ startDate: survey.surveyDate'));

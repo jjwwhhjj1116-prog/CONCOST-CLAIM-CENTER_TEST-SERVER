@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import initSqlJs, { type Database } from 'sql.js';
 import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index.js';
+import { minutesFieldDefaults } from '../apps/cloudflare/src/company-minutes.js';
+import { meetingMinutesWorkbook } from '../apps/web/src/proposals/proposal-excel.js';
 
 const ADMIN_ID = '00000000-0000-4000-8000-000000000001';
 const PM_ID = '00000000-0000-4000-8000-000000000002';
@@ -107,6 +109,19 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
   return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: 'AQ.SYNTHETIC_CF39_ORGANIZATION_KEY', GEMINI_TEST_FETCH: geminiFetch } };
 }
 
+const workflowResult = {
+  meetingAt: '2026-09-07T01:00:00.000Z', surveyDate: '2026-09-07', location: '합성 회의실', agenda: '현장 범위와 제출 일정',
+  participants: ['김검수'], leadUnit: '조사팀', sourceNotes: '김검수는 도면을 검토한다. 금액은 아직 미확정이다.', meetingContent: '김검수는 도면을 검토한다. 금액은 아직 미확정이다.',
+  summary: '현장 범위와 제출 일정을 논의했습니다. 김검수가 도면을 검토하며 금액은 미확정입니다.',
+  timeline: [{ title: '자료 검토', detail: '김검수가 9월 9일까지 도면을 검토한다.' }, { title: '미확정 사항', detail: '금액은 아직 미확정이다.' }],
+  missingFields: ['종료 시간'], minutesFields: { ...minutesFieldDefaults, author: '김검수', meetingTitle: '현장 범위와 제출 일정', participants: '김검수' }
+};
+const geminiResult = (result = workflowResult) => new Response(JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(result) }] } }] }), { headers: { 'Content-Type': 'application/json' } });
+async function approveWorkflowAi(env: CloudflareEnv) {
+  const response = await worker.fetch(request('/api/settings/ai-governance', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ providerServiceTier: 'PAID_NO_PRODUCT_IMPROVEMENT', confidentialExternalAiEnabled: true, expectedVersion: 1, acknowledgement: '유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다' }) }), env);
+  assert.equal(response.status, 200, await response.text());
+}
+
 test('CF43 PM choices are exactly the requested five members while the workspace Admin is excluded', async () => {
   const { sql, env } = await setup();
   const seededCase = sql.exec('SELECT version,updated_at FROM preview_cases WHERE id=?', [CASE_ID])[0].values[0];
@@ -184,6 +199,8 @@ test('CF39 all assigned login roles upload project-wide evidence categories and 
 
 test('CF39 kickoff notes use the Admin organization Gemini route and persist a safe meeting timeline', async () => {
   const { sql, env } = await setup();
+  await approveWorkflowAi(env);
+  env.GEMINI_TEST_FETCH = async () => geminiResult();
   const current = Number(sql.exec('SELECT COALESCE(version,0) FROM preview_workflow_kickoffs WHERE case_id=?', [CASE_ID])[0]?.values[0]?.[0] ?? 0);
   const save = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`, PM_TOKEN, { method: 'PUT', body: JSON.stringify({ meetingAt: '2026-08-21T01:00:00.000Z', location: '회의실', agenda: '현장 범위와 제출 일정 협의', participantUnits: ['발주처', '클레임센터'], rawNotes: '10:00 발주처 자료 목록 확인. 10:30 PM이 현장조사 범위를 정리하기로 함.', status: 'COMPLETED', expectedVersion: current }) }), env);
   assert.equal(save.status, 200);
@@ -411,12 +428,14 @@ test('CF53 project intake needs only the linked proposal result, then PM and dat
 test('CF40 internal text stays local by default, then minimizes identifiers under acknowledged paid policy', async () => {
   const { sql, env } = await setup();
   let providerCalls = 0;
-  env.GEMINI_TEST_FETCH = async () => {
+  let providerBody = '';
+  env.GEMINI_TEST_FETCH = async (_url, init) => {
     providerCalls += 1;
+    providerBody = String(init?.body);
     const result = {
       meetingAt: '2026-08-28T01:00:00.000Z', surveyDate: null, location: '현장 회의실', agenda: '현장 범위와 제출 일정',
       participants: ['발주처 담당자', '프로젝트 PM'], leadUnit: '클레임센터', sourceNotes: '10시 현장 범위 확인. 11시 제출일 합의.',
-      summary: '착수회의 내용을 원문 근거에 따라 정리한 검토용 초안입니다.', timeline: [{ title: '범위 확인', detail: '발주처 제공자료와 현장 범위를 확인했습니다.' }], missingFields: []
+      summary: '착수회의 내용을 원문 근거에 따라 정리한 검토용 초안입니다.', timeline: [{ title: '범위 확인', detail: '발주처 제공자료와 현장 범위를 확인했습니다.' }], missingFields: [], minutesFields: { ...minutesFieldDefaults }
     };
     return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(result) }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
@@ -437,11 +456,15 @@ test('CF40 internal text stays local by default, then minimizes identifiers unde
   assert.equal(imported.status, 200); assert.equal(providerCalls, 1);
   const body = await imported.json() as any;
   assert.equal(body.security.rawProviderPayloadStored, false); assert.ok(body.security.redactionCount >= 2);
+  assert.doesNotMatch(providerBody, /010-1234-5678|pm@example\.com/u);
+  assert.match(body.import.sourceNotes, /010-1234-5678/u); assert.match(body.import.sourceNotes, /pm@example\.com/u);
   assert.equal(body.import.location, '현장 회의실'); assert.equal(body.import.timeline.length, 1);
   const columns = sql.exec("PRAGMA table_info('preview_workflow_ai_imports')")[0].values.map((row) => row[1]);
   assert.equal(columns.includes('raw_payload'), false); assert.equal(columns.includes('response_text'), false);
   const ui = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'workflow', 'WorkflowOperations.tsx'), 'utf8');
-  assert.match(ui, /끌어 놓으면/u); assert.match(ui, /회사 회의록 XLSX 내보내기/u); assert.match(ui, /CONCOST_회의록_양식\.xlsx/u); assert.match(ui, /비학습 조건/u);
+  assert.match(ui, /끌어 놓으면/u); assert.match(ui, /회사 회의록 XLSX 내보내기/u); assert.match(ui, /CONCOST_회의록_양식\.xlsx/u);
+  assert.equal(localBody.import.summary, '');
+  assert.deepEqual(localBody.import.timeline, []);
   assert.match(ui, /PROJECT CALENDAR · SINGLE SOURCE/u);
   assert.match(ui, /persistSharedSchedule/u);
   assert.match(ui, /착수회의 기록 저장/u);
@@ -451,4 +474,201 @@ test('CF40 internal text stays local by default, then minimizes identifiers unde
   assert.match(scheduleUi, /전체 일정 저장 완료/u);
   assert.match(scheduleUi, /확인하고 닫기/u);
   sql.close();
+});
+
+function workflowForm(kind: 'KICKOFF' | 'SITE_SURVEY', file: File, dataClass = 'INTERNAL') {
+  const form = new FormData();
+  form.set('workflowKind', kind); form.set('dataClass', dataClass); form.set('file', file);
+  return form;
+}
+
+const workflowBase = `/api/cases/${CASE_ID}/workflow`;
+async function workflowJson(env: CloudflareEnv, action = '', body?: unknown, method = 'PUT') {
+  const response = await worker.fetch(request(workflowBase + action, PM_TOKEN, body === undefined ? {} : { method, body: JSON.stringify(body) }), env);
+  assert.equal(response.status, 200, await response.clone().text());
+  return response.json() as Promise<any>;
+}
+// Failed import audits may append, but source, outputs, metadata, and workflow events must not change.
+const workflowSnapshot = (sql: Database) => JSON.stringify(['preview_workflow_kickoffs', 'preview_site_surveys', 'preview_site_survey_outputs', 'preview_workflow_events'].map(table => sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)));
+const mediaFixtures = () => [
+  new File(['%PDF-1.7\n% synthetic route fixture\n%%EOF'], 'scan.pdf', { type: 'application/pdf' }),
+  new File([Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0]).buffer], 'scan.png', { type: 'image/png' }),
+  new File(['RIFF\u0004\u0000\u0000\u0000WAVE'], 'meeting.wav', { type: 'audio/wav' })
+];
+
+test('CF115 real company XLSX goes as complete text with the 12-field schema, then imports round-trip through both workflow saves', async () => {
+  const { sql, env } = await setup();
+  await approveWorkflowAi(env);
+  const bodies: any[] = [];
+  const fields = {
+    author: '김검수', authorDepartment: '기술부', authorPosition: '팀장', clientName: '합성 발주처', reportingDepartment: '클레임센터',
+    referenceDepartments: '모든 부서', clientParticipants: '이발주', attachmentName: '도면.pdf', meetingStartTime: '10:00', meetingEndTime: '11:30', participants: '김검수, 박실무', meetingTitle: '도면 검토회의'
+  };
+  const notes = ['김검수: 계약 도면을 확인합니다.', ...Array.from({ length: 100 }, (_, i) => `박실무: 쟁점 ${i + 1}의 범위와 증거는 아직 확인 필요합니다.`), '김검수: 마지막 원문 TAIL_CF115_끝, 금액은 미확정입니다.'].join('\n');
+  const bytes = meetingMinutesWorkbook({ ...fields, meetingDate: '2026. 09. 07', meetingTime: '10:00', location: '합성 회의실', summary: notes });
+  env.GEMINI_TEST_FETCH = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    // Deliberately shorten provider sourceNotes: locally extracted Office source must win.
+    return geminiResult({ ...workflowResult, sourceNotes: '짧은 전사문', meetingContent: notes, minutesFields: fields });
+  };
+  for (const kind of ['KICKOFF', 'SITE_SURVEY'] as const) {
+    const before = workflowSnapshot(sql);
+    const response = await worker.fetch(request(workflowBase + '/ai-import', PM_TOKEN, { method: 'POST', body: workflowForm(kind, new File([bytes as BlobPart], '회의록.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })) }), env);
+    assert.equal(response.status, 200, await response.clone().text());
+    const imported = (await response.json() as any).import;
+    assert.equal(workflowSnapshot(sql), before, 'import is a preview, not an implicit workflow save');
+    const body = bodies.at(-1);
+    const parts = body.contents[0].parts;
+    assert.equal(parts.length, 1); assert.equal(typeof parts[0].text, 'string');
+    assert.equal(parts.some((part: any) => part.inline_data || part.inlineData), false, 'Office ZIP must never be sent as unsupported inline Office media');
+    for (const value of ['김검수: 계약 도면', '쟁점 100', 'TAIL_CF115_끝']) {
+      assert.ok(parts[0].text.includes(value), value + ' reaches Gemini');
+      assert.ok(imported.sourceNotes.includes(value), value + ' survives import');
+    }
+    assert.equal(imported.meetingContent, notes);
+    assert.deepEqual(imported.minutesFields, fields);
+    assert.equal(body.generationConfig.responseMimeType, 'application/json');
+    assert.deepEqual(new Set(body.generationConfig.responseSchema.properties.minutesFields.required), new Set(Object.keys(minutesFieldDefaults)));
+    assert.ok(body.generationConfig.responseSchema.required.includes('meetingContent'));
+    const current = await workflowJson(env);
+    if (kind === 'KICKOFF') {
+      await workflowJson(env, '/kickoff', { meetingAt: imported.meetingAt, location: imported.location, agenda: imported.agenda, participantUnits: imported.participants, rawNotes: imported.sourceNotes, summaryText: imported.summary, timeline: imported.timeline, minutesFields: imported.minutesFields, status: 'COMPLETED', expectedVersion: current.kickoff.version });
+    } else {
+      await workflowJson(env, '/site-survey', { surveyDate: imported.surveyDate, location: imported.location, scopeText: imported.agenda, leadUnit: imported.leadUnit, rawNotes: imported.sourceNotes, summaryText: imported.summary, timeline: imported.timeline, minutesFields: imported.minutesFields, status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 });
+    }
+    const fresh = await workflowJson(env);
+    const record = kind === 'KICKOFF' ? fresh.kickoff : fresh.siteSurveys.find((row: any) => row.surveyDate === imported.surveyDate);
+    assert.equal(record.rawNotes, imported.sourceNotes); assert.equal(record.summaryText, imported.summary);
+    assert.deepEqual(record.timeline, imported.timeline); assert.deepEqual(record.minutesFields, fields);
+    assert.equal(kind === 'KICKOFF' ? record.status : record.outputStatus, 'DRAFTED');
+  }
+  assert.equal(bodies.length, 2);
+  const SQL = await initSqlJs(); const reopened = new SQL.Database(sql.export());
+  const afterRestart = await workflowJson({ ...env, DB: new SqlD1(reopened) as any });
+  for (const record of [afterRestart.kickoff, afterRestart.siteSurveys[0]]) {
+    assert.ok(record.rawNotes.includes('TAIL_CF115_끝')); assert.deepEqual(record.minutesFields, fields);
+    assert.equal(record.summaryText, workflowResult.summary);
+  }
+  reopened.close(); sql.close();
+});
+
+test('CF115 PDF, PNG and WAV retain normalized inline MIME and exact bytes for both import kinds', async () => {
+  const { sql, env } = await setup(); await approveWorkflowAi(env);
+  const captured: any[] = [];
+  env.GEMINI_TEST_FETCH = async (_url, init) => { captured.push(JSON.parse(String(init?.body))); return geminiResult(); };
+  const before = workflowSnapshot(sql);
+  for (const kind of ['KICKOFF', 'SITE_SURVEY'] as const) for (const file of mediaFixtures()) {
+    const response = await worker.fetch(request(workflowBase + '/ai-import', PM_TOKEN, { method: 'POST', body: workflowForm(kind, file) }), env);
+    assert.equal(response.status, 200, await response.clone().text());
+    const parts = captured.at(-1).contents[0].parts;
+    assert.equal(parts.length, 2); assert.equal(parts[1].inline_data.mime_type, file.type);
+    assert.deepEqual(Buffer.from(parts[1].inline_data.data, 'base64'), Buffer.from(await file.arrayBuffer()));
+    const body = await response.json() as any;
+    assert.equal(body.import.sourceNotes, workflowResult.sourceNotes); assert.deepEqual(body.import.minutesFields, workflowResult.minutesFields);
+  }
+  assert.equal(captured.length, 6); assert.equal(workflowSnapshot(sql), before); sql.close();
+});
+
+test('CF115 unapproved policy or missing key makes zero provider calls and never invents a summary', async () => {
+  for (const reason of ['POLICY', 'KEY'] as const) {
+    const { sql, env } = await setup(); let calls = 0;
+    if (reason === 'KEY') { await approveWorkflowAi(env); delete env.GEMINI_API_KEY; }
+    env.GEMINI_TEST_FETCH = async () => { calls++; throw new Error('Provider must not be called'); };
+    const dataClass = reason === 'POLICY' ? 'INTERNAL' : 'GENERAL';
+    const initial = await workflowJson(env);
+    const saved = await workflowJson(env, '/kickoff', { meetingAt: workflowResult.meetingAt, location: '회의실', agenda: '검토 안건', participantUnits: ['김검수'], rawNotes: '보존할 원문', summaryText: '기존 검수 요약', timeline: [], status: 'DRAFTED', expectedVersion: initial.kickoff.version });
+    await workflowJson(env, '/site-survey', { surveyDate: workflowResult.surveyDate, location: '현장', scopeText: '검토 범위', leadUnit: '조사팀', rawNotes: '보존할 조사 원문', summaryText: '기존 조사 요약', timeline: [], status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 });
+    const before = workflowSnapshot(sql);
+    for (const kind of ['KICKOFF', 'SITE_SURVEY'] as const) {
+      const local = await worker.fetch(request(workflowBase + '/ai-import', PM_TOKEN, { method: 'POST', body: workflowForm(kind, new File(['김검수: 금액은 미확정.\n마지막 원문 보존.'], 'memo.txt', { type: 'text/plain' }), dataClass) }), env);
+      assert.equal(local.status, 200, await local.clone().text()); const body = await local.json() as any;
+      assert.equal(body.generator, 'LOCAL_STRUCTURED_FALLBACK'); assert.equal(body.import.summary, ''); assert.deepEqual(body.import.timeline, []);
+      assert.equal(body.import.sourceNotes, '김검수: 금액은 미확정.\n마지막 원문 보존.');
+      for (const file of mediaFixtures()) {
+        const denied = await worker.fetch(request(workflowBase + '/ai-import', PM_TOKEN, { method: 'POST', body: workflowForm(kind, file, dataClass) }), env);
+        assert.equal(denied.status, reason === 'POLICY' ? 423 : 503);
+        assert.equal((await denied.json() as any).code, reason === 'POLICY' ? 'PAID_NO_TRAINING_REQUIRED' : 'ORGANIZATION_GEMINI_NOT_CONFIGURED');
+      }
+      const deniedSummary = await worker.fetch(request(workflowBase + (kind === 'KICKOFF' ? '/kickoff-summary' : '/site-survey-summary'), PM_TOKEN, { method: 'POST', body: JSON.stringify(kind === 'KICKOFF' ? { expectedVersion: saved.kickoff.version } : { surveyDate: workflowResult.surveyDate, expectedVersion: 1 }) }), env);
+      assert.equal(deniedSummary.status, reason === 'POLICY' ? 423 : 503);
+      assert.equal((await deniedSummary.json() as any).code, reason === 'POLICY' ? 'PAID_NO_TRAINING_REQUIRED' : 'ORGANIZATION_GEMINI_NOT_CONFIGURED');
+    }
+    assert.equal(calls, 0); assert.equal(workflowSnapshot(sql), before); sql.close();
+  }
+});
+
+test('CF115 malformed, empty, truncated and oversized AI responses never replace saved source or reviewed minutes', async (t) => {
+  const { sql, env } = await setup(); await approveWorkflowAi(env);
+  const current = await workflowJson(env);
+  const saved = await workflowJson(env, '/kickoff', { meetingAt: workflowResult.meetingAt, location: '원래 회의실', agenda: '기존 안건', participantUnits: ['기존 담당자'], rawNotes: '보존할 원문', summaryText: '보존할 검수 요약', timeline: [{ title: '기존 결정', detail: '승인 전 보존' }], minutesFields: { ...minutesFieldDefaults, author: '기존 담당자' }, status: 'DRAFTED', expectedVersion: current.kickoff.version });
+  await workflowJson(env, '/site-survey', { surveyDate: workflowResult.surveyDate, location: '원래 현장', scopeText: '기존 범위', leadUnit: '기존 팀', rawNotes: '보존할 조사 원문', summaryText: '보존할 조사 요약', timeline: [{ title: '기존 조사', detail: '추가 확인 전 보존' }], minutesFields: { ...minutesFieldDefaults, author: '기존 담당자' }, status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 });
+  const failures = [
+    ['invalid JSON', '{"summary":'], ['empty response', ''], ['empty summary', JSON.stringify({ ...workflowResult, summary: '' })],
+    ['empty source', JSON.stringify({ ...workflowResult, sourceNotes: '' })],
+    ['truncated JSON', JSON.stringify(workflowResult).slice(0, -3)],
+    ['provider MAX_TOKENS even with parseable JSON', JSON.stringify(workflowResult), 'MAX_TOKENS'],
+    ['provider SAFETY even with parseable JSON', JSON.stringify(workflowResult), 'SAFETY'],
+    ['provider RECITATION even with parseable JSON', JSON.stringify(workflowResult), 'RECITATION'],
+    ['oversized summary', JSON.stringify({ ...workflowResult, summary: '가'.repeat(30001) })],
+    ['oversized source', JSON.stringify({ ...workflowResult, sourceNotes: '가'.repeat(50001) })],
+    ['oversized response', 'x'.repeat(200001)]
+  ];
+  for (const [name, text, finishReason = 'STOP'] of failures) await t.test(name, async () => {
+    let calls = 0;
+    const expectedCode = finishReason === 'STOP' ? 'GEMINI_MALFORMED_RESPONSE' : 'WORKFLOW_AI_OUTPUT_INCOMPLETE';
+    env.GEMINI_TEST_FETCH = async () => { calls++; return new Response(JSON.stringify({ candidates: [{ finishReason, content: { parts: [{ text }] } }] }), { headers: { 'Content-Type': 'application/json' } }); };
+    const before = workflowSnapshot(sql);
+    for (const kind of ['KICKOFF', 'SITE_SURVEY'] as const) {
+      const imported = await worker.fetch(request(workflowBase + '/ai-import', PM_TOKEN, { method: 'POST', body: workflowForm(kind, new File(['확인할 원문'], 'memo.txt', { type: 'text/plain' })) }), env);
+      assert.equal(imported.status, 502, name + ': import must fail');
+      assert.equal((await imported.json() as any).code, expectedCode);
+      const generated = await worker.fetch(request(workflowBase + (kind === 'KICKOFF' ? '/kickoff-summary' : '/site-survey-summary'), PM_TOKEN, { method: 'POST', body: JSON.stringify(kind === 'KICKOFF' ? { expectedVersion: saved.kickoff.version } : { surveyDate: workflowResult.surveyDate, expectedVersion: 1 }) }), env);
+      assert.equal(generated.status, 502, name + ': saved-source summary must fail');
+      assert.equal((await generated.json() as any).code, expectedCode);
+      assert.equal(workflowSnapshot(sql), before, name + ': failed provider must not change workflow records or audit events');
+    }
+    assert.equal(calls, 4);
+  });
+  sql.close();
+});
+
+test('CF115 stale summary requests stop before Gemini; same-millisecond source edits cannot be replaced by an older generated result', async (t) => {
+  const { sql, env } = await setup(); await approveWorkflowAi(env);
+  const current = await workflowJson(env);
+  const kickoff = { meetingAt: workflowResult.meetingAt, location: '회의실', agenda: '검토 안건', participantUnits: ['김검수'], rawNotes: '요약을 요청한 옛 원문', status: 'COMPLETED', expectedVersion: current.kickoff.version };
+  const saved = await workflowJson(env, '/kickoff', kickoff);
+  const survey = { surveyDate: workflowResult.surveyDate, location: '현장', scopeText: '검토 범위', leadUnit: '조사팀', rawNotes: '요약을 요청한 옛 조사 원문', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 };
+  await workflowJson(env, '/site-survey', survey);
+  let calls = 0;
+  env.GEMINI_TEST_FETCH = async () => { calls++; return geminiResult(); };
+  const generate = (kind: 'KICKOFF' | 'SITE_SURVEY', version: number) => worker.fetch(request(workflowBase + (kind === 'KICKOFF' ? '/kickoff-summary' : '/site-survey-summary'), PM_TOKEN, { method: 'POST', body: JSON.stringify(kind === 'KICKOFF' ? { expectedVersion: version } : { surveyDate: workflowResult.surveyDate, expectedVersion: version }) }), env);
+  const before = workflowSnapshot(sql);
+  assert.equal((await generate('KICKOFF', saved.kickoff.version - 1)).status, 409);
+  assert.equal((await generate('SITE_SURVEY', 0)).status, 409);
+  assert.equal(calls, 0); assert.equal(workflowSnapshot(sql), before);
+  // Both the in-flight request and the concurrent save receive the exact same
+  // timestamp. Version + updated_at alone cannot prove that an UPDATE occurred.
+  const sameMillisecond = new Date('2031-01-01T12:34:56.789Z');
+  t.mock.timers.enable({ apis: ['Date'], now: sameMillisecond });
+  for (const kind of ['KICKOFF', 'SITE_SURVEY'] as const) {
+    let afterConcurrentSave = '';
+    env.GEMINI_TEST_FETCH = async () => {
+      calls++;
+      // This happens while the original request awaits Gemini, using the public save API.
+      if (kind === 'KICKOFF') await workflowJson(env, '/kickoff', { ...kickoff, rawNotes: '다른 담당자가 방금 저장한 최신 원문', expectedVersion: saved.kickoff.version });
+      else await workflowJson(env, '/site-survey', { ...survey, rawNotes: '다른 담당자의 최신 조사 원문', expectedVersion: 1, outputExpectedVersion: 1 });
+      const updatedAt = sql.exec(kind === 'KICKOFF'
+        ? 'SELECT updated_at FROM preview_workflow_kickoffs WHERE case_id=?'
+        : 'SELECT updated_at FROM preview_site_survey_outputs WHERE case_id=?', [CASE_ID])[0].values[0][0];
+      assert.equal(updatedAt, sameMillisecond.toISOString());
+      assert.equal(Date.now(), sameMillisecond.getTime());
+      afterConcurrentSave = workflowSnapshot(sql);
+      return geminiResult();
+    };
+    const response = await generate(kind, kind === 'KICKOFF' ? saved.kickoff.version : 1);
+    assert.equal(response.status, 409, await response.clone().text());
+    assert.equal(workflowSnapshot(sql), afterConcurrentSave, 'stale completion must not add a generated event or overwrite the concurrent save');
+  }
+  t.mock.timers.reset();
+  assert.equal(calls, 2); sql.close();
 });

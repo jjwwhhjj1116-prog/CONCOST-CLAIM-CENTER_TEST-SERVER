@@ -6,6 +6,7 @@ import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
 import { CompanyMinutes, MinutesFieldsEditor, downloadMinutes } from './CompanyMinutes';
 import { minutesContent, minutesFieldDefaults, normalizeMinutesFields, type MinutesFields } from '../../../cloudflare/src/company-minutes';
 import { WORKFLOW_STAGES, WORKFORCE_UNITS } from './workflow-model';
+import { registerNavigationBlocker } from '../navigation-guard';
 
 type WorkflowRouteId = 'WF-03' | 'WF-04' | 'WF-05';
 
@@ -108,6 +109,7 @@ interface WorkflowAiImport {
   participants: string[];
   leadUnit: string;
   sourceNotes: string;
+  meetingContent?: string;
   summary: string;
   timeline: Array<{ order: number; title: string; detail: string }>;
   missingFields: string[];
@@ -173,6 +175,8 @@ export const WorkflowOperations: React.FC<{
   const [data, setData] = useState<WorkflowPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
+  const [importBusy, setImportBusy] = useState(false);
+  const [formDirty, setFormDirty] = useState(false);
   const [notice, setNotice] = useState('');
   const [failure, setFailure] = useState('');
   const [scheduleProject, setScheduleProject] = useState<SharedScheduleProject | null>(null);
@@ -273,12 +277,13 @@ export const WorkflowOperations: React.FC<{
   }, []);
 
   const selectCase = (caseId: string) => {
-    if (busy) return;
+    if (busy || importBusy || (formDirty && !window.confirm('아직 저장하지 않은 입력·자동정리 결과가 있습니다. 현재 내용을 닫고 프로젝트를 바꿀까요?'))) return;
     selectedCaseRef.current = caseId;
     setSelectedCaseId(caseId);
     setData(null);
     setNotice('');
     setFailure('');
+    setFormDirty(false);
     void loadWorkflow(caseId);
   };
 
@@ -327,9 +332,14 @@ export const WorkflowOperations: React.FC<{
       if (selectedCaseId !== selectedCaseRef.current) return;
       setData(payload);
       syncForms(payload, true);
-      const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
-      syncSharedSchedule(schedule.projects, payload);
-      setNotice('payload' in result ? result.notice : `${label} 완료 · 안전하게 저장되었습니다.`);
+      let scheduleWarning = '';
+      try {
+        const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
+        if (selectedCaseId !== selectedCaseRef.current) return;
+        syncSharedSchedule(schedule.projects, payload);
+      } catch (error) { scheduleWarning = ` 일정 화면의 최신 상태를 불러오지 못했습니다: ${messageFrom(error)}. 업무 기록은 이미 저장되어 다시 저장할 필요가 없습니다.`; }
+      setNotice(`${'payload' in result ? result.notice : `${label} 완료 · 안전하게 저장되었습니다.`}${scheduleWarning}`);
+      return true;
     } catch (error) {
       setFailure(messageFrom(error));
     } finally {
@@ -337,19 +347,20 @@ export const WorkflowOperations: React.FC<{
     }
   };
 
-  const saveKickoff = () => mutate('착수회의 기록 저장', async () => {
+  const saveKickoff = (draft?: WorkflowAiImport) => mutate('착수회의 기록 저장', async () => {
     const meetingDate = kickoff.meetingAt.slice(0,10);
     const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff`, {
       method: 'PUT',
       body: JSON.stringify({
         ...kickoff,
-        meetingAt: new Date(kickoff.meetingAt).toISOString(),
+        ...importedSummaryForSave(draft, kickoff.rawNotes),
+        meetingAt: new Date(`${kickoff.meetingAt}:00+09:00`).toISOString(),
         participantUnits: kickoff.participantUnits.split(',').map((entry) => entry.trim()).filter(Boolean)
       })
     });
     try {
       await persistSharedSchedule({ startDate: meetingDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= meetingDate ? scheduleDraft.endDate : meetingDate });
-      return { payload, notice: '착수회의 원문과 기준 일정을 저장했습니다. 이제 자동작성·정리를 실행하면 우측 검수본이 생성됩니다.' };
+      return { payload, notice: draft?.summary ? '착수회의 원문·자동정리 결과와 기준 일정을 저장했습니다. 원문 대조 후 최종 확정하세요.' : '착수회의 원문과 기준 일정을 저장했습니다. 저장본 자동정리로 정리본을 만들 수 있습니다.' };
     } catch (error) {
       return { payload, notice: `착수회의 원문은 안전하게 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
     }
@@ -364,7 +375,7 @@ export const WorkflowOperations: React.FC<{
       const archived = await archiveWorkflowResult(selectedCaseId, 'KICKOFF', kickoffRecordAsImport(payload.kickoff), `자동작성_v${payload.kickoff.version}`);
       return { payload, notice: workflowArchiveNotice('회의록 자동작성 완료', archived) };
     } catch (error) {
-      return { payload, notice: `회의록 자동작성 결과는 우측 검수본과 임시 보관함에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+      return { payload, notice: `회의록 자동작성 결과는 프로젝트 기록에 저장했습니다. Google Drive 파일 보관은 실패했습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -373,7 +384,7 @@ export const WorkflowOperations: React.FC<{
       method: 'PUT',
       body: JSON.stringify({
         ...kickoff,
-        meetingAt: new Date(kickoff.meetingAt).toISOString(),
+        meetingAt: new Date(`${kickoff.meetingAt}:00+09:00`).toISOString(),
         participantUnits: kickoff.participantUnits.split(',').map((entry) => entry.trim()).filter(Boolean),
         status: 'CONFIRMED'
       })
@@ -387,13 +398,13 @@ export const WorkflowOperations: React.FC<{
     }
   });
 
-  const saveSurvey = () => mutate('현장조사 기록 저장', async () => {
+  const saveSurvey = (draft?: WorkflowAiImport) => mutate('현장조사 기록 저장', async () => {
     const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey`, {
-      method: 'PUT', body: JSON.stringify(survey)
+      method: 'PUT', body: JSON.stringify({ ...survey, ...importedSummaryForSave(draft, survey.rawNotes) })
     });
     try {
       await persistSharedSchedule({ startDate: survey.surveyDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= survey.surveyDate ? scheduleDraft.endDate : survey.surveyDate });
-      return { payload, notice: '현장조사 원문과 기준 일정을 저장했습니다. 이제 자동작성·정리를 실행하면 우측 검수본이 생성됩니다.' };
+      return { payload, notice: draft?.summary ? '현장조사 원문·자동정리 결과와 기준 일정을 저장했습니다. 원문 대조 후 최종 확정하세요.' : '현장조사 원문과 기준 일정을 저장했습니다. 저장본 자동정리로 정리본을 만들 수 있습니다.' };
     } catch (error) {
       return { payload, notice: `현장조사 원문은 안전하게 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
     }
@@ -409,7 +420,7 @@ export const WorkflowOperations: React.FC<{
       const archived = await archiveWorkflowResult(selectedCaseId, 'SITE_SURVEY', surveyRecordAsImport(record), `자동작성_v${record.outputVersion}`);
       return { payload, notice: workflowArchiveNotice('현장조사 자동작성 완료', archived) };
     } catch (error) {
-      return { payload, notice: `현장조사 자동작성 결과는 우측 검수본과 임시 보관함에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+      return { payload, notice: `현장조사 자동작성 결과는 프로젝트 기록에 저장했습니다. Google Drive 파일 보관은 실패했습니다: ${messageFrom(error)}` };
     }
   });
 
@@ -449,12 +460,12 @@ export const WorkflowOperations: React.FC<{
     <section className="workflow-operations" aria-labelledby="workflow-operations-title">
       <header className="workflow-operations-hero" style={{ '--stage-color': stage.color } as React.CSSProperties}>
         <div><span>PROJECT DELIVERY</span><h2 id="workflow-operations-title">{stage.name}</h2><p>{stage.description}</p></div>
-        <div className="workflow-save-state"><strong>업무 기록 자동 저장</strong><span>입력값·변경 이력 자동 보존</span></div>
+        <div className="workflow-save-state"><strong>{importBusy ? '원본 보관·자동정리 중' : formDirty ? '기록 저장 필요' : '프로젝트 업무 기록'}</strong><span>입력·자동정리 후 기록 저장</span></div>
       </header>
 
       <div className="workflow-project-context">
       <div className="workflow-project-selector">
-        <Select id="workflow-case" searchable searchPlaceholder="프로젝트 번호·이름 검색" label="현재 프로젝트" value={selectedCaseId} disabled={Boolean(busy)} onChange={(event) => selectCase(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />
+        <Select id="workflow-case" searchable searchPlaceholder="프로젝트 번호·이름 검색" label="현재 프로젝트" value={selectedCaseId} disabled={Boolean(busy) || importBusy} onChange={(event) => selectCase(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />
         {!loading && data?.case.id === selectedCaseId ? <section className="workflow-project-summary" aria-label="선택한 프로젝트 정보">
           <div className="workflow-project-summary__identity"><strong>{data.case.caseNumber}</strong><span>{data.case.claimType}</span></div>
           <h3>{data.case.title}</h3>
@@ -484,14 +495,28 @@ export const WorkflowOperations: React.FC<{
       {failure && <div className="workflow-feedback is-error" role="alert"><strong>처리하지 못했습니다.</strong><span>{failure}</span><Button size="sm" variant="secondary" onClick={() => void loadWorkflow(selectedCaseId)}>다시 불러오기</Button></div>}
       {notice && <div className="workflow-feedback is-success" role="status">{notice}</div>}
 
-      {!loading && data && stageId === 3 && <KickoffEditor caseId={selectedCaseId} form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy)} onSave={saveKickoff} onGenerate={generateSummary} onConfirm={confirmKickoff} busy={busy} onNavigate={onNavigate} />}
-      {!loading && data && stageId === 4 && <SurveyEditor caseId={selectedCaseId} form={survey} setForm={setSurvey} surveys={data.siteSurveys} drive={data.googleDrive} disabled={!canEdit || Boolean(busy)} onSave={saveSurvey} onGenerate={generateSurveySummary} onConfirm={confirmSurvey} busy={busy} onNavigate={onNavigate} />}
+      {!loading && data && stageId === 3 && <KickoffEditor key={selectedCaseId} caseId={selectedCaseId} form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy) || importBusy} onSave={saveKickoff} onGenerate={generateSummary} onConfirm={confirmKickoff} busy={importBusy ? '파일 자동정리' : busy} onImportBusy={setImportBusy} onDirtyChange={setFormDirty} onNavigate={onNavigate} />}
+      {!loading && data && stageId === 4 && <SurveyEditor key={selectedCaseId} caseId={selectedCaseId} form={survey} setForm={setSurvey} surveys={data.siteSurveys} drive={data.googleDrive} disabled={!canEdit || Boolean(busy) || importBusy} onSave={saveSurvey} onGenerate={generateSurveySummary} onConfirm={confirmSurvey} busy={importBusy ? '파일 자동정리' : busy} onImportBusy={setImportBusy} onDirtyChange={setFormDirty} onNavigate={onNavigate} />}
       {!loading && data && stageId === 5 && <AllocationEditor caseId={selectedCaseId} form={allocation} setForm={setAllocation} allocations={data.allocations} disabled={!canEdit || Boolean(busy)} onSave={saveAllocation} busy={busy} onNavigate={onNavigate} />}
     </section>
   );
 };
 
-const WORKFLOW_IMPORT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.hwp,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg,.webm';
+const WORKFLOW_IMPORT_ACCEPT = '.pdf,.docx,.xlsx,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg,.webm';
+const importNotes = (draft: WorkflowAiImport) => draft.meetingContent ?? draft.sourceNotes;
+function importedSummaryForSave(draft: WorkflowAiImport | undefined, rawNotes: string) {
+  return draft?.summary && rawNotes.trim() === importNotes(draft).trim() ? { summaryText: draft.summary, timeline: draft.timeline } : {};
+}
+
+function useWorkflowDraftGuard(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
+  useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false); }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    const unregister = registerNavigationBlocker(() => dirty && !window.confirm('저장하지 않은 입력·자동정리 결과가 있습니다. 저장하지 않고 이동할까요?'));
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ''; } };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => { unregister(); window.removeEventListener('beforeunload', beforeUnload); };
+  }, [dirty]);
+}
 const evidenceCategoryFor = (kind: 'KICKOFF' | 'SITE_SURVEY', file: File) => {
   if (kind === 'KICKOFF') return file.type.startsWith('audio/') ? 'MEETING_RECORDING' : 'KICKOFF_MATERIAL';
   if (file.type.startsWith('audio/')) return 'SITE_RECORDING';
@@ -531,6 +556,18 @@ function surveyRecordAsImport(record: SurveyRecord): WorkflowAiImport {
   };
 }
 
+const WORKFLOW_FIELD_LABELS: Record<string, string> = {
+  author:'작성자 성명', authorDepartment:'작성자 소속', authorPosition:'작성자 직급', clientName:'거래처명',
+  reportingDepartment:'보고부서', referenceDepartments:'참조부서', clientParticipants:'참석자 (거래처)', attachmentName:'첨부파일',
+  meetingStartTime:'시작 시간', meetingEndTime:'종료 시간', participants:'참석자 (컨코스트)', meetingTitle:'회의명',
+  meetingAt:'회의 일시', surveyDate:'조사 일자', location:'장소', agenda:'회의 안건·조사 범위', leadUnit:'조사 책임 팀',
+  sourceNotes:'원문', meetingContent:'회의내용 및 지시사항', summary:'정리 내용', timeline:'결정사항·후속업무'
+};
+function workflowFieldLabel(field: string): string {
+  const key = field.replace(/^minutesFields\./u, '');
+  return Object.hasOwn(WORKFLOW_FIELD_LABELS, key) ? WORKFLOW_FIELD_LABELS[key] : field;
+}
+
 function workflowArchiveText(kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiImport, statusLabel: string): string {
   const title = kind === 'KICKOFF' ? '착수회의 회의록' : '현장조사 기록';
   const schedule = kind === 'KICKOFF' ? value.meetingAt : value.surveyDate;
@@ -540,7 +577,7 @@ function workflowArchiveText(kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiI
   return [
     title,
     `저장 상태: ${statusLabel}`,
-    ...(value.minutesFields ? Object.entries(value.minutesFields).filter(([,text]) => text).map(([key,text]) => `${({author:'작성자 성명',authorDepartment:'작성자 소속',authorPosition:'작성자 직급',clientName:'거래처명',reportingDepartment:'보고부서',referenceDepartments:'참조부서',clientParticipants:'참석자 (거래처)',attachmentName:'첨부파일',meetingStartTime:'시작 시간',meetingEndTime:'종료 시간',participants:'참석자 (컨코스트)',meetingTitle:'회의명'} as Record<string,string>)[key]}: ${text}`) : []),
+    ...(value.minutesFields ? Object.entries(value.minutesFields).filter(([,text]) => text).map(([key,text]) => `${workflowFieldLabel(key)}: ${text}`) : []),
     `일시·일자: ${schedule || '미입력'}`,
     `장소: ${value.location || '미입력'}`,
     kind === 'KICKOFF' ? `참석 팀·담당자: ${value.participants.join(', ') || '미입력'}` : `조사 책임 팀: ${value.leadUnit || '미입력'}`,
@@ -594,7 +631,10 @@ const WorkflowAiImporter: React.FC<{
   disabled: boolean;
   onImported: (value: WorkflowAiImport) => void;
   onArchived?: (file: WorkflowArchivedFile | null) => void;
-}> = ({ caseId, kind, disabled, onImported, onArchived }) => {
+  onBusyChange: (busy: boolean) => void;
+  preparedSource?: { file: File } | null;
+  savedRevision: number;
+}> = ({ caseId, kind, disabled, onImported, onArchived, onBusyChange, preparedSource, savedRevision }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dataClass,setDataClass] = useState<'GENERAL'|'INTERNAL'|'CONFIDENTIAL'|'RESTRICTED'>('INTERNAL');
   const [dragging,setDragging] = useState(false);
@@ -603,52 +643,83 @@ const WorkflowAiImporter: React.FC<{
   const [storedFileName,setStoredFileName] = useState('');
   const [message,setMessage] = useState('');
   const [error,setError] = useState('');
+  const activeRequest = useRef<AbortController | null>(null);
+  const epoch = useRef(0);
+  const storedSource = useRef<File | null>(null);
+  const context = useRef({ caseId, kind });
+  context.current = { caseId, kind };
+  const importedEvidence = useRef('');
 
-  useEffect(() => { setSelectedFile(null); setStoredFileName(''); setMessage(''); setError(''); onArchived?.(null); }, [caseId,kind,onArchived]);
+  useEffect(() => {
+    epoch.current++; setSelectedFile(null); setStoredFileName(''); setMessage(''); setError(''); storedSource.current = null; onArchived?.(null);
+    return () => { epoch.current++; activeRequest.current?.abort(); activeRequest.current = null; onBusyChange(false); };
+  }, [caseId, kind, onBusyChange, onArchived]);
+  useEffect(() => { if (savedRevision > 0) setMessage(''); }, [savedRevision]);
 
-  const importFile = async (file?: File) => {
-    if (!file || disabled || busy) return;
-    setSelectedFile(null); setStoredFileName(''); setBusy(true); setError(''); setMessage('선택한 원본을 프로젝트 자료로 가져오고 있습니다.');
+  const importFile = async (file?: File, alreadyStored = false) => {
+    if (!file || disabled || activeRequest.current) return;
+    const controller = new AbortController(), requestEpoch = ++epoch.current;
+    activeRequest.current = controller;
+    const isCurrent = () => epoch.current === requestEpoch && !controller.signal.aborted && context.current.caseId === caseId && context.current.kind === kind;
+    setSelectedFile(file); setBusy(true); onBusyChange(true); setError(''); setMessage('선택한 원본을 회사 Google Drive에 보관하고 있습니다.');
+    if (storedSource.current !== file) { setStoredFileName(''); onArchived?.(null); }
     try {
-      const evidence = new FormData(); evidence.set('file',file); evidence.set('category',evidenceCategoryFor(kind,file));
-      const stored = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method:'POST',headers:{'Idempotency-Key':`workflow-source-${crypto.randomUUID()}`},body:evidence }, { reuseExact: true });
-      const storedPayload = await stored.json().catch(() => ({})) as { error?: string };
-      if (!stored.ok) throw new Error(storedPayload.error ?? '원본을 회사 Google Drive에 저장하지 못했습니다.');
-      setSelectedFile(file);
-      setStoredFileName(file.name);
-      setMessage(`1단계 가져오기 완료 · ${file.name} · “2단계 자동작성·정리”를 눌러 내용을 화면에 적용하세요.`);
-    } catch (reason) { setSelectedFile(null); setStoredFileName(''); setError(reason instanceof Error ? reason.message : '파일을 가져오지 못했습니다.'); }
-    finally { setBusy(false); if(inputRef.current) inputRef.current.value=''; }
-  };
-
-  const generateFromFile = async () => {
-    if (!selectedFile || disabled || busy) return;
-    setBusy(true); setError(''); setMessage('가져온 원본을 기준으로 자동작성·정리를 실행하고 있습니다.');
-    try {
-      const form = new FormData(); form.set('file',selectedFile); form.set('workflowKind',kind); form.set('dataClass',dataClass);
-      const response = await fetch(`/api/cases/${encodeURIComponent(caseId)}/workflow/ai-import`, { method:'POST',body:form });
-      const payload = await response.json().catch(() => ({})) as { import?: WorkflowAiImport; error?: string; code?: string; generator?: string; security?: { redactionCount:number; rawProviderPayloadStored:boolean; providerTier?:string } };
-      if (!response.ok || !payload.import) throw new Error(payload.error ?? 'AI 문서 정리를 완료하지 못했습니다.');
-      onImported(payload.import);
-      const generatorLabel = payload.generator === 'LOCAL_STRUCTURED_FALLBACK' || payload.security?.providerTier === 'LOCAL_ONLY' ? '회사 서버 내부 자동정리' : 'Gemini 자동정리';
-      try {
-        const archived = await archiveWorkflowResult(caseId, kind, payload.import, '파일_자동작성');
-        onArchived?.(archived);
-        setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영하고 ${archived.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive에 자동 저장했습니다.' : '임시 보관함에 저장했습니다.'}${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''}`);
-      } catch (archiveError) {
-        onArchived?.(null);
-        setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영했습니다.`);
-        setError(`자동작성 결과는 화면에 보존됐지만 Google Drive 자동 저장에 실패했습니다: ${messageFrom(archiveError)}`);
+      if (alreadyStored) { storedSource.current = file; setStoredFileName(file.name); }
+      if (storedSource.current !== file) {
+        const evidence = new FormData(); evidence.set('file',file); evidence.set('category',evidenceCategoryFor(kind,file));
+        const stored = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method:'POST',headers:{'Idempotency-Key':`workflow-source-${crypto.randomUUID()}`},body:evidence,signal:controller.signal }, { reuseExact: true, isCurrent });
+        const storedPayload = await stored.json().catch(() => ({})) as { file?: WorkflowArchivedFile; error?: string };
+        if (!isCurrent()) return;
+        if (!stored.ok || !storedPayload.file) throw new Error(storedPayload.error ?? '원본 보관을 완료하지 못했습니다. 파일은 선택 상태로 유지됩니다.');
+        storedSource.current = file; setStoredFileName(file.name); onArchived?.(storedPayload.file);
       }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '파일을 처리하지 못했습니다.'); }
-    finally { setBusy(false); }
+      if (!isCurrent()) return;
+      setMessage('원본 보관 완료 · 문서·녹음을 읽고 회사 양식으로 자동정리하고 있습니다.');
+      const form = new FormData(); form.set('file',file); form.set('workflowKind',kind); form.set('dataClass',dataClass);
+      const response = await fetch(`/api/cases/${encodeURIComponent(caseId)}/workflow/ai-import`, { method:'POST',body:form,signal:controller.signal });
+      const payload = await response.json().catch(() => ({})) as { import?: WorkflowAiImport; error?: string; generator?: string; notice?: string; security?: { redactionCount:number; providerTier?:string } };
+      if (!isCurrent()) return;
+      if (!response.ok || !payload.import) throw new Error(payload.error ?? '자동정리를 완료하지 못했습니다. 원본은 보관되어 있으며 다시 시도할 수 있습니다.');
+      onImported({ ...payload.import, minutesFields: { ...(normalizeMinutesFields(payload.import.minutesFields) ?? minutesFieldDefaults), attachmentName: payload.import.minutesFields?.attachmentName?.trim() || file.name } });
+      const rawOnly = payload.generator === 'LOCAL_STRUCTURED_FALLBACK' || payload.security?.providerTier === 'LOCAL_ONLY' || !payload.import.summary.trim();
+      setMessage(`${rawOnly ? '원문 가져오기 완료 · AI 정리 미실행' : 'Gemini 자동정리 완료'} · 화면에 반영했습니다. 아직 업무 기록은 저장하지 않았습니다. 내용을 확인하고 “기록 저장”을 눌러 주세요.${payload.import.missingFields.length ? ` 확인 필요: ${payload.import.missingFields.map(workflowFieldLabel).join(', ')}.` : ''}${payload.notice ? ` ${payload.notice}` : ''}${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''}`);
+    } catch (reason) {
+      if (isCurrent()) { setMessage(''); setError(reason instanceof Error ? reason.message : '파일을 처리하지 못했습니다. 다시 시도해 주세요.'); }
+    } finally {
+      if (isCurrent()) { activeRequest.current = null; setBusy(false); onBusyChange(false); if(inputRef.current) inputRef.current.value=''; }
+    }
   };
 
-  return <section className={`workflow-ai-importer${dragging?' is-dragging':''}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); void importFile(event.dataTransfer.files[0]); }}>
-    <header><div><span>IMPORT → AUTO DRAFT → REVIEW</span><h4>{kind === 'KICKOFF' ? '회의록 가져오기·자동작성' : '현장조사 기록 가져오기·자동작성'}</h4><p>{kind === 'KICKOFF' ? '파일을 선택하거나 끌어 놓으면 회사 Google Drive에 원본으로 업로드합니다. 이후 자동작성 버튼으로 회의 항목과 후속업무를 정리합니다.' : '현장 원본을 선택하거나 끌어 놓으면 회사 Google Drive에 업로드합니다. 이후 자동작성 버튼으로 조사 범위·관찰·추가 확인사항을 정리합니다.'}</p></div><Button className="workflow-template-button" size="sm" variant="secondary" onClick={() => downloadWorkflowTemplate(kind)}>회사 회의록 XLSX 내보내기</Button></header>
-    <div className="workflow-ai-import-controls"><label>자료 보안등급<select value={dataClass} disabled={busy} onChange={(event) => setDataClass(event.target.value as typeof dataClass)}><option value="GENERAL">일반·외부전송 가능</option><option value="INTERNAL">회사 내부</option><option value="CONFIDENTIAL">기밀</option><option value="RESTRICTED">제한자료</option></select></label><input ref={inputRef} type="file" accept={WORKFLOW_IMPORT_ACCEPT} disabled={disabled||busy} onChange={(event) => void importFile(event.target.files?.[0])}/><Button className="workflow-import-button" onClick={() => inputRef.current?.click()} disabled={disabled||busy}>{busy&&!selectedFile?'가져오는 중…':'1. 파일 가져오기'}</Button><Button className="workflow-autodraft-button" onClick={() => void generateFromFile()} disabled={disabled||busy||!selectedFile}>{busy&&selectedFile?'자동작성 중…':'2. 자동작성·정리'}</Button></div>
-    <div className={`workflow-import-state${selectedFile?' is-ready':''}`}><strong>{selectedFile?'가져오기 완료':'가져올 파일을 선택하세요'}</strong><span>{storedFileName||'XLSX·TXT·CSV는 내부 자료도 회사 서버에서 안전하게 정리할 수 있습니다.'}</span></div>
-    <small>내부·기밀 XLSX·TXT·CSV는 외부 전송 없이 회사 서버에서 자동정리합니다. 그 밖의 문서는 관리자가 Gemini 유료 비학습 조건을 승인한 경우에만 외부 AI 정리를 실행합니다.</small>
+  useEffect(() => { if (preparedSource) { void importFile(preparedSource.file, true); inputRef.current?.closest('section')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }, [preparedSource]);
+  useEffect(() => {
+    const evidenceId = new URLSearchParams(window.location.search).get('evidenceId');
+    if (!evidenceId || disabled || importedEvidence.current === evidenceId) return;
+    importedEvidence.current = evidenceId;
+    const controller = new AbortController(), requestEpoch = epoch.current;
+    const isCurrent = () => !controller.signal.aborted && epoch.current === requestEpoch && context.current.caseId === caseId;
+    onBusyChange(true); setMessage('자료실의 원본을 불러오고 있습니다.');
+    void (async () => {
+      try {
+        const listing = await fetch(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { signal: controller.signal });
+        const listed = await listing.json().catch(() => ({})) as { files?: Array<{ id: string; originalName: string; category: string }>; error?: string };
+        const categories = kind === 'KICKOFF' ? ['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING'] : ['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT'];
+        const source = listed.files?.find(file => file.id === evidenceId && categories.includes(file.category));
+        if (!listing.ok || !source) throw new Error('현재 프로젝트·업무 분류에 속한 자료가 아닙니다. 이 프로젝트 자료실에서 원본을 다시 선택해 주세요.');
+        if (!isCurrent()) return;
+        const response = await fetch(`/api/cases/evidence/${encodeURIComponent(evidenceId)}/download`, { signal: controller.signal });
+        if (!response.ok) throw new Error('자료실 원본을 불러오지 못했습니다. 자료실에서 다시 선택해 주세요.');
+        const blob = await response.blob();
+        if (isCurrent()) { onBusyChange(false); await importFile(new File([blob], source.originalName, { type: blob.type }), true); }
+      } catch (reason) { if (isCurrent()) { setMessage(''); setError(messageFrom(reason)); onBusyChange(false); } }
+    })();
+    return () => controller.abort();
+  }, [caseId, kind]);
+
+  return <section className={`workflow-ai-importer${dragging?' is-dragging':''}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); if (disabled || busy) return; if (event.dataTransfer.files.length !== 1) { setMessage(''); setError('파일을 한 개씩 올려 주세요. 여러 파일 중 일부만 처리하지 않도록 이번 가져오기를 시작하지 않았습니다.'); return; } void importFile(event.dataTransfer.files[0]); }}>
+    <header><div><h4>{kind === 'KICKOFF' ? '회의록 가져오기·자동정리' : '현장조사 기록 가져오기·자동정리'}</h4><p>파일을 선택하거나 끌어 놓으면 원본 보관 후 자동정리가 이어집니다. 결과를 원문과 대조한 뒤 기록을 저장하세요.</p></div><Button className="workflow-template-button" size="sm" variant="secondary" onClick={() => downloadWorkflowTemplate(kind)}>회사 회의록 XLSX 내보내기</Button></header>
+    <div className="workflow-ai-import-controls"><label>자료 보안등급<select value={dataClass} disabled={disabled||busy} onChange={(event) => setDataClass(event.target.value as typeof dataClass)}><option value="GENERAL">일반·외부전송 가능</option><option value="INTERNAL">회사 내부</option><option value="CONFIDENTIAL">기밀</option><option value="RESTRICTED">제한자료</option></select></label><input ref={inputRef} type="file" aria-label="자동정리할 원본 파일" accept={WORKFLOW_IMPORT_ACCEPT} disabled={disabled||busy} onChange={(event) => void importFile(event.target.files?.[0])}/><Button className="workflow-import-button" onClick={() => inputRef.current?.click()} disabled={disabled||busy}>{busy?'원본 보관·자동정리 중…':'파일 선택·자동정리'}</Button>{selectedFile && <Button className="workflow-autodraft-button" onClick={() => void importFile(selectedFile)} disabled={disabled||busy}>{error?'다시 시도':'선택 파일 다시 정리'}</Button>}</div>
+    <div className={`workflow-import-state${storedFileName?' is-ready':''}`}><strong>{storedFileName?'원본 보관 완료':selectedFile?'선택 파일 유지 중':'가져올 파일을 선택하세요'}</strong><span>{selectedFile?.name || 'PDF·DOCX·HWPX·XLSX·TXT·CSV / PNG·JPG·WEBP / MP3·M4A·WAV·OGG·WEBM'}</span></div>
+    <small>회사 자료의 AI 정리는 관리자가 승인한 유료·학습 제외 Gemini 설정을 사용합니다. AI를 사용할 수 없을 때 텍스트 문서는 원문만 가져오며, 녹음·이미지·PDF는 설정 후 다시 시도해야 합니다. HWP·DOC·XLS는 지원 형식으로 변환해 주세요.</small>
     {message && <p className="notice-box" role="status">{message}</p>}{error && <p className="error-box" role="alert">{error}</p>}
   </section>;
 };
@@ -660,25 +731,32 @@ const KickoffEditor: React.FC<{
   record: KickoffRecord | null;
   disabled: boolean;
   busy: string;
-  onSave: () => void;
+  onSave: (draft?: WorkflowAiImport) => Promise<boolean | undefined>;
+  onImportBusy: (busy: boolean) => void;
+  onDirtyChange: (dirty: boolean) => void;
   onGenerate: () => void;
   onConfirm: () => void;
   onNavigate: (path: string) => void;
-}> = ({ caseId, form, setForm, record, disabled, busy, onSave, onGenerate, onConfirm, onNavigate }) => {
+}> = ({ caseId, form, setForm, record, disabled, busy, onSave, onImportBusy, onDirtyChange, onGenerate, onConfirm, onNavigate }) => {
   const [importedDraft, setImportedDraft] = useState<WorkflowAiImport | null>(null);
   const [archivedFile, setArchivedFile] = useState<WorkflowArchivedFile | null>(null);
+  const [preparedSource, setPreparedSource] = useState<{ file: File } | null>(null);
+  const [savedRevision, setSavedRevision] = useState(0);
   useEffect(() => { setImportedDraft(null); setArchivedFile(null); }, [caseId]);
-  const displayedSummary = minutesContent(form.rawNotes, record?.rawNotes ?? importedDraft?.sourceNotes, record?.summaryText || importedDraft?.summary);
-  const displayedTimeline = form.rawNotes.trim() === (record?.rawNotes ?? importedDraft?.sourceNotes ?? '').trim() ? (record?.summaryText ? record.timeline : importedDraft?.timeline ?? []) : [];
-  const outputState = record?.status === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : form.rawNotes ? '입력 내용 미리보기' : '작성 중';
+  useEffect(() => { setImportedDraft(null); }, [record?.version]);
+  const summarySource = importedDraft ? importNotes(importedDraft) : record?.rawNotes;
+  const displayedSummary = minutesContent(form.rawNotes, summarySource, importedDraft ? importedDraft.summary : record?.summaryText);
+  const displayedTimeline = form.rawNotes.trim() === summarySource?.trim() ? (importedDraft?.timeline ?? record?.timeline ?? []) : [];
   const minutesValues = { ...form.minutesFields, meetingDate: form.meetingAt.slice(0,10).replaceAll('-', '. '), meetingTime: form.meetingAt.slice(11,16), location: form.location, participants: form.participantUnits, meetingTitle: form.agenda, attachmentName: form.minutesFields.attachmentName || archivedFile?.originalName || '', summary: displayedSummary, followUps: displayedTimeline.map(item => `${item.order}. ${item.title}\n${item.detail}`).join('\n\n') };
-  const unsaved = !record || form.meetingAt !== localDateTime(record.meetingAt) || form.location !== (record.location ?? '') || form.agenda !== record.agenda || form.participantUnits !== record.participantUnits.join(', ') || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
+  const unsaved = Boolean(importedDraft) || !record || form.status !== record.status || form.meetingAt !== localDateTime(record.meetingAt) || form.location !== (record.location ?? '') || form.agenda !== record.agenda || form.participantUnits !== record.participantUnits.join(', ') || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
+  useWorkflowDraftGuard(Boolean(busy) || (unsaved && Boolean(record || importedDraft || form.agenda || form.rawNotes || form.location || form.participantUnits || JSON.stringify(form.minutesFields) !== JSON.stringify(minutesFieldDefaults))), onDirtyChange);
+  const outputState = importedDraft ? importedDraft.summary ? '파일 자동정리 결과 · 저장 전' : '원문 가져오기 · AI 미실행 · 저장 전' : unsaved ? '입력 내용 미리보기 · 저장 전' : record?.status === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : '작성 중';
   const downloadCurrentMinutes = () => downloadMinutes(minutesValues, `착수회의_회의록_${form.meetingAt.slice(0,10) || kstToday()}.xlsx`);
   return (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>KICKOFF INTAKE</span><h3>착수회의 기록</h3></div><em>v{form.expectedVersion}</em></header>
-      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => ({ ...current, minutesFields: normalizeMinutesFields(value.minutesFields) ?? current.minutesFields, meetingAt:value.meetingAt?localDateTime(value.meetingAt):current.meetingAt,location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:value.sourceNotes,status:'DRAFTED' })); }}/>
+      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onBusyChange={onImportBusy} preparedSource={preparedSource} savedRevision={savedRevision} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => ({ ...current, minutesFields: normalizeMinutesFields(value.minutesFields) ?? current.minutesFields, meetingAt:value.meetingAt?localDateTime(value.meetingAt):'',location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:importNotes(value),status:'DRAFTED' })); }}/>
       <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>입력한 내용이 오른쪽 회의록과 XLSX에 동일하게 반영됩니다.</span></div>
       <MinutesFieldsEditor value={form.minutesFields} onChange={minutesFields => setForm(current => ({ ...current, minutesFields }))} disabled={disabled}/>
       <div className="workflow-form-grid">
@@ -689,14 +767,14 @@ const KickoffEditor: React.FC<{
         <label className="is-wide">참석자 (컨코스트)<input value={form.participantUnits} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, participantUnits: event.target.value }))} placeholder="쉼표로 구분" /></label>
         <label className="is-wide">회의 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="녹음 전사문 또는 회의 중 메모를 입력하세요." /></label>
       </div>
-      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의 기록 저장' ? '회의 원문 저장 중…' : '3. 회의 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || unsaved || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
+      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.agenda.trim() || !form.meetingAt} onClick={() => void onSave(importedDraft ?? undefined).then(saved => { if (saved) { setImportedDraft(null); setSavedRevision(current => current + 1); } })}>{busy === '착수회의 기록 저장' ? '기록 저장 중…' : '기록 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || unsaved || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? '자동정리 중…' : '저장본 자동정리'}</Button></div>
       {unsaved && <p className="workflow-honest-note" role="status">수정한 내용을 먼저 저장하면 저장본 자동정리를 실행할 수 있습니다.</p>}
-      <p className="workflow-honest-note">관리자 설정의 조직 공용 Gemini 키를 사용합니다. 키가 없는 테스트 환경에서는 원문을 보존한 로컬 구조화 초안만 만들며, 모든 결과는 담당자가 원문과 대조해 확정해야 합니다.</p>
+      <p className="workflow-honest-note">자동정리 결과는 저장 전 검수본입니다. “기록 저장”으로 원문과 정리 결과를 함께 저장하며, 최종 확정은 원문 대조 후 진행합니다.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">입력한 양식 정보와 회의 메모를 확인하세요. 자동정리 후에는 정리본을 원문과 대조하고 확정합니다.</p>
-      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 원본 보관 완료' : '원본 임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 원본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
       <>
         <CompanyMinutes values={minutesValues}/>
         <Button className="workflow-template-button" variant="secondary" onClick={downloadCurrentMinutes}>현재 회의록 XLSX 내려받기</Button>
@@ -706,7 +784,7 @@ const KickoffEditor: React.FC<{
     <article className="workflow-editor-card workflow-evidence-card">
       <header><div><span>KICKOFF EVIDENCE</span><h3>착수회의 제공자료·회의록·녹음 → 회사 Google Drive에 업로드하세요</h3></div><em>회사 Drive 자동 분류</em></header>
       <p className="workflow-evidence-intro">발주처가 제공한 원본, 회의록과 녹음파일을 현재 프로젝트에 바로 연결합니다. 다른 분류는 자료실 전체 보기에서 선택할 수 있습니다.</p>
-      <CaseEvidencePanel caseId={caseId} defaultCategory="KICKOFF_MATERIAL" allowedCategories={['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING']} compact onNavigate={onNavigate} />
+      <CaseEvidencePanel caseId={caseId} defaultCategory="KICKOFF_MATERIAL" allowedCategories={['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING']} compact onNavigate={onNavigate} recordBusy={disabled} onPrepareRecord={file => { if (!disabled) setPreparedSource({ file }); }} />
     </article>
   </div>
   );
@@ -720,20 +798,27 @@ const SurveyEditor: React.FC<{
   drive: WorkflowPayload['googleDrive'];
   disabled: boolean;
   busy: string;
-  onSave: () => void;
+  onSave: (draft?: WorkflowAiImport) => Promise<boolean | undefined>;
+  onImportBusy: (busy: boolean) => void;
+  onDirtyChange: (dirty: boolean) => void;
   onGenerate: () => void;
   onConfirm: () => void;
   onNavigate: (path: string) => void;
-}> = ({ caseId, form, setForm, surveys, drive, disabled, busy, onSave, onGenerate, onConfirm, onNavigate }) => {
+}> = ({ caseId, form, setForm, surveys, drive, disabled, busy, onSave, onImportBusy, onDirtyChange, onGenerate, onConfirm, onNavigate }) => {
   const [importedDraft,setImportedDraft] = useState<WorkflowAiImport | null>(null);
   const [archivedFile,setArchivedFile] = useState<WorkflowArchivedFile | null>(null);
+  const [preparedSource,setPreparedSource] = useState<{ file: File } | null>(null);
+  const [savedRevision,setSavedRevision] = useState(0);
   useEffect(() => { setImportedDraft(null); setArchivedFile(null); }, [caseId]);
   const record = surveys.find((item) => item.surveyDate === form.surveyDate) ?? null;
-  const displayedSummary = minutesContent(form.rawNotes, record?.rawNotes ?? importedDraft?.sourceNotes, record?.summaryText || importedDraft?.summary);
-  const displayedTimeline = form.rawNotes.trim() === (record?.rawNotes ?? importedDraft?.sourceNotes ?? '').trim() ? (record?.summaryText ? record.timeline : importedDraft?.timeline ?? []) : [];
-  const outputState = record?.outputStatus === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : importedDraft ? '파일 자동작성 결과 · 저장 전' : form.rawNotes ? '입력 내용 미리보기' : '작성 중';
+  useEffect(() => { if (record?.rawNotes === form.rawNotes && record?.summaryText === importedDraft?.summary) setImportedDraft(null); }, [record?.version, record?.outputVersion]);
+  const summarySource = importedDraft ? importNotes(importedDraft) : record?.rawNotes;
+  const displayedSummary = minutesContent(form.rawNotes, summarySource, importedDraft ? importedDraft.summary : record?.summaryText);
+  const displayedTimeline = form.rawNotes.trim() === summarySource?.trim() ? (importedDraft?.timeline ?? record?.timeline ?? []) : [];
   const minutesValues = { ...form.minutesFields, meetingDate: form.surveyDate.replaceAll('-', '. '), meetingTime: form.minutesFields.meetingStartTime, location: form.location, meetingTitle: form.minutesFields.meetingTitle || form.scopeText, attachmentName: form.minutesFields.attachmentName || archivedFile?.originalName || '', summary: displayedSummary, followUps: displayedTimeline.map(item => `${item.order}. ${item.title}\n${item.detail}`).join('\n\n') };
-  const unsaved = !record || form.location !== (record.location ?? '') || form.scopeText !== record.scopeText || form.leadUnit !== record.leadUnit || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
+  const unsaved = Boolean(importedDraft) || !record || form.status !== record.status || form.location !== (record.location ?? '') || form.scopeText !== record.scopeText || form.leadUnit !== record.leadUnit || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
+  useWorkflowDraftGuard(Boolean(busy) || (unsaved && Boolean(record || importedDraft || form.scopeText || form.rawNotes || form.location || form.minutesFields.author || form.minutesFields.meetingTitle)), onDirtyChange);
+  const outputState = importedDraft ? importedDraft.summary ? '파일 자동정리 결과 · 저장 전' : '원문 가져오기 · AI 미실행 · 저장 전' : unsaved ? '입력 내용 미리보기 · 저장 전' : record?.outputStatus === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : '작성 중';
   const changeSurveyDate = (surveyDate:string) => {
     const existing = surveys.find((item) => item.surveyDate === surveyDate);
     setImportedDraft(null);
@@ -746,7 +831,7 @@ const SurveyEditor: React.FC<{
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>SITE SURVEY PLAN</span><h3>현장조사 계획·원본 분류</h3></div><em>v{form.expectedVersion}</em></header>
-      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => { const surveyDate=value.surveyDate??current.surveyDate; const existing=surveys.find((item)=>item.surveyDate===surveyDate); return { ...current,minutesFields: normalizeMinutesFields(value.minutesFields) ?? (surveyDate === current.surveyDate ? current.minutesFields : normalizeMinutesFields(existing?.minutesFields) ?? { ...minutesFieldDefaults }),surveyDate,location:value.location,scopeText:value.agenda||current.scopeText,leadUnit:value.leadUnit||current.leadUnit,rawNotes:value.sourceNotes,status:'IN_PROGRESS',expectedVersion:existing?.version??0,outputExpectedVersion:existing?.outputVersion??0 }; }); }}/>
+      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onBusyChange={onImportBusy} preparedSource={preparedSource} savedRevision={savedRevision} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => { const surveyDate=value.surveyDate??''; const existing=surveys.find((item)=>item.surveyDate===surveyDate); return { ...current,minutesFields: normalizeMinutesFields(value.minutesFields) ?? { ...minutesFieldDefaults },surveyDate,location:value.location,scopeText:value.agenda,leadUnit:value.leadUnit,rawNotes:importNotes(value),status:'IN_PROGRESS',expectedVersion:existing?.version??0,outputExpectedVersion:existing?.outputVersion??0 }; }); }}/>
       <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>현장 기록도 동일한 회사 회의록 양식으로 확인·저장합니다.</span></div>
       <MinutesFieldsEditor value={form.minutesFields} onChange={minutesFields => setForm(current => ({ ...current, minutesFields }))} disabled={disabled} survey/>
       <div className="workflow-form-grid">
@@ -757,14 +842,14 @@ const SurveyEditor: React.FC<{
         <label className="is-wide">조사 책임 팀<input value={form.leadUnit} maxLength={120} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, leadUnit: event.target.value }))} /></label>
         <label className="is-wide">조사 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="현장 관찰, 인터뷰, 사진·도면 번호와 추가 확인사항을 입력하세요." /></label>
       </div>
-      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사 기록 저장' ? '조사 원문 저장 중…' : '3. 조사 원문 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || unsaved || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === '현장조사 자동작성·정리' ? '자동정리 중…' : '4. 저장본 자동작성·정리'}</Button></div>
+      <div className="workflow-actions workflow-primary-actions"><Button className="workflow-record-save-button" disabled={disabled || !form.scopeText.trim() || !form.surveyDate} onClick={() => void onSave(importedDraft ?? undefined).then(saved => { if (saved) { setImportedDraft(null); setSavedRevision(current => current + 1); } })}>{busy === '현장조사 기록 저장' ? '기록 저장 중…' : '기록 저장'}</Button><Button className="workflow-generate-button" variant="secondary" disabled={disabled || unsaved || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === '현장조사 자동작성·정리' ? '자동정리 중…' : '저장본 자동정리'}</Button></div>
       {unsaved && <p className="workflow-honest-note" role="status">수정한 내용을 먼저 저장한 뒤 자동정리·최종 확정을 진행하세요.</p>}
-      <p className="workflow-honest-note">조사 계획은 자동 보존되고, 아래 원본 자료는 회사 Google Drive의 프로젝트/현장조사/월 폴더에 저장됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
+      <p className="workflow-honest-note">“기록 저장”으로 원문과 정리 결과를 함께 저장합니다. 아래 원본 자료는 회사 Google Drive에 보관됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>SITE NOTES · HUMAN REVIEW</span><h3>현장조사 최종본 · 관찰사항 · 후속확인</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문을 먼저 미리보기로 확인합니다. 자동작성·정리 후에는 관찰사항과 추가 확인업무를 원문과 대조하고 최종 확정합니다.</p>
-      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : '임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 원본 보관 완료' : '원본 임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 원본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
       <CompanyMinutes values={minutesValues}/>
       <Button className="workflow-template-button" variant="secondary" onClick={() => downloadMinutes(minutesValues, `현장조사_회의록_${form.surveyDate}.xlsx`)}>현재 회의록 XLSX 내려받기</Button>
       {record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
@@ -776,7 +861,7 @@ const SurveyEditor: React.FC<{
     <article className="workflow-editor-card workflow-evidence-card">
       <header><div><span>SITE EVIDENCE</span><h3>현장 사진·녹음·도면 → 회사 Google Drive에 업로드하세요</h3></div><em>프로젝트 자료실 자동 연동</em></header>
       <p className="workflow-evidence-intro">현장 사진을 기본으로 열었습니다. 녹음과 기타 조사자료는 상단 분류 탭을 바꿔 올리세요.</p>
-      <CaseEvidencePanel caseId={caseId} defaultCategory="SITE_PHOTO" allowedCategories={['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT']} compact onNavigate={onNavigate} />
+      <CaseEvidencePanel caseId={caseId} defaultCategory="SITE_PHOTO" allowedCategories={['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT']} compact onNavigate={onNavigate} recordBusy={disabled} onPrepareRecord={file => { if (!disabled) setPreparedSource({ file }); }} />
     </article>
   </div>
   );

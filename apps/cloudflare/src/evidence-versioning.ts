@@ -69,6 +69,11 @@ export async function prepareEvidenceVersion(input: {
   analyze: (candidates: EvidenceRecord[]) => Promise<{ analysis: VersionAnalysis; modelCode: string }>;
 }): Promise<{ response?: Response; plan?: EvidenceVersionPlan }> {
   const { db, caseId, category, userId } = input;
+  const versionMode = input.form.get('versionMode');
+  if (input.form.getAll('versionMode').length > 1 || (versionMode !== null && versionMode !== 'SEPARATE')
+    || (versionMode === 'SEPARATE' && (input.form.has('reviewId') || input.form.has('versionChoice')))) {
+    throw new GoogleDriveError('INVALID_VERSION_MODE', 400, 'AI 비교 없이 별도 저장할지 다시 선택해 주세요. 최신본 대체는 문서 비교 확인이 필요합니다.');
+  }
   try { await db.prepare('SELECT id FROM preview_evidence_upload_reviews LIMIT 0').all(); }
   catch { throw new GoogleDriveError('EVIDENCE_SCHEMA_UPGRADE_REQUIRED', 503, '자료실 버전 관리 마이그레이션이 필요합니다. 관리자에게 알려 주세요.'); }
   const files = await categoryEvidence(db, caseId, category);
@@ -80,7 +85,10 @@ export async function prepareEvidenceVersion(input: {
   let base: EvidenceRecord | null = null;
   let summary: string[] = [];
   let modelCode = '';
-  if (reviewId || choice) {
+  if (versionMode === 'SEPARATE') {
+    // Explicit consent creates an independent v1; exact duplicates and locking still apply.
+    modelCode = 'MANUAL_SEPARATE';
+  } else if (reviewId || choice) {
     if (typeof reviewId !== 'string' || !['REPLACE_AS_LATEST', 'KEEP_AS_NEW_SEPARATE'].includes(String(choice))) throw new GoogleDriveError('INVALID_VERSION_CHOICE', 400, '최신본 또는 별도 저장을 다시 선택해 주세요.');
     const review = await db.prepare('SELECT base_id AS baseId,snapshot_hash AS snapshot,analysis_json AS analysis,model_code AS modelCode FROM preview_evidence_upload_reviews WHERE id=? AND organization_id=? AND case_id=? AND category=? AND user_id=? AND fingerprint=? AND expires_at>? AND consumed_at IS NULL')
       .bind(reviewId, 'concost', caseId, category, userId, input.fingerprint, new Date().toISOString()).first<{ baseId: string; snapshot: string; analysis: string; modelCode: string }>();

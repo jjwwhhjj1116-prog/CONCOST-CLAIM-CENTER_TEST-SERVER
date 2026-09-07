@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-09-07';
 export const RELEASE_DATE_LABEL = '2026년 9월 7일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v1:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v2:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,8 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  { title: '파일 가져오기 → AI 회의록·조사기록 작성', text: '파일을 선택하면 원본 보관 후 AI 정리까지 이어집니다. 문서·녹음·사진·스캔 PDF의 내용을 읽어 회의록 양식, 논의·결정사항과 후속 업무에 연결합니다. 정리 결과는 검수 후 기록과 함께 저장하며, 실패한 단계는 원본을 유지한 채 다시 실행할 수 있습니다.' },
+  { title: '자료 등록·자동정리 연결', text: '자료실의 회의·조사 자료에서도 AI 작성 화면으로 이어집니다. AI 버전 비교가 불가능할 때는 동의 후 기존 파일을 유지하고 별도 자료로 보관할 수 있습니다. AI가 실행되지 않은 원문 가져오기는 자동정리 완료와 구분하여 표시합니다.' },
   { title: '보고서 저장·협업 안정성', text: '단계·챕터를 이동하는 것만으로 승인 버전이 바뀌지 않도록 수정했습니다. 협업 원고의 미저장 변경을 안내하고, 이동 전 저장과 충돌 확인을 강화했습니다. AI 문장 개선도 원문이 바뀌면 덮어쓰지 않습니다.' },
   { title: '보고서 AI 초안 작성', text: '‘챕터별 자동작성(권장)’과 ‘전체 한 번에 작성’을 구분했습니다. 전체 작성은 미작성 챕터를 순서대로 생성·저장하며, 중단 시 저장된 내용은 유지합니다. 작성 불가 사유와 연결 설정 안내도 표시합니다.' },
   { title: '보고서 편집·A4 페이지', text: '검수 편집기를 전체 폭으로 넓히고 협업·판례·피드백 도구를 접어서 볼 수 있게 정리했습니다. 수동 검수 전환과 챕터 가져오기 시 기존 서식을 보존하며, 목차 제목·머리글 편집, 제목 스타일·목록 도구, 전체화면 사용성을 개선했습니다.' },

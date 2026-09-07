@@ -148,8 +148,9 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
   // canonical OOXML part-name casing. ZIP member lookup therefore has to be
   // case-insensitive even though the worksheet path matcher already is.
   const byName = new Map(entries.map((entry) => [entry.name.toLowerCase(), entry]));
-  const worksheetEntries = entries.filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/iu.test(entry.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).slice(0, 20);
+  const worksheetEntries = entries.filter((entry) => /^xl\/worksheets\/[^/]+\.xml$/iu.test(entry.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   if (!worksheetEntries.length || !byName.has('[content_types].xml')) throw new IntakeSourceError('INVALID_INTAKE_XLSX', 'Excel 통합문서에서 워크시트를 찾을 수 없습니다.');
+  if (worksheetEntries.length > 20) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel 워크시트가 20개를 넘습니다. 원문이 누락되지 않도록 파일을 나누어 다시 올려 주세요.');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const shared: string[] = [];
   const sharedEntry = byName.get('xl/sharedstrings.xml');
@@ -159,10 +160,16 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
   }
   const lines: string[] = [];
   let cellCount = 0;
+  let populatedCellCount = 0;
   let characterCount = 0;
+  const appendLine = (line: string) => {
+    characterCount += line.length + (lines.length ? 1 : 0);
+    if (characterCount > MAX_EXTRACTED_CHARACTERS) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel에서 추출한 내용이 100,000자를 넘습니다. 원문이 누락되지 않도록 파일을 나누어 다시 올려 주세요.');
+    lines.push(line);
+  };
   for (const entry of worksheetEntries) {
     const xml = decoder.decode(await unzipEntry(bytes, entry));
-    lines.push(`[${entry.name.replace(/^xl\/worksheets\//u, '').replace(/\.xml$/u, '')}]`);
+    appendLine(`[${entry.name.replace(/^xl\/worksheets\//iu, '').replace(/\.xml$/iu, '')}]`);
     // Empty formatted cells are commonly serialized as <c .../>. Match those
     // atomically so they cannot swallow the next populated cell and shift all
     // references/values in company meeting-minute templates.
@@ -175,19 +182,21 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
       const type = /\bt="([^"]+)"/iu.exec(attrs)?.[1] ?? '';
       const raw = /<(?:[A-Za-z_][\w.-]*:)?v(?:\s[^>]*)?>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?v>/iu.exec(body)?.[1] ?? '';
       let value = '';
-      if (type === 's') value = shared[Number(raw)] ?? '';
+      if (type === 's') {
+        if (!/^\d+$/u.test(raw) || shared[Number(raw)] === undefined) throw new IntakeSourceError('INVALID_INTAKE_XLSX', `Excel ${ref} 셀의 원문 참조가 손상되었습니다. 파일을 복구하거나 다시 저장해 주세요.`);
+        value = shared[Number(raw)];
+      }
       else if (type === 'inlineStr') value = textNodes(body);
       else value = xmlText(raw);
-      value = value.replace(/\s+/gu, ' ').trim();
+      // Preserve speaker turns and list spacing inside a cell; do not flatten the source.
+      value = value.replace(/\r\n?/gu, '\n').trim();
       if (!value) continue;
-      const line = `${ref}: ${value}`;
-      characterCount += line.length + 1;
-      if (characterCount > MAX_EXTRACTED_CHARACTERS) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel에서 추출한 내용이 100,000자를 넘습니다. 필요한 시트만 남겨 다시 올려 주세요.');
-      lines.push(line);
+      populatedCellCount += 1;
+      appendLine(`${ref}: ${value}`);
     }
   }
   const text = lines.join('\n').trim();
-  if (!text || cellCount === 0) throw new IntakeSourceError('EMPTY_INTAKE_XLSX', 'Excel 파일에 AI가 정리할 셀 내용이 없습니다.');
+  if (!populatedCellCount) throw new IntakeSourceError('EMPTY_INTAKE_XLSX', 'Excel 파일에 AI가 정리할 셀 내용이 없습니다.');
   return text;
 }
 
@@ -216,14 +225,15 @@ export async function extractEvidenceText(fileName: string, mimeType: string, by
   if (['txt', 'csv', 'xlsx'].includes(extension)) return (await extractIntakeSource(fileName, mimeType, bytes)).extractedText ?? '';
   if (!['docx', 'hwpx'].includes(extension)) throw new IntakeSourceError('UNSUPPORTED_EVIDENCE_TEXT', '문서 텍스트 추출을 지원하지 않는 형식입니다.');
   const entries = zipEntries(bytes).filter((entry) => extension === 'docx' ? /^word\/(document|header\d+|footer\d+)\.xml$/iu.test(entry.name) : /^Contents\/section\d+\.xml$/iu.test(entry.name));
-  if (!entries.length || entries.length > 100) throw new IntakeSourceError('INVALID_EVIDENCE_DOCUMENT', '문서 본문을 읽을 수 없습니다.');
+  if (!entries.length) throw new IntakeSourceError('INVALID_EVIDENCE_DOCUMENT', '문서 본문을 읽을 수 없습니다.');
+  if (entries.length > 100) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', '문서 본문 구역이 100개를 넘습니다. 원문이 누락되지 않도록 파일을 나누어 다시 올려 주세요.');
   const parts: string[] = [];
   let length = 0;
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
     const xml = new TextDecoder('utf-8', { fatal: true }).decode(await unzipEntry(bytes, entry));
     const text = [...xml.matchAll(/<(?:[\w.-]+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?t>/giu)].map((match) => xmlText(match[1])).join('\n');
-    length += text.length;
-    if (length > MAX_EXTRACTED_CHARACTERS) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', '문서 내용이 100,000자를 넘습니다. 비교할 문서를 나누어 주세요.');
+    length += text.length + (parts.length ? 1 : 0);
+    if (length > MAX_EXTRACTED_CHARACTERS) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', '문서 내용이 100,000자를 넘습니다. 원문이 누락되지 않도록 파일을 나누어 다시 올려 주세요.');
     parts.push(text);
   }
   const result = parts.join('\n').trim();

@@ -62,7 +62,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
-export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', allowedCategories, compact = false, onNavigate }: { caseId: string; defaultCategory?: CaseEvidenceCategory; allowedCategories?: readonly CaseEvidenceCategory[]; compact?: boolean; onNavigate: (path: string) => void }): React.ReactElement {
+export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', allowedCategories, compact = false, onNavigate, onPrepareRecord, recordBusy = false }: { caseId: string; defaultCategory?: CaseEvidenceCategory; allowedCategories?: readonly CaseEvidenceCategory[]; compact?: boolean; onNavigate: (path: string) => void; onPrepareRecord?: (file: File) => void | Promise<void>; recordBusy?: boolean }): React.ReactElement {
   const categoryKey = allowedCategories?.join('|') ?? 'ALL';
   const visibleCategories = allowedCategories?.length ? allowedCategories : Object.keys(categoryCopy) as CaseEvidenceCategory[];
   const initialCategory = visibleCategories.includes(defaultCategory) ? defaultCategory : visibleCategories[0] ?? defaultCategory;
@@ -81,6 +81,12 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const caseIdRef = useRef(caseId);
   const loadSequenceRef = useRef(0);
   const uploadBusyRef = useRef(false);
+  const [preparingId, setPreparingId] = useState('');
+  const prepareController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setPreparingId('');
+    return () => { prepareController.current?.abort(); };
+  }, [caseId]);
   const load = useCallback(async () => {
     if (!caseId) { setFiles([]); return; }
     const requestCaseId = caseId;
@@ -145,12 +151,38 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     } catch (reason) { setError(reason instanceof Error ? reason.message : '파일 다운로드에 실패했습니다.'); }
   };
 
+  const recordRoute = (value: CaseEvidenceCategory) =>
+    ['KICKOFF_MATERIAL','MEETING_MINUTES','MEETING_RECORDING'].includes(value) ? '/workflow/kickoff'
+      : ['SITE_PHOTO','SITE_RECORDING','SITE_DOCUMENT'].includes(value) ? '/workflow/site-survey' : null;
+  const prepareRecord = async (file: CaseEvidenceFile) => {
+    const route = recordRoute(file.category);
+    if (!route || preparingId || recordBusy) return;
+    if (!onPrepareRecord) {
+      onNavigate(`${route}?caseId=${encodeURIComponent(caseId)}&evidenceId=${encodeURIComponent(file.id)}`);
+      return;
+    }
+    const targetCaseId = caseId;
+    const controller = new AbortController();
+    prepareController.current = controller;
+    setPreparingId(file.id); setError('');
+    try {
+      const response = await fetch(`/api/cases/evidence/${encodeURIComponent(file.id)}/download`, { signal: controller.signal });
+      if (!response.ok) throw new Error('원본을 읽지 못했습니다. 다운로드 권한과 Drive 연결을 확인해 주세요.');
+      const blob = await response.blob();
+      if (controller.signal.aborted || caseIdRef.current !== targetCaseId) return;
+      await onPrepareRecord(new File([blob], file.originalName, { type: file.mimeType || blob.type }));
+    } catch (reason) {
+      if (!controller.signal.aborted && caseIdRef.current === targetCaseId) setError(reason instanceof Error ? reason.message : 'AI 정리용 원본을 가져오지 못했습니다.');
+    } finally {
+      if (!controller.signal.aborted && caseIdRef.current === targetCaseId) setPreparingId('');
+    }
+  };
   const categoryFiles = files.filter((file) => file.category === category);
   const latestFiles = categoryFiles.filter((file) => file.isLatest !== false);
   const visibleFiles = compact ? latestFiles.slice(0, 6) : latestFiles;
   const folderGroups = groupEvidenceFiles(categoryFiles.filter((file) => file.isLatest === false || visibleFiles.includes(file)));
   const missingFolderNames = categoryFiles.some((file) => file.storageProvider === 'GOOGLE_DRIVE' && !file.folder?.name);
-  const fileRow = (file: CaseEvidenceFile) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small className="case-evidence-uploader">업로더: {file.uploadedBy || '기록 없음'}</small><small>v{file.versionNumber ?? 1} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {formatBytes(file.byteSize)}</small>{Boolean(file.changeSummary?.length) && <details className="evidence-change-summary"><summary title={file.changeSummary?.join('\n')}>Gemini 변경 요약</summary><ul>{file.changeSummary?.map((text, index) => <li key={index}>{text}</li>)}</ul></details>}</div><span className={`evidence-version-badge ${file.isLatest === false ? 'is-archive' : 'is-latest'}`}>{file.isLatest === false ? '이전 버전 / ARCHIVE' : '최신본 / FINAL'}</span><div className="case-evidence-file-actions"><Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>;
+  const fileRow = (file: CaseEvidenceFile) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small className="case-evidence-uploader">업로더: {file.uploadedBy || '기록 없음'}</small><small>v{file.versionNumber ?? 1} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {formatBytes(file.byteSize)}</small>{Boolean(file.changeSummary?.length) && <details className="evidence-change-summary"><summary title={file.changeSummary?.join('\n')}>Gemini 변경 요약</summary><ul>{file.changeSummary?.map((text, index) => <li key={index}>{text}</li>)}</ul></details>}</div><span className={`evidence-version-badge ${file.isLatest === false ? 'is-archive' : 'is-latest'}`}>{file.isLatest === false ? '이전 버전 / ARCHIVE' : '최신본 / FINAL'}</span><div className="case-evidence-file-actions">{recordRoute(file.category) && <Button size="sm" disabled={Boolean(preparingId) || recordBusy} onClick={() => void prepareRecord(file)}>{preparingId === file.id ? '원본 읽는 중…' : file.category.startsWith('SITE_') ? 'AI 조사기록 작성' : 'AI 회의록 작성'}</Button>}<Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>;
   const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
   return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 통합 자료실">
     {!compact && <h3>프로젝트 자료 → 회사 Google Drive에 업로드하세요</h3>}
