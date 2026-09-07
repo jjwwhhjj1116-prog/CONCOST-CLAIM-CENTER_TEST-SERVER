@@ -6351,7 +6351,7 @@ async function handlePreviewReportMemory(request: Request, env: CloudflareEnv, u
   return json({ candidates: await previewMemoryCandidates(env), phase: 'CF29_REPORT_MEMORY_LEARNING' });
 }
 
-function parsePreviewOutlineSuggestions(content: string, prompts: PreviewPromptRow[]): Array<{ chapterId: string; chapterCode: string; chapterTitle: string; planningNote: string }> | null {
+export function parsePreviewOutlineSuggestions(content: string, prompts: PreviewPromptRow[]): Array<{ chapterId: string; chapterCode: string; chapterTitle: string; planningNote: string }> | null {
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/iu)?.[1]?.trim() ?? content.trim();
   let parsed: unknown;
   try { parsed = JSON.parse(fenced); } catch { return null; }
@@ -6360,11 +6360,12 @@ function parsePreviewOutlineSuggestions(content: string, prompts: PreviewPromptR
   const byCode = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.chapterCode, row]));
   const suggestions: Array<{ chapterId: string; chapterCode: string; chapterTitle: string; planningNote: string }> = [];
   for (const item of rows) {
-    if (!item || typeof item !== 'object') continue;
-    const chapterCode = String((item as Record<string, unknown>).chapterCode ?? '');
-    const planningNote = String((item as Record<string, unknown>).planningNote ?? '').trim();
+    if (!item || typeof item !== 'object') return null;
+    const { chapterCode, chapterTitle, planningNote } = item as Record<string, unknown>;
+    if (typeof chapterCode !== 'string' || typeof chapterTitle !== 'string' || !chapterTitle.trim() || chapterTitle.length > 300 || typeof planningNote !== 'string' || !planningNote.trim() || planningNote.length > 2000) return null;
     const prompt = byCode.get(chapterCode);
-    if (prompt && planningNote && planningNote.length <= 2000) suggestions.push({ chapterId: prompt.id, chapterCode, chapterTitle: prompt.title, planningNote });
+    if (!prompt) return null;
+    suggestions.push({ chapterId: prompt.id, chapterCode, chapterTitle: chapterTitle.trim(), planningNote: planningNote.trim() });
   }
   return suggestions.length === byCode.size && new Set(suggestions.map((row) => row.chapterCode)).size === byCode.size ? suggestions : null;
 }
@@ -6596,7 +6597,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       env,
       route,
       `${prompts[0]?.systemPrompt ?? ''}\n\n[유형별 Stage 1 목차 기획 지침]\n${guideline.stage1Prompt}\n\n[승인 목차 블루프린트]\n${guideline.tocBlueprint}`,
-      `현재 프로젝트 자료를 읽고 승인된 각 챕터에 들어갈 구체 쟁점과 근거 계획을 작성하십시오. 반드시 다른 문장 없이 {"chapters":[{"chapterCode":"CH-01","planningNote":"..."}]} JSON만 출력하십시오. 모든 승인 챕터를 정확히 한 번 포함하십시오.\n\n[승인 챕터]\n${JSON.stringify(approvedChapters)}\n\n[현재 프로젝트 데이터]\n${contextJson}`,
+      `현재 프로젝트 자료를 읽고 승인된 각 챕터의 목차 제목과 구체 쟁점·근거 계획을 제안하십시오. chapterTitle은 해당 챕터의 역할을 유지하면서 프로젝트 내용에 맞게 다듬은 1~300자 제목입니다. 제목에 CH 코드나 순번을 중복하지 마십시오. planningNote는 1~2000자 작성 방향입니다. 자료에 없는 사실·금액·결론을 만들지 마십시오. 변경할 근거가 없는 제목은 유지해도 됩니다. 반드시 다른 문장 없이 {"chapters":[{"chapterCode":"CH-01","chapterTitle":"프로젝트 검토 결론 요약","planningNote":"..."}]} JSON만 출력하십시오. 모든 승인 챕터 코드를 정확히 한 번 포함하고 순서·개수·역할은 변경하지 마십시오.\n\n[승인 챕터]\n${JSON.stringify(approvedChapters)}\n\n[현재 프로젝트 데이터]\n${contextJson}`,
       user.id
     );
     if (generated.response) return generated.response;

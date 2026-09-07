@@ -77,8 +77,8 @@ test('CF117 report workflow preserves concurrent edits and keeps reference-only 
       await page.getByText('참고 열람 전용 · 현재 프로젝트 유형은 TYPE-01, 이 원본의 주 유형은 TYPE-04입니다.', { exact: true }).waitFor();
       await page.getByRole('dialog').getByRole('button', { name: '확인', exact: true }).click();
       await page.locator('.report-wizard-navigation li:nth-child(2) button').click();
-      await page.getByRole('button', { name: '✦ AI·템플릿으로 목차 자동 만들기', exact: true }).click();
-      await page.getByRole('button', { name: /목차 편집 화면 보기/u }).click();
+      await page.getByRole('button', { name: '템플릿 목차 제안', exact: true }).click();
+      await page.getByRole('button', { name: '제안 전체 적용', exact: true }).click();
       await page.getByRole('button', { name: '수정한 목차 저장', exact: true }).click();
       await page.waitForFunction(() => (window as any).cf117.outlineWrites.length === 1);
       const saved = await page.evaluate(() => (window as any).cf117.outlineWrites[0].items.map((item: any) => ({ chapterCode: item.chapterCode, chapterTitle: item.chapterTitle })));

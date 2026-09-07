@@ -66,7 +66,7 @@ test('CF33 Admin UI separates type policy from chapter roles and report authorin
   assert.match(admin,/STAGE 1 · 목차 생성/u);
   assert.match(admin,/STAGE 2 · 챕터 작성/u);
   assert.match(admin,/챕터별 역할·작성 지침/u);
-  assert.match(studio,/AI·템플릿으로 목차 자동 만들기/u);
+  assert.match(studio,/AI 목차 자동생성/u);
   assert.match(studio,/관리자 승인.*작성 지침/u);
   assert.match(worker,/preview_report_type_guidelines/u);
   assert.match(worker,/유형별 Stage 2 공통 지침/u);

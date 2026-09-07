@@ -1,4 +1,5 @@
 import { fetchEvidenceUpload } from '../evidence/upload-evidence';
+import './ReportOutlinePlanner.css';
 import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
@@ -54,6 +55,7 @@ interface ReportWorkspace {
 }
 interface AuthoringChapter { id: string; chapterCode: string; title: string; agentCode: string; ordinal: number; promptVersion: number }
 interface OutlineItem { chapterId: string; chapterCode: string; chapterTitle: string; promptVersion: number; planningNote: string }
+type OutlineSuggestion = Pick<OutlineItem, 'chapterId' | 'chapterCode' | 'chapterTitle' | 'planningNote'>;
 interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
 interface SourceGroup { code: 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY' | 'QUANTITY' | 'EVIDENCE' | 'LITIGATION'; label: string; status: 'READY' | 'PARTIAL' | 'EMPTY'; itemCount: number; detail: string; route: string }
 interface ReportTemplatePreview { claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }
@@ -82,7 +84,7 @@ const REPORT_WIZARD_STEPS: readonly {
   doneText: string;
 }[] = [
   { id: 1, title: '프로젝트·템플릿 확인', shortHelp: '프로젝트와 원본 보고서 템플릿을 선택하고 참고자료를 확인합니다.', tasks: ['프로젝트 선택', '원본 템플릿 선택', '참고자료 준비상태 확인'], doneText: '프로젝트와 승인 템플릿이 연결되면 완료' },
-  { id: 2, title: '목차 기획', shortHelp: '선택한 템플릿에서 목차를 자동 만들고 제목만 쉽게 다듬습니다.', tasks: ['AI·템플릿으로 목차 자동 만들기', '이상한 챕터 제목만 바로 수정하기', '목차 확정 누르기'], doneText: '목차 확정 표시가 나오면 완료' },
+  { id: 2, title: '목차 기획', shortHelp: '왼쪽 목차를 직접 수정하거나 오른쪽 AI 제안을 비교·적용한 뒤 확정합니다.', tasks: ['왼쪽 목차 직접 수정', '오른쪽 AI 제안 비교·적용', '사용할 목차 확정'], doneText: '목차 확정 표시가 나오면 완료' },
   { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성, 직접 작성 또는 HWP·DOCX 전체 문서 적용을 선택합니다.', tasks: ['작성 방식 선택', '전체 문서 적용 또는 챕터 작성', 'Ctrl+S·자동저장 확인'], doneText: '전체 문서 적용 또는 모든 챕터 초안 작성 시 완료' },
   { id: 4, title: '담당자 검수·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 담당자가 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', '자동 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
   { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', '미리보기와 동일한 DOCX·PDF·HWP 내려받기'], doneText: '승인본을 확정하면 보고서 작업 완료' }
@@ -181,6 +183,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const outlineSyncPendingRef = useRef(false);
   const [outlineSyncNotice, setOutlineSyncNotice] = useState('');
   const [generatingOutline, setGeneratingOutline] = useState(false);
+  const outlineProposalSequence = useRef(0);
+  const [outlineProposal, setOutlineProposal] = useState<{ caseId: string; source: 'AI' | 'TEMPLATE'; items: OutlineSuggestion[] } | null>(null);
+  const [outlineProposalError, setOutlineProposalError] = useState('');
+  const [editingOutlineChapterId, setEditingOutlineChapterId] = useState<string | null>(null);
   const [outlineStatus, setOutlineStatus] = useState<'DRAFT' | 'CONFIRMED'>('DRAFT');
   const [outlineVersion, setOutlineVersion] = useState(0);
   const [outlineNotes, setOutlineNotes] = useState<Record<string, string>>({});
@@ -270,6 +276,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const loadDraft = useCallback(async (caseId: string) => {
     const sequence = ++loadSequence.current;
+    outlineProposalSequence.current++;
+    setOutlineProposal(null); setOutlineProposalError(''); setGeneratingOutline(false); setEditingOutlineChapterId(null);
     setLoading(true); setError(''); setLoadedCaseId('');
     try {
       const [result, reviewResult, finalizationResult, authoringResult, collaborationResult] = await Promise.all([
@@ -486,6 +494,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [saveNow, chapterDrafts, chapterCollaboration, editable]);
 
   const changeWizardStep = async (step: ReportWizardStep) => {
+    if (generatingOutline) { setOutlineProposalError('AI 목차 제안이 끝난 뒤 현재 목차를 저장하고 이동해 주세요. 입력 내용은 유지됩니다.'); return; }
     if (outlineSaveInFlight.current || generationInFlight.current || chapterSaveInFlight.current || improving || saving || loading) return;
     if (step === activeStep) return;
     if (step > activeStep && !stepUnlocked[step]) {
@@ -615,12 +624,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   useEffect(() => registerNavigationBlocker((navigation) => {
+    if (generatingOutline) { setOutlineProposalError('AI 목차 제안이 끝난 뒤 현재 목차를 저장하고 이동해 주세요. 입력 내용은 유지됩니다.'); return true; }
     if (saving || improving || linkingHwp || generationInFlight.current || chapterSaveInFlight.current) { setError('작성·저장·파일 처리가 끝난 뒤 이동해 주세요.'); return true; }
     const current = `${window.location.pathname}${window.location.search}`;
     if (!selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current || (!chaptersDirty && (!editable || (!dirty && !outlineDirty && !workspaceDirty && !outlineSaveInFlight.current && !outlineSyncPendingRef.current)))) return false;
     setPendingNavigation(navigation);
     return true;
-  }), [dirty, editable, loadedCaseId, outlineDirty, selectedCaseId, workspaceDirty, chaptersDirty, saving, improving, linkingHwp]);
+  }), [dirty, editable, loadedCaseId, outlineDirty, selectedCaseId, workspaceDirty, chaptersDirty, saving, improving, linkingHwp, generatingOutline]);
 
   const continuePendingNavigation = () => {
     const navigation = pendingNavigation;
@@ -630,6 +640,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const saveAndContinueNavigation = async () => {
+    if (generatingOutline) { setOutlineProposalError('AI 목차 제안이 끝난 뒤 현재 목차를 저장하고 이동해 주세요. 입력 내용은 유지됩니다.'); return; }
     if (!pendingNavigation || navigationBusy || saving || savingOutline) return;
     setNavigationBusy(true);
     try {
@@ -646,41 +657,40 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     }
   };
 
-  const generateOutline = async () => {
-    if (!editable || !authoring?.available || generatingOutline || savingOutline || loadedCaseId !== selectedCaseId) return;
+  const outlineEditingBlocked = !editable || loading || savingOutline || saving || outlineSyncPending || generating || improving || Boolean(chapterBusy) || submittingReview || linkingHwp || loadedCaseId !== selectedCaseId;
+  const generateOutline = async (source: 'AI' | 'TEMPLATE' = 'AI') => {
+    if (outlineEditingBlocked || !authoring?.available || generatingOutline) return;
     const requestCaseId = selectedCaseId;
-    setGeneratingOutline(true); setError(''); setAiGeneration({ kind: 'outline', status: 'running', title: '보고서 목차 작성계획을 만들고 있습니다' });
+    const sequence = ++outlineProposalSequence.current;
+    setOutlineProposalError('');
     // Other claim types are reference-only, never the current project's defaults.
     const templateTitles = (selectedTemplateCategory?.matchesCurrentType ? selectedTemplateCategory : authoring.templateLibrary.find(category => category.matchesCurrentType))?.outline ?? [];
-    const applyTemplateOutline = () => {
-      setOutlineTitles(Object.fromEntries(authoring.chapters.map((chapter, index) => {
+    if (source === 'TEMPLATE') {
+      setOutlineProposal({ caseId: requestCaseId, source, items: authoring.chapters.map((chapter, index) => {
         const sourceTitle = templateTitles[index]?.replace(/^\s*(?:\d+[.)]|[IVX]+[.)]|CH-?\d+\s*[.)-]?)\s*/iu, '').trim();
-        return [chapter.id, sourceTitle || chapter.title];
-      })));
-      setOutlineNotes(Object.fromEntries(authoring.chapters.map((chapter) => [chapter.id, outlineNotes[chapter.id] ?? ''])));
-      setOutlineDirty(true);
-    };
-    try {
-      if (!authoring.outlineAiConnected) {
-        applyTemplateOutline();
-        setAiGeneration((current) => current?.kind === 'outline' ? { ...current, status: 'complete' } : current);
-        return;
-      }
-      const result = await apiRequest<{ suggestions: Array<{ chapterId: string; chapterCode: string; chapterTitle?: string; planningNote: string }>; guidelineVersion: number }>('/api/report-authoring/outline/generate', { method: 'POST', timeoutMs: 65_000, body: JSON.stringify({ caseId: requestCaseId }) });
-      if (selectedCaseRef.current !== requestCaseId) return;
-      setOutlineNotes(Object.fromEntries(result.suggestions.map((item) => [item.chapterId, item.planningNote])));
-      setOutlineTitles(Object.fromEntries(authoring.chapters.map((chapter) => {
-        const suggestion = result.suggestions.find((item) => item.chapterId === chapter.id);
-        return [chapter.id, suggestion?.chapterTitle?.trim() || chapter.title];
-      })));
-      setOutlineDirty(true); setAiGeneration((current) => current?.kind === 'outline' ? { ...current, status: 'complete' } : current);
-    } catch {
-      if (selectedCaseRef.current === requestCaseId) {
-        applyTemplateOutline();
-        setAiGeneration((current) => current?.kind === 'outline' ? { ...current, status: 'complete' } : current);
-      }
+        return { chapterId: chapter.id, chapterCode: chapter.chapterCode, chapterTitle: (sourceTitle || chapter.title).slice(0, 300), planningNote: outlineNotes[chapter.id] ?? '' };
+      }) });
+      return;
     }
-    finally { if (selectedCaseRef.current === requestCaseId) setGeneratingOutline(false); }
+    if (!authoring.outlineAiConnected) { setOutlineProposalError('목차 AI 연결이 필요합니다. 관리자에게 연결을 확인하거나 템플릿 목차 제안을 사용해 주세요. 왼쪽 목차는 그대로 유지됩니다.'); return; }
+    setGeneratingOutline(true);
+    try {
+      const result = await apiRequest<{ suggestions: OutlineSuggestion[] }>('/api/report-authoring/outline/generate', { method: 'POST', timeoutMs: 105_000, body: JSON.stringify({ caseId: requestCaseId }) });
+      if (selectedCaseRef.current !== requestCaseId || sequence !== outlineProposalSequence.current) return;
+      if (!Array.isArray(result.suggestions) || result.suggestions.length !== authoring.chapters.length || new Set(result.suggestions.map(item => item.chapterId)).size !== authoring.chapters.length || result.suggestions.some(item => !authoring.chapters.some(chapter => chapter.id === item.chapterId && chapter.chapterCode === item.chapterCode) || typeof item.chapterTitle !== 'string' || !item.chapterTitle.trim() || item.chapterTitle.length > 300 || typeof item.planningNote !== 'string' || item.planningNote.length > 2000)) throw new Error('AI 목차 응답이 현재 챕터 구성과 맞지 않습니다. 다시 생성해 주세요.');
+      setOutlineProposal({ caseId: requestCaseId, source, items: authoring.chapters.map(chapter => { const item = result.suggestions.find(item => item.chapterId === chapter.id)!; return { ...item, chapterTitle: item.chapterTitle.trim() }; }) });
+      setOutlineProposalError('');
+    } catch (reason) {
+      if (selectedCaseRef.current === requestCaseId && sequence === outlineProposalSequence.current) setOutlineProposalError(`${reason instanceof Error ? reason.message : 'AI 목차를 생성하지 못했습니다.'} 왼쪽 목차는 변경하지 않았습니다. 다시 생성하거나 템플릿 목차 제안을 사용해 주세요.`);
+    }
+    finally { if (selectedCaseRef.current === requestCaseId && sequence === outlineProposalSequence.current) setGeneratingOutline(false); }
+  };
+  const applyOutlineProposal = (chapterId?: string) => {
+    if (outlineEditingBlocked || generatingOutline || !outlineProposal || outlineProposal.caseId !== selectedCaseId) return;
+    const items = outlineProposal.items.filter(item => !chapterId || item.chapterId === chapterId);
+    setOutlineTitles(current => ({ ...current, ...Object.fromEntries(items.map(item => [item.chapterId, item.chapterTitle])) }));
+    setOutlineNotes(current => ({ ...current, ...Object.fromEntries(items.map(item => [item.chapterId, item.planningNote])) }));
+    setOutlineDirty(true); setOutlineSyncNotice('제안을 왼쪽 목차에 반영했습니다. 직접 더 수정하거나 저장·확정해 주세요. 기존 본문은 아직 변경하지 않았습니다.');
   };
 
   const generationBlockedReason = loading || loadedCaseId !== selectedCaseId ? '프로젝트를 불러오는 중입니다.'
@@ -1175,12 +1185,30 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <Card title="" className="report-step-card report-step-card--2 report-stage-card">
           {renderStageHeader(2)}
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 목차 템플릿이 없습니다.'}</div> : <div className="report-outline-planner">
-            <header><div><span>{authoring.claimType} · TEMPLATE OUTLINE · v{outlineVersion || 'NEW'}</span><h3>템플릿으로 목차를 만들고 제목만 수정하세요.</h3><p>작성 방향을 직접 적을 필요가 없습니다. 원본 템플릿에서 목차를 자동으로 불러오고, 이상한 제목만 바로 고친 뒤 확정하면 됩니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
+            <header><div><h3>목차를 직접 다듬고, AI 제안과 비교하세요.</h3><p>왼쪽이 보고서에 사용할 목차입니다. 제목을 클릭해 바로 수정하거나, 오른쪽 제안을 적용한 뒤 저장·확정하세요.</p></div></header>
             {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.claimType} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
-            <div className="notice-box"><strong>쉬운 시작:</strong> 파란색 “AI·템플릿으로 목차 자동 만들기”를 누르세요. API 키가 없어도 선택한 원본 템플릿 목차는 바로 불러옵니다.</div>
-            <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => changeSelectedChapter(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {outlineTitles[chapter.id] || chapter.title}</strong><small>{chapter.agentCode} · 제목 편집 가능</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
-            {selectedChapter && <div className="report-outline-note report-outline-title-editor"><label htmlFor="report-outline-title"><span>{selectedChapter.chapterCode}</span> 챕터 제목 직접 수정</label><input id="report-outline-title" maxLength={300} value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} disabled={!editable || savingOutline || saving || generatingOutline || outlineSyncPending} onChange={(event) => { setOutlineTitles((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} /><small>저장하면 이미 작성된 본문·미리보기의 챕터 제목도 함께 바뀝니다. 본문 내용·표·이미지는 유지됩니다.</small></div>}
-            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 대기'}</span><Button className="report-action-ai" disabled={!editable || generatingOutline || savingOutline || saving || outlineSyncPending} onClick={() => void generateOutline()}>{generatingOutline ? '템플릿 목차 불러오는 중…' : '✦ AI·템플릿으로 목차 자동 만들기'}</Button><Button className="report-action-review" variant="secondary" disabled={!editable || savingOutline || saving || outlineSyncPending || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '수정한 목차 저장'}</Button><Button className="report-action-confirm" disabled={!editable || savingOutline || saving || outlineSyncPending || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 확정 · 다음 단계'}</Button></div>
+            <div className="report-outline-columns">
+              <section className="report-outline-column report-outline-current" aria-labelledby="report-outline-current-title">
+                <header><h4 id="report-outline-current-title">사용할 목차 · 직접 편집</h4><p>기본 목차에서 시작합니다. 제목을 누르면 그 자리에서 수정할 수 있습니다.</p></header>
+                <ol>{authoring.chapters.map(chapter => <li className="report-outline-current-row" key={chapter.id}>
+                  <span className="report-outline-code">{chapter.chapterCode}</span>
+                  {editingOutlineChapterId === chapter.id ? <input autoFocus aria-label={`${chapter.chapterCode} 목차 제목`} maxLength={300} value={outlineTitles[chapter.id] ?? chapter.title} disabled={outlineEditingBlocked} onChange={event => { setOutlineTitles(current => ({ ...current, [chapter.id]: event.target.value })); setOutlineDirty(true); setOutlineSyncNotice(''); }} onBlur={() => setEditingOutlineChapterId(null)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.currentTarget.blur(); }} />
+                    : <button type="button" className="report-outline-edit-title" aria-label={`${chapter.chapterCode} 목차 제목 직접 수정`} disabled={outlineEditingBlocked} onClick={() => setEditingOutlineChapterId(chapter.id)}><strong>{outlineTitles[chapter.id] ?? chapter.title}</strong><span>직접 수정</span></button>}
+                </li>)}</ol>
+                <p className="report-outline-help">저장하면 검수·미리보기의 챕터 제목도 함께 반영됩니다. 본문·표·이미지는 유지됩니다.</p>
+              </section>
+              <section className="report-outline-column report-outline-suggestions" aria-labelledby="report-outline-suggestions-title" aria-busy={generatingOutline}>
+                <header><h4 id="report-outline-suggestions-title">AI 목차 제안</h4><p>제안은 먼저 오른쪽에 표시됩니다. 적용한 제목만 왼쪽 목차로 옮겨집니다.</p></header>
+                <div className="report-outline-proposal-tools"><Button className="report-action-ai" disabled={outlineEditingBlocked || generatingOutline} onClick={() => void generateOutline()}>{generatingOutline ? 'AI 목차 생성 중…' : 'AI 목차 자동생성'}</Button><Button variant="secondary" disabled={outlineEditingBlocked || generatingOutline} onClick={() => void generateOutline('TEMPLATE')}>템플릿 목차 제안</Button></div>
+                {generatingOutline && <p role="status" className="report-outline-help">프로젝트 자료로 제목을 제안하고 있습니다. 왼쪽에서 직접 수정해도 입력 내용은 유지됩니다.</p>}
+                {outlineProposalError && <p role="alert" className="error-box">{outlineProposalError}</p>}
+                {outlineProposal?.caseId === selectedCaseId ? <>
+                  <div className="report-outline-proposal-summary"><strong>{outlineProposal.source === 'AI' ? 'AI 생성 제안' : '원본 템플릿 제안 · AI 생성 아님'}</strong><Button variant="secondary" disabled={outlineEditingBlocked || generatingOutline} onClick={() => applyOutlineProposal()}>제안 전체 적용</Button></div>
+                  <ol>{outlineProposal.items.map(item => { const applied = (outlineTitles[item.chapterId] ?? authoring.chapters.find(chapter => chapter.id === item.chapterId)?.title) === item.chapterTitle && (outlineNotes[item.chapterId] ?? '') === item.planningNote; return <li className="report-outline-candidate" key={item.chapterId}><div><span className="report-outline-code">{item.chapterCode}</span><strong>{item.chapterTitle}</strong></div><Button variant="secondary" aria-label={`${item.chapterCode} 제안 적용`} disabled={outlineEditingBlocked || generatingOutline || applied} onClick={() => applyOutlineProposal(item.chapterId)}>{applied ? '현재 목차와 같음' : '← 적용'}</Button></li>; })}</ol>
+                </> : !generatingOutline && <div className="report-outline-empty">아직 생성한 제안이 없습니다.<br/>AI 목차 자동생성을 누르거나 왼쪽 기본 목차를 직접 수정해 사용하세요.</div>}
+              </section>
+            </div>
+            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 대기'}</span><Button className="report-action-review" variant="secondary" disabled={outlineEditingBlocked || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '수정한 목차 저장'}</Button><Button className="report-action-confirm" disabled={outlineEditingBlocked || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 확정'}</Button></div>
             {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장 기능을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.</div>}
             {outlineFeedback}
           </div>}
