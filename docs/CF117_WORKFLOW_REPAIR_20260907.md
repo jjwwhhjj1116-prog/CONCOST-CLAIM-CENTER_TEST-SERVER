@@ -128,6 +128,10 @@ production build and matching final assets on both environments.
   empty draft. 13:32:54 showed Step2 and saved timestamp. Reload retained Step2
   and zero body characters; saved workspace list confirmed version1. No outline
   generation, confirmation, body edit or finalization was performed.
+- After the final deployment, read-only reloads again retained test CC03 Step3
+  and gaopen CC12 Step2, version1, zero body characters and their saved timestamps.
+  No save-failure or autosave-paused message remained. This final check made no
+  new stage, outline, body or meeting changes.
 
 ## Remaining verification boundary
 
@@ -143,3 +147,8 @@ success must not be inferred from MIME/byte/mock tests.
 Existing actual XLSX/Gemini success evidence belongs to CF116 and is documented
 there; it is not a new CF117 recording test. This release is not a claim that all
 possible document formats or business operations are error-free.
+
+The test server's official case-law search still displays the requirement for
+`LAW_API_OC` configuration. Its live external search connection was not verified
+or configured in this repair; it is separate from the restored report save and
+stage-navigation workflow.
