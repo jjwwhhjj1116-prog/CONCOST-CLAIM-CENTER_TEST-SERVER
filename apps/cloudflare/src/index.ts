@@ -6429,9 +6429,99 @@ function previewLawCandidate(row: Record<string, unknown>): PreviewCaseLawCandid
   };
 }
 
+const PREVIEW_LAW_OC = /^[A-Za-z0-9._@+-]{2,120}$/u;
+const previewLawApiAad = () => `claim-center:law-api-oc:v1:${PREVIEW_ORGANIZATION_ID}`;
+interface PreviewLawApiSettingsRow { ciphertextHex: string; ivHex: string; version: number; updatedAt: string }
+
+async function previewLawApiSettingsRow(env: CloudflareEnv): Promise<PreviewLawApiSettingsRow | null> {
+  if (!env.DB) return null;
+  try {
+    return await env.DB.prepare('SELECT ciphertext_hex AS ciphertextHex,iv_hex AS ivHex,version,updated_at AS updatedAt FROM preview_law_api_settings WHERE organization_id=?')
+      .bind(PREVIEW_ORGANIZATION_ID).first<PreviewLawApiSettingsRow>();
+  } catch (reason) {
+    // The old deployment may still be running during an additive migration.
+    if (reason instanceof Error && /no such table: (?:main\.)?preview_law_api_settings/iu.test(reason.message)) return null;
+    throw new Error('LAW_API_SETTINGS_UNAVAILABLE');
+  }
+}
+
+async function previewLawApiOc(env: CloudflareEnv): Promise<string> {
+  const row = await previewLawApiSettingsRow(env);
+  if (!row) return PREVIEW_LAW_OC.test(env.LAW_API_OC?.trim() ?? '') ? env.LAW_API_OC!.trim() : '';
+  const masterKey = previewAiMasterKey(env);
+  if (!masterKey) throw new Error('LAW_API_CREDENTIAL_UNAVAILABLE');
+  try {
+    const oc = await decryptSecret(row.ciphertextHex, row.ivHex, masterKey, previewLawApiAad());
+    if (!oc || !PREVIEW_LAW_OC.test(oc)) throw new Error('invalid stored OC');
+    return oc;
+  } catch { throw new Error('LAW_API_CREDENTIAL_UNAVAILABLE'); }
+}
+
+async function previewLawApiConfigured(env: CloudflareEnv): Promise<boolean> {
+  try { return Boolean(await previewLawApiOc(env)); } catch { return false; }
+}
+
+function previewLawApiErrorCode(reason: unknown): string {
+  const code = reason instanceof Error ? reason.message : '';
+  return ['LAW_API_OC_REQUIRED','LAW_API_CREDENTIAL_UNAVAILABLE','LAW_API_SETTINGS_UNAVAILABLE','LAW_API_CONNECTION_FAILED','LAW_API_INVALID_JSON','LAW_API_INVALID_RESPONSE','LAW_API_DETAIL_ID_MISMATCH','LAW_API_DETAIL_TOO_LARGE'].includes(code) || /^LAW_API_[45]\d{2}$/u.test(code) ? code : 'LAW_API_FAILED';
+}
+
+function previewLawApiPublic(row: PreviewLawApiSettingsRow | null, env: CloudflareEnv) {
+  const environmentConfigured = PREVIEW_LAW_OC.test(env.LAW_API_OC?.trim() ?? '');
+  return { configured: row ? Boolean(previewAiMasterKey(env)) : environmentConfigured,
+    storage: row ? 'ENCRYPTED_D1' : environmentConfigured ? 'CLOUDFLARE_SECRET' : 'NONE',
+    version: Number(row?.version ?? 0), updatedAt: row?.updatedAt ?? null, masterKeyReady: Boolean(previewAiMasterKey(env)) };
+}
+
+async function handlePreviewLawApiSettings(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: '로그인이 필요합니다.', code: 'AUTH_REQUIRED' }, 401);
+  if (!user.roles.includes('admin')) return json({ error: '관리자만 국가법령정보 연결을 설정할 수 있습니다.', code: 'FORBIDDEN' }, 403);
+  if (!env.DB) return json({ error: '설정 저장소가 준비되지 않았습니다.', code: 'D1_NOT_CONFIGURED' }, 503);
+  try {
+    // Do not advertise an editable setting until its migration exists.
+    await env.DB.prepare('SELECT version FROM preview_law_api_settings LIMIT 0').all();
+    const current = await previewLawApiSettingsRow(env);
+    if (url.pathname === '/api/settings/law-api' && request.method === 'GET') return json({ settings: previewLawApiPublic(current, env) });
+    const testing = url.pathname === '/api/settings/law-api/test' && request.method === 'POST';
+    if (!testing && !(url.pathname === '/api/settings/law-api' && request.method === 'PUT')) return json({ error: '지원하지 않는 요청입니다.', code: 'METHOD_NOT_ALLOWED' }, 405);
+    const origin = request.headers.get('Origin');
+    if ((origin && origin !== url.origin) || request.headers.get('Sec-Fetch-Site') === 'cross-site' || (request.headers.has('Cookie') && origin !== url.origin)) return json({ error: '이 서버의 관리자 설정 화면에서 다시 요청해 주세요.', code: 'FORBIDDEN_ORIGIN' }, 403);
+    if (!/^application\/json(?:;|$)/iu.test(request.headers.get('Content-Type') ?? '')) return json({ error: 'JSON 요청이 필요합니다.', code: 'INVALID_CONTENT_TYPE' }, 415);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, testing ? ['expectedVersion'] : ['oc','expectedVersion']) || !Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) < 0 || (!testing && (typeof body.oc !== 'string' || !PREVIEW_LAW_OC.test(body.oc.trim())))) {
+      return json({ error: '발급받은 OC 인증값과 최신 설정 버전을 확인해 주세요. URL이나 AI API 키가 아닌 OC 값을 입력하세요.', code: 'INVALID_LAW_API_SETTINGS' }, 400);
+    }
+    if (body.expectedVersion !== Number(current?.version ?? 0)) return json({ error: '다른 화면에서 설정이 변경되었습니다. 설정 다시 불러오기 후 저장해 주세요.', code: 'VERSION_CONFLICT' }, 409);
+    if (testing) {
+      try {
+        const result = await fetchPreviewLawApi(env, 'search', '공사');
+        if (!result.candidates.length) throw new Error('LAW_API_NO_VERIFIED_RESULT');
+        const latest = await previewLawApiSettingsRow(env);
+        if (Number(latest?.version ?? 0) !== body.expectedVersion) return json({ error: '연결 확인 중 인증값이 변경되었습니다. 설정을 다시 불러와 확인해 주세요.', code: 'VERSION_CONFLICT' }, 409);
+        return json({ settings: previewLawApiPublic(latest, env), checkedAt: new Date().toISOString(), count: result.candidates.length });
+      } catch {
+        return json({ error: '공식 판례 응답을 확인하지 못했습니다. OC 인증값, 판례 API 사용 승인 및 호출 제한을 확인해 주세요. 저장된 값은 변경하지 않았습니다.', code: 'LAW_API_CONNECTION_FAILED' }, 502);
+      }
+    }
+    const masterKey = previewAiMasterKey(env);
+    if (!masterKey) return json({ error: '서버 암호화 설정이 준비되지 않아 저장할 수 없습니다.', code: 'CREDENTIAL_MASTER_KEY_REQUIRED' }, 503);
+    const encrypted = await encryptSecret((body.oc as string).trim(), masterKey, previewLawApiAad());
+    const now = new Date(Math.max(Date.now(), Date.parse(current?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const write = current
+      ? env.DB.prepare('UPDATE preview_law_api_settings SET ciphertext_hex=?,iv_hex=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND version=?').bind(encrypted.ciphertextHex,encrypted.ivHex,user.id,now,PREVIEW_ORGANIZATION_ID,body.expectedVersion)
+      : env.DB.prepare('INSERT OR IGNORE INTO preview_law_api_settings (organization_id,ciphertext_hex,iv_hex,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(PREVIEW_ORGANIZATION_ID,encrypted.ciphertextHex,encrypted.ivHex,user.id,now,now);
+    const result = await write.run();
+    if (result.meta?.changes !== 1) return json({ error: '다른 화면에서 설정이 변경되었습니다. 설정을 다시 불러와 주세요.', code: 'VERSION_CONFLICT' }, 409);
+    return json({ settings: previewLawApiPublic(await previewLawApiSettingsRow(env), env) });
+  } catch {
+    return json({ error: '국가법령정보 설정을 읽거나 저장하지 못했습니다. 서버 설정 저장소를 확인해 주세요.', code: 'LAW_API_SETTINGS_UNAVAILABLE' }, 503);
+  }
+}
+
 async function fetchPreviewLawApi(env: CloudflareEnv, path: 'search' | 'detail', value: string): Promise<{ raw: unknown; candidates: PreviewCaseLawCandidate[] }> {
-  const oc = env.LAW_API_OC?.trim() ?? '';
-  if (!/^[A-Za-z0-9._@+-]{2,120}$/u.test(oc)) throw new Error('LAW_API_OC_REQUIRED');
+  const oc = await previewLawApiOc(env);
+  if (!oc) throw new Error('LAW_API_OC_REQUIRED');
   const endpoint = new URL(path === 'search' ? 'https://www.law.go.kr/DRF/lawSearch.do' : 'https://www.law.go.kr/DRF/lawService.do');
   endpoint.searchParams.set('OC', oc); endpoint.searchParams.set('target', 'prec'); endpoint.searchParams.set('type', 'JSON');
   if (path === 'search') { endpoint.searchParams.set('query', value); endpoint.searchParams.set('search', '2'); endpoint.searchParams.set('display', '10'); }
@@ -6439,11 +6529,14 @@ async function fetchPreviewLawApi(env: CloudflareEnv, path: 'search' | 'detail',
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 20_000);
   let response: Response;
   try { response = await (env.LAW_API_TEST_FETCH ?? fetch)(endpoint.toString(), { headers: { Accept: 'application/json' }, signal: controller.signal }); }
+  catch { throw new Error('LAW_API_CONNECTION_FAILED'); }
   finally { clearTimeout(timer); }
   if (!response.ok) throw new Error(`LAW_API_${response.status}`);
   const raw = await response.json().catch(() => null);
   if (!raw) throw new Error('LAW_API_INVALID_JSON');
   const candidates = nestedLawRecords(raw).map(previewLawCandidate).filter((row): row is PreviewCaseLawCandidate => Boolean(row));
+  // A provider error delivered as HTTP 200 must not look like a successful empty search.
+  if (!candidates.length && !(path === 'search' && raw.PrecSearch && String(raw.PrecSearch.totalCnt) === '0')) throw new Error('LAW_API_INVALID_RESPONSE');
   return { raw, candidates };
 }
 
@@ -6486,7 +6579,7 @@ async function handlePreviewCaseLaw(request: Request, env: CloudflareEnv, url: U
   if (url.pathname === '/api/report-authoring/case-law' && request.method === 'GET') {
     const caseId=url.searchParams.get('caseId')??'',chapterId=url.searchParams.get('chapterId')??'';
     if(!PREVIEW_DRAFT_KEY.test(caseId)||!PREVIEW_REPORT_CHAPTER_KEY.test(chapterId)||!await accessiblePreviewCase(env,user,caseId))return json({error:'Valid caseId and chapterId are required',code:'INVALID_CASE_LAW_SCOPE'},400);
-    return json({...(await previewCaseLawPayload(env,caseId,chapterId)),apiConfigured:/^[A-Za-z0-9._@+-]{2,120}$/u.test(env.LAW_API_OC?.trim() ?? ''),phase:'CF79_CASE_LAW_GROUNDING'});
+    return json({...(await previewCaseLawPayload(env,caseId,chapterId)),apiConfigured:await previewLawApiConfigured(env),phase:'CF79_CASE_LAW_GROUNDING'});
   }
   const body = await request.json().catch(()=>null) as Record<string,unknown>|null;
   if (!body || typeof body.caseId!=='string'||typeof body.chapterId!=='string'||!PREVIEW_DRAFT_KEY.test(body.caseId)||!PREVIEW_REPORT_CHAPTER_KEY.test(body.chapterId)) return json({error:'Case-law request scope is invalid',code:'INVALID_CASE_LAW_SCOPE'},400);
@@ -6508,12 +6601,12 @@ async function handlePreviewCaseLaw(request: Request, env: CloudflareEnv, url: U
     if (generated.response) return generated.response;
     const suggestions = parsePreviewCaseLawQueries(generated.content ?? '');
     if (!suggestions) return json({error:'AI 검색어 응답 형식이 올바르지 않습니다. 다시 추천하거나 검색어를 직접 입력해 주세요.',code:'MALFORMED_AI_CASE_LAW_QUERIES'},502);
-    return json({suggestions,source:'AI',apiConfigured:/^[A-Za-z0-9._@+-]{2,120}$/u.test(env.LAW_API_OC?.trim() ?? ''),phase:'CF120_CASE_LAW_AI_SEARCH'});
+    return json({suggestions,source:'AI',apiConfigured:await previewLawApiConfigured(env),phase:'CF120_CASE_LAW_AI_SEARCH'});
   }
   if (url.pathname === '/api/report-authoring/case-law/search' && request.method === 'POST') {
     if(!exactObjectKeys(body,['caseId','chapterId','query'])||typeof body.query!=='string'||body.query.trim().length<2||body.query.length>200)return json({error:'판례 검색어를 2자 이상 입력해 주세요.',code:'INVALID_CASE_LAW_QUERY'},400);
     try { const result=await fetchPreviewLawApi(env,'search',body.query.trim());return json({query:body.query.trim(),results:result.candidates.slice(0,10),phase:'CF79_CASE_LAW_GROUNDING'}); }
-    catch(reason){const code=reason instanceof Error?reason.message:'LAW_API_FAILED';return json({error:code==='LAW_API_OC_REQUIRED'?'이 서버에 국가법령정보 공동활용에서 승인받은 API 인증값(OC)이 필요합니다. Gemini·Claude 등 AI 키와는 별도이며, 관리자가 LAW_API_OC로 설정해야 합니다.':'국가법령정보 판례 검색에 실패했습니다. OC 승인 상태와 연결을 확인한 뒤 다시 시도해 주세요.',code},code==='LAW_API_OC_REQUIRED'?503:502);}
+    catch(reason){const code=previewLawApiErrorCode(reason);return json({error:code==='LAW_API_OC_REQUIRED'?'관리자 설정 → 국가법령정보 · 판례 API 연결에서 승인받은 OC 인증값을 저장해 주세요. AI API 키와는 별도입니다.':'국가법령정보 판례 검색에 실패했습니다. 관리자 설정의 국가법령정보 연결 확인에서 OC 승인 상태를 확인해 주세요.',code},code==='LAW_API_OC_REQUIRED'?503:502);}
   }
   if (url.pathname === '/api/report-authoring/case-law/select' && request.method === 'POST') {
     if(!await canManagePreviewProjectReport(env,user,caseRow.id))return json({error:'담당 PM 또는 관리자만 판례 근거를 선택할 수 있습니다.',code:'RESPONSIBLE_PM_REQUIRED'},403);
@@ -6524,7 +6617,7 @@ async function handlePreviewCaseLaw(request: Request, env: CloudflareEnv, url: U
       const now=new Date().toISOString();const statements:D1StatementLike[]=[env.DB.prepare("UPDATE preview_report_case_law_sources SET selection_status='EXCLUDED',excluded_by=?,excluded_at=? WHERE organization_id=? AND case_id=? AND chapter_id=? AND selection_status='ACTIVE'").bind(user.id,now,PREVIEW_ORGANIZATION_ID,caseRow.id,body.chapterId)];
       for(let index=0;index<details.length;index+=1){const detail=details[index];const requestedPrecId=(body.precIds as string[])[index];const candidate=detail.candidates.find((row)=>row.precId===requestedPrecId);if(!candidate)throw new Error('LAW_API_DETAIL_ID_MISMATCH');const snapshot=JSON.stringify(detail.raw);if(snapshot.length>3_000_000)throw new Error('LAW_API_DETAIL_TOO_LARGE');statements.push(env.DB.prepare('INSERT INTO preview_report_case_law_sources (id,organization_id,case_id,chapter_id,chapter_code,prec_id,court_name,case_number,decision_date,case_name,holding_text,summary_text,snapshot_json,source_sha256,official_url,fetched_at,selection_status,selected_by,selected_at,excluded_by,excluded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,\'ACTIVE\',?,?,NULL,NULL)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseRow.id,body.chapterId,prompt.chapterCode,candidate.precId,candidate.courtName,candidate.caseNumber,candidate.decisionDate,candidate.caseName,candidate.holdingText||'[판시사항 확인 필요]',candidate.summaryText||'[판결요지 확인 필요]',snapshot,await sha256Hex(snapshot),candidate.officialUrl,now,user.id,now));}
       await env.DB.batch(statements);return json({...(await previewCaseLawPayload(env,caseRow.id,body.chapterId)),phase:'CF79_CASE_LAW_GROUNDING'},201);
-    } catch(reason){const code=reason instanceof Error?reason.message:'LAW_API_FAILED';return json({error:code==='LAW_API_OC_REQUIRED'?'이 서버에 국가법령정보 공동활용에서 승인받은 API 인증값(OC)을 LAW_API_OC로 설정해야 합니다.':'선택한 판례 원문을 보존하지 못했습니다.',code},code==='LAW_API_OC_REQUIRED'?503:502);}
+    } catch(reason){const code=previewLawApiErrorCode(reason);return json({error:code==='LAW_API_OC_REQUIRED'?'관리자 설정 → 국가법령정보 · 판례 API 연결에서 승인받은 OC 인증값을 저장해 주세요.':'선택한 판례 원문을 보존하지 못했습니다.',code},code==='LAW_API_OC_REQUIRED'?503:502);}
   }
   return json({error:'Case-law route was not found',code:'CASE_LAW_ROUTE_NOT_FOUND'},404);
 }
@@ -8163,6 +8256,10 @@ const worker = {
 
     if (url.pathname === '/api/settings/ai-credentials' || url.pathname.startsWith('/api/settings/ai-credentials/')) {
       return handlePreviewAiCredentials(request, env, url);
+    }
+
+    if (url.pathname === '/api/settings/law-api' || url.pathname === '/api/settings/law-api/test') {
+      return handlePreviewLawApiSettings(request, env, url);
     }
 
     if (url.pathname === '/api/settings/ai-governance') {

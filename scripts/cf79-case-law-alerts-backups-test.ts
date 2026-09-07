@@ -41,6 +41,7 @@ async function setup():Promise<{sql:Database;env:CloudflareEnv}> {
   const now='2026-08-31T00:00:00.000Z';
   sql.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)',[ADMIN_ID,'cf79-admin','1'.repeat(32),'2'.repeat(64),100000,'현동명','cf79-admin@example.invalid','["admin"]',now]);
   for(const name of MIGRATIONS.slice(4))sql.exec(migration(name));
+  sql.exec(migration('0062_cf121_law_api_settings.sql'));
   sql.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at,version) VALUES (?,?,?,?,?,?,?,?,1,?,1)',[STAFF_ID,'cf79-staff','3'.repeat(32),'4'.repeat(64),100000,'회원','cf79-staff@example.invalid','["staff"]',now]);
   for(const [token,id] of [[ADMIN_TOKEN,ADMIN_ID],[STAFF_TOKEN,STAFF_ID]] as const)sql.run('INSERT INTO preview_sessions (id_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)',[await tokenHash(token),id,now,'2099-01-01T00:00:00.000Z']);
   const lawFetch:typeof fetch=async(input)=>{
@@ -48,7 +49,7 @@ async function setup():Promise<{sql:Database;env:CloudflareEnv}> {
     const row={판례일련번호:id,법원명:'대법원',사건번호:'2024다12345',선고일자:'2024. 5. 30.',사건명:'손해배상(기)',판시사항:'계약상 의무와 손해배상 범위에 관한 판단',판결요지:'구체적 사실관계와 계약 내용을 종합하여 판단하여야 한다.'};
     return Response.json(url.pathname.endsWith('lawSearch.do')?{PrecSearch:{prec:[row]}}:{PrecService:row});
   };
-  return{sql,env:{DB:new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>,LAW_API_OC:'cf79-test-oc',LAW_API_TEST_FETCH:lawFetch}};
+  return{sql,env:{DB:new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>,AI_CREDENTIAL_MASTER_KEY:'1'.repeat(64),LAW_API_OC:'cf79-test-oc',LAW_API_TEST_FETCH:lawFetch}};
 }
 
 function insertCase(sql:Database,id:string,number:string,title:string,status='INQUIRY'){
@@ -190,4 +191,94 @@ test('CF120 malformed AI search queries reject without heuristic fallback or sav
     assert.equal(calls,invalid.length+1);
     assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_report_case_law_sources')[0].values[0][0]),0);
   } finally {sql.close();}
+});
+
+test('CF121 administrator-only law settings encrypt OC, expose metadata only and preserve values on invalid/stale writes',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const oc='cf121_saved_admin_oc';
+    const requestSettings=(method:string,body?:unknown,token=ADMIN_TOKEN,path='/api/settings/law-api')=>worker.fetch(req(path,token,{method,...(body===undefined?{}:{body:JSON.stringify(body)})}),env);
+    for(const [method,body,path] of [['GET',undefined,'/api/settings/law-api'],['PUT',{oc,expectedVersion:0},'/api/settings/law-api'],['POST',{expectedVersion:0},'/api/settings/law-api/test']] as const){
+      assert.equal((await requestSettings(method,body,'',path)).status,401);
+      assert.equal((await requestSettings(method,body,STAFF_TOKEN,path)).status,403);
+    }
+    const crossOrigin=await worker.fetch(req('/api/settings/law-api',ADMIN_TOKEN,{method:'PUT',headers:{Origin:'https://untrusted.invalid'},body:JSON.stringify({oc,expectedVersion:0})}),env);
+    assert.equal(crossOrigin.status,403);
+    const initial=await requestSettings('GET');assert.equal(initial.status,200);
+    const original=await initial.json() as {settings:{configured:boolean;storage:string;version:number;masterKeyReady:boolean}};
+    assert.deepEqual({configured:original.settings.configured,storage:original.settings.storage,version:original.settings.version,masterKeyReady:original.settings.masterKeyReady},{configured:true,storage:'CLOUDFLARE_SECRET',version:0,masterKeyReady:true});
+    const saved=await requestSettings('PUT',{oc,expectedVersion:0});assert.equal(saved.status,200);
+    const savedText=await saved.text();assert.equal(savedText.includes(oc),false);assert.equal(savedText.includes('cf79-test-oc'),false);
+    const settings=JSON.parse(savedText).settings;
+    assert.equal(settings.storage,'ENCRYPTED_D1');assert.equal(settings.configured,true);assert.equal(settings.version,1);
+    const stored=sql.exec('SELECT ciphertext_hex,iv_hex,version FROM preview_law_api_settings')[0].values[0];
+    assert.match(String(stored[0]),/^[0-9a-f]+$/iu);assert.notEqual(stored[0],oc);
+    assert.match(String(stored[1]),/^[0-9a-f]{24}$/iu);assert.equal(stored[2],1);
+    assert.equal(Buffer.from(sql.export()).includes(Buffer.from(oc)),false,'OC must not occur in any persisted database bytes');
+    const before=sql.exec('SELECT * FROM preview_law_api_settings');
+    const reloaded=await requestSettings('GET');assert.equal((await reloaded.text()).includes(oc),false);
+    assert.equal((await requestSettings('PUT',{oc:'different_valid_oc',expectedVersion:0})).status,409);
+    for(const invalid of ['', 'x', 'x'.repeat(121), 'https://example.invalid', 'bad?oc']){
+      assert.equal((await requestSettings('PUT',{oc:invalid,expectedVersion:1})).status,400,invalid);
+    }
+    delete env.AI_CREDENTIAL_MASTER_KEY;
+    assert.equal((await requestSettings('PUT',{oc:'valid_but_no_master',expectedVersion:1})).status,503);
+    assert.deepEqual(sql.exec('SELECT * FROM preview_law_api_settings'),before);
+  }finally{sql.close();}
+});
+
+test('CF121 stored OC overrides environment for official search/detail/test; decryption and provider failures fail closed',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const caseId='79000000-0000-4000-8000-000000000122',oc='cf121_shared_resolver_oc';
+    insertCase(sql,caseId,'CC-2026-79122','CF121 공통 연결 검수');
+    const chapterId=String(sql.exec("SELECT id FROM preview_report_chapter_prompts WHERE chapter_code='CH-01' LIMIT 1")[0].values[0][0]);
+    const calls:Array<{path:string;oc:string|null;query:string|null;id:string|null}>=[];
+    const originalFetch=env.LAW_API_TEST_FETCH!;
+    let failure='';
+    env.LAW_API_TEST_FETCH=async(input,init)=>{
+      const url=new URL(String(input));calls.push({path:url.pathname,oc:url.searchParams.get('OC'),query:url.searchParams.get('query'),id:url.searchParams.get('ID')});
+      if(failure==='HTTP')return Response.json({error:'Provider rejected '+oc},{status:403});
+      if(failure==='NETWORK')throw new Error('Request failed for OC='+oc);
+      if(failure==='JSON')return new Response('not JSON',{status:200});
+      if(failure==='EMPTY')return Response.json({PrecSearch:{prec:[]}});
+      return originalFetch(input,init);
+    };
+    const search=()=>worker.fetch(req('/api/report-authoring/case-law/search',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId,query:'공사'})}),env);
+    const select=()=>worker.fetch(req('/api/report-authoring/case-law/select',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({caseId,chapterId,precIds:['12345']})}),env);
+    const check=(expectedVersion:number)=>worker.fetch(req('/api/settings/law-api/test',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({expectedVersion})}),env);
+    assert.equal((await search()).status,200);assert.equal(calls.at(-1)?.oc,'cf79-test-oc');
+    assert.equal((await select()).status,201);
+    const untouched=['preview_report_case_law_sources','preview_report_drafts','preview_ai_credentials','preview_google_credentials','preview_google_oauth_app_settings'].map(table=>({table,rows:sql.exec('SELECT * FROM '+table)}));
+    const save=await worker.fetch(req('/api/settings/law-api',ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({oc,expectedVersion:0})}),env);
+    assert.equal(save.status,200);
+    const stored=sql.exec('SELECT * FROM preview_law_api_settings');
+    assert.equal((await search()).status,200);assert.equal(calls.at(-1)?.oc,oc);
+    const tested=await check(1);assert.equal(tested.status,200);
+    const result=await tested.json() as {settings:{storage:string;version:number};checkedAt:string;count:number};
+    assert.equal(result.settings.storage,'ENCRYPTED_D1');assert.equal(result.settings.version,1);
+    assert.ok(result.checkedAt);assert.ok(result.count>=1);
+    assert.equal(calls.at(-1)?.query,'공사');assert.equal(calls.at(-1)?.oc,oc);
+    const callsBeforeStale=calls.length;assert.equal((await check(0)).status,409);assert.equal(calls.length,callsBeforeStale);
+    for(const mode of ['HTTP','NETWORK','JSON','EMPTY']){
+      failure=mode;const rejected=await check(1);
+      assert.equal(rejected.status,502,mode);
+      assert.equal((await rejected.text()).includes(oc),false,'provider errors must not echo OC');
+      assert.deepEqual(sql.exec('SELECT * FROM preview_law_api_settings'),stored);
+      for(const item of untouched)assert.deepEqual(sql.exec('SELECT * FROM '+item.table),item.rows,item.table);
+    }
+    failure='';
+    env.AI_CREDENTIAL_MASTER_KEY='2'.repeat(64);
+    const beforeDecryptFailure=calls.length;
+    assert.ok([502,503].includes((await search()).status),'bad ciphertext decryption must not silently use the environment OC');
+    assert.equal(calls.length,beforeDecryptFailure);
+    assert.ok([502,503].includes((await check(1)).status));
+    assert.equal(calls.length,beforeDecryptFailure);
+    env.AI_CREDENTIAL_MASTER_KEY='1'.repeat(64);
+    assert.equal((await select()).status,201);
+    assert.equal(calls.at(-1)?.id,'12345');assert.equal(calls.at(-1)?.oc,oc,'detail fetch uses the same stored OC resolver');
+    const payload=await worker.fetch(req('/api/report-authoring/case-law?caseId='+caseId+'&chapterId='+chapterId,ADMIN_TOKEN),env);
+    assert.equal((await payload.json() as {apiConfigured:boolean}).apiConfigured,true);
+    assert.deepEqual(sql.exec('PRAGMA foreign_key_check'),[]);
+  }finally{sql.close();}
 });

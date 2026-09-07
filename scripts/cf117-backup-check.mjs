@@ -8,10 +8,11 @@ const [mode, database, beforePath, otherPath, pin, requestedMigration] = process
 assert.ok(['sign', 'verify', 'preflight', 'compare'].includes(mode), 'Use sign|verify|preflight|compare database before.sql [manifest/after.sql] [pin] [migration]');
 assert.ok(['78094a1c-abe0-451d-bc12-68d0d37166d8', '16d1f25b-60c8-4489-95ed-4fa7de161c9f'].includes(database), 'explicit release database');
 const migration = requestedMigration ?? '0061_cf117_hourly_backup_pattern.sql';
-assert.ok(['0059_cf114_report_workspace_version_guard.sql', '0060_cf116_workflow_import_access_guard.sql', '0061_cf117_hourly_backup_pattern.sql'].includes(migration), 'explicit reviewed migration');
+assert.ok(['0059_cf114_report_workspace_version_guard.sql', '0060_cf116_workflow_import_access_guard.sql', '0061_cf117_hourly_backup_pattern.sql', '0062_cf121_law_api_settings.sql'].includes(migration), 'explicit reviewed migration');
 const sql = readFileSync('apps/cloudflare/migrations/' + migration, 'utf8');
 const backupTable = 'preview_report_hourly_backups';
 const rebuildsBackup = migration === '0061_cf117_hourly_backup_pattern.sql';
+const addsLawSettings = migration === '0062_cf121_law_api_settings.sql';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const json = value => JSON.stringify(value, (_key, item) => item instanceof Uint8Array ? { blob: Buffer.from(item).toString('base64') } : item);
 const quote = name => '"' + name.replaceAll('"', '""') + '"';
@@ -29,7 +30,8 @@ const integrity = db => {
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
 };
 const preserve = (before, after) => {
-  assert.deepEqual(tables(after), tables(before), 'the rebuild may not add or remove tables');
+  assert.deepEqual(tables(after), [...tables(before), ...(addsLawSettings ? ['preview_law_api_settings'] : [])].sort(), 'only the reviewed table may be added');
+  if (addsLawSettings) assert.equal(rows(after, 'preview_law_api_settings').length, 0, 'deployment must not provision any law API credential');
   for (const name of tables(before)) {
     const previous = sortedRows(before, name), current = sortedRows(after, name);
     if (name === 'd1_migrations') assert.ok(previous.every(row => current.includes(row)), 'preserve the original migration ledger');

@@ -1,0 +1,14 @@
+.law-api-settings { --section-accent: #0e7490; scroll-margin-top: 80px; }
+.law-api-settings p { line-height: 1.6; overflow-wrap: anywhere; }
+.law-api-settings form { display: grid; gap: 10px; max-width: 850px; }
+.law-api-settings label { font-weight: 700; }
+.law-api-settings input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; color: #172033; font-size: 16px; }
+.law-api-settings small { color: #475569; line-height: 1.5; }
+.law-api-settings .law-api-settings-status { font-weight: 700; }
+.law-api-settings .action-row { flex-wrap: wrap; }
+.law-api-settings button { min-height: 44px; white-space: normal; }
+.law-api-settings .notice-box,.law-api-settings .error-box { margin: 0; }
+:root[data-theme='dark'] .law-api-settings input { background: #0f172a; color: #e2e8f0; border-color: #64748b; }
+:root[data-theme='dark'] .law-api-settings { --section-accent: #67e8f9; }
+:root[data-theme='dark'] .law-api-settings small { color: #cbd5e1; }
+@media (max-width: 600px) { .law-api-settings .action-row { display: grid; grid-template-columns: 1fr; } }

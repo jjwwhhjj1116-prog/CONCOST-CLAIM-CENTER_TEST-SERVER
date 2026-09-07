@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { PreviewGoogleDriveSetup } from './PreviewEvidenceHub';
+import { PreviewLawApiSettings } from './PreviewLawApiSettings';
 import type { UserRole } from './Router';
 
 type ProviderKind = 'OPENAI' | 'ANTHROPIC' | 'GEMINI';
@@ -445,6 +446,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     </>}
 
     {section === 'ADMIN' && isAdmin && workspace && <>
+      <PreviewLawApiSettings />
       <PreviewGoogleDriveSetup onNavigate={onNavigate} />
       {renderCredentials('ORGANIZATION', '조직 공용 AI 설정', '개인 키가 없는 직원에게 적용되는 회사 공용 암호화 키입니다.')}
       <Card title="문서 제작 플랫폼 연결 상태" className="document-platform-status-card">
