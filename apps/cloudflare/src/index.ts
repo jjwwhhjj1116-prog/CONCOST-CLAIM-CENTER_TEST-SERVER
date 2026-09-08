@@ -4172,7 +4172,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   // Moving between steps/chapters must not invalidate an approved content version.
   if (existing.title === title && existing.content === content && (!editorSchema || existing.editorJson === editorJson)) {
     if (workspaceSchema && (wizardStep !== Number(existing.wizardStep) || selectedChapterId !== existing.selectedChapterId)) {
-      const result = await env.DB.prepare('UPDATE preview_report_drafts SET wizard_step=?, selected_chapter_id=? WHERE case_id=? AND organization_id=? AND version=?')
+      const result = await env.DB.prepare('UPDATE preview_report_drafts SET wizard_step=?, selected_chapter_id=? WHERE case_id=? AND organization_id=? AND version=? AND ' + previewReportActiveSql('preview_report_drafts.case_id'))
         .bind(wizardStep, selectedChapterId, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion).run();
       if (result.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
     }
@@ -4182,11 +4182,11 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   const now = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString();
   const updateDraft = workspaceSchema
     ? editorSchema
-      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, editor_json = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, editorJson, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
-      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, editor_json = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ? AND ' + previewReportActiveSql('preview_report_drafts.case_id')).bind(title, content, editorJson, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ? AND ' + previewReportActiveSql('preview_report_drafts.case_id')).bind(title, content, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
     : editorSchema
-      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, editor_json = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, editorJson, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
-      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion);
+      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, editor_json = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ? AND ' + previewReportActiveSql('preview_report_drafts.case_id')).bind(title, content, editorJson, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ? AND ' + previewReportActiveSql('preview_report_drafts.case_id')).bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion);
   const insertRevision = editorSchema
     ? env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, editor_json, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, editorJson, contentSha256, user.id, now, caseId, nextVersion)
     : env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, contentSha256, user.id, now, caseId, nextVersion);
@@ -4202,6 +4202,38 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   const results = await env.DB.batch(statements) as Array<{ meta?: { changes?: number } }>;
   if (results[0]?.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
   return previewReportPayload(env, caseId);
+}
+
+// Deletion is an append-only catalog action: preserve the report, revisions and project sources.
+function previewReportActiveSql(caseColumn: string): string {
+  return `NOT EXISTS (SELECT 1 FROM preview_case_activities deleted_report WHERE deleted_report.case_id=${caseColumn} AND deleted_report.event_type='REPORT_WORKSPACE_DELETED')`;
+}
+
+async function previewReportDeleted(env: CloudflareEnv, caseId: string): Promise<boolean> {
+  return Boolean(await env.DB?.prepare("SELECT 1 AS found FROM preview_case_activities WHERE case_id=? AND event_type='REPORT_WORKSPACE_DELETED' LIMIT 1").bind(caseId).first());
+}
+
+async function handlePreviewReportWorkspaceDelete(request: Request, env: CloudflareEnv, caseId: string): Promise<Response> {
+  if (!env.DB) return json({ error: '저장소가 준비되지 않았습니다.', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: '로그인이 필요합니다.', code: 'AUTH_REQUIRED' }, 401);
+  if (!user.roles.includes('admin')) return json({ error: '보고서 삭제는 관리자만 할 수 있습니다.', code: 'FORBIDDEN' }, 403);
+  if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const origin = request.headers.get('Origin');
+  if ((origin && origin !== new URL(request.url).origin) || request.headers.get('Sec-Fetch-Site') === 'cross-site' || (request.headers.has('Cookie') && origin !== new URL(request.url).origin)) return json({ error: '현재 스튜디오 화면에서 다시 시도해 주세요.', code: 'INVALID_ORIGIN' }, 403);
+  if (!request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) return json({ error: 'JSON 요청이 필요합니다.', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!PREVIEW_DRAFT_KEY.test(caseId) || !body || !exactObjectKeys(body, ['expectedVersion']) || !Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) return json({ error: '보고서와 버전을 확인해 주세요.', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  if (!await accessiblePreviewCase(env, user, caseId)) return json({ error: '프로젝트를 찾을 수 없습니다.', code: 'CASE_NOT_FOUND' }, 404);
+  const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id=? AND organization_id=?').bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
+  if (!draft) return json({ error: '저장된 보고서를 찾을 수 없습니다.', code: 'REPORT_NOT_FOUND' }, 404);
+  let result: { meta?: { changes?: number } };
+  try { result = await env.DB.prepare(
+    "INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,case_id,?,'REPORT_WORKSPACE_DELETED','보고서 목록 삭제 처리',?,? FROM preview_report_drafts WHERE case_id=? AND organization_id=? AND version=? AND " + previewReportActiveSql('preview_report_drafts.case_id')
+  ).bind(crypto.randomUUID(), user.id, JSON.stringify({ reportVersion: body.expectedVersion, physicalDelete: false }), new Date().toISOString(), caseId, PREVIEW_ORGANIZATION_ID, body.expectedVersion).run(); }
+  catch { return json({ error: '삭제 처리를 저장하지 못했습니다. 보고서는 그대로 유지됩니다. 다시 시도해 주세요.', code: 'REPORT_DELETE_FAILED' }, 503); }
+  if (result.meta?.changes !== 1) return json({ error: '보고서가 변경되었거나 이미 삭제됐습니다. 목록을 새로고침한 뒤 확인해 주세요.', code: 'VERSION_CONFLICT' }, 409);
+  return json({ ok: true, caseId, deleted: true, physicalDelete: false });
 }
 
 interface PreviewReportWorkspaceRow {
@@ -4230,11 +4262,12 @@ async function handlePreviewReportWorkspaces(request: Request, env: CloudflareEn
     'u.display_name AS updatedByName, length(d.content) AS contentLength FROM preview_report_drafts d ' +
     'JOIN preview_cases c ON c.id = d.case_id AND c.organization_id = d.organization_id AND c.deleted_at IS NULL ' +
     'JOIN preview_users u ON u.id = d.updated_by WHERE d.organization_id = ? ' +
-    'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) ' +
+    'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) AND ' + previewReportActiveSql('d.case_id') + ' ' +
     'ORDER BY d.updated_at DESC LIMIT 100'
   ).bind(PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewReportWorkspaceRow>();
   return json({
     workspaces: rows.results.map((row) => ({ ...row, version: Number(row.version), wizardStep: Number(row.wizardStep), contentLength: Number(row.contentLength) })),
+    canDelete: user.roles.includes('admin'),
     phase: 'CF37_REPORT_WORKSPACE_RESUME'
   });
 }
@@ -4330,16 +4363,16 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
     const now = new Date(Math.max(Date.now(), Date.parse(existing?.updatedAt ?? '1970-01-01') + 1)).toISOString();
     const status = assigneeId ? 'IN_PROGRESS' : 'UNASSIGNED';
     const statement = existing
-      ? env.DB.prepare('UPDATE preview_report_chapter_assignments SET chapter_title=?,assignee_id=?,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=?')
+      ? env.DB.prepare('UPDATE preview_report_chapter_assignments SET chapter_title=?,assignee_id=?,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND ' + previewReportActiveSql('preview_report_chapter_assignments.case_id'))
         .bind(chapter.title, assigneeId, status, user.id, now, caseId, chapter.id, expectedVersion)
-      : env.DB.prepare('INSERT INTO preview_report_chapter_assignments (case_id,organization_id,chapter_id,chapter_code,chapter_title,assignee_id,status,draft_text,draft_editor_json,version,assigned_by,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'\',NULL,1,?,?,?,?)')
-        .bind(caseId, PREVIEW_ORGANIZATION_ID, chapter.id, chapter.chapterCode, chapter.title, assigneeId, status, user.id, user.id, now, now);
+      : env.DB.prepare('INSERT INTO preview_report_chapter_assignments (case_id,organization_id,chapter_id,chapter_code,chapter_title,assignee_id,status,draft_text,draft_editor_json,version,assigned_by,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,\'\',NULL,1,?,?,?,? WHERE ' + previewReportActiveSql('?'))
+        .bind(caseId, PREVIEW_ORGANIZATION_ID, chapter.id, chapter.chapterCode, chapter.title, assigneeId, status, user.id, user.id, now, now, caseId);
     const results = await env.DB.batch([
       statement,
-      env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) SELECT ?,?,?,? WHERE ? IS NOT NULL')
-        .bind(caseId, assigneeId, user.id, now, assigneeId),
-      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'REPORT_CHAPTER_ASSIGNED','보고서 챕터 담당 지정',?,?)")
-        .bind(crypto.randomUUID(), caseId, user.id, `${chapter.chapterCode} · ${assigneeId ?? '담당 해제'}`, now)
+      env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) SELECT ?,?,?,? WHERE ? IS NOT NULL AND ' + previewReportActiveSql('?'))
+        .bind(caseId, assigneeId, user.id, now, assigneeId, caseId),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'REPORT_CHAPTER_ASSIGNED','보고서 챕터 담당 지정',?,? WHERE " + previewReportActiveSql('?'))
+        .bind(crypto.randomUUID(), caseId, user.id, `${chapter.chapterCode} · ${assigneeId ?? '담당 해제'}`, now, caseId)
     ]) as Array<{ meta?: { changes?: number } }>;
     if (results[0]?.meta?.changes !== 1) return json({ error: 'Chapter assignment changed in another session', code: 'VERSION_CONFLICT' }, 409);
     return json(await previewReportChapterCollaborationPayload(env, user, caseId));
@@ -4368,12 +4401,12 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   if (action !== 'APPLY') {
     const nextStatus = action === 'MARK_READY' ? 'READY' : 'IN_PROGRESS';
     const results = await env.DB.batch([
-      env.DB.prepare('UPDATE preview_report_chapter_assignments SET draft_text=?,draft_editor_json=NULL,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=?')
+      env.DB.prepare('UPDATE preview_report_chapter_assignments SET draft_text=?,draft_editor_json=NULL,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND ' + previewReportActiveSql('preview_report_chapter_assignments.case_id'))
         .bind(draftText, nextStatus, user.id, now, caseId, body.chapterId, expectedVersion),
       env.DB.prepare('INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)')
         .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, nextStatus, draftText, chapterSha, user.id, now, caseId, body.chapterId, nextVersion, now),
-      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'REPORT_CHAPTER_SAVED',?,?,?)")
-        .bind(crypto.randomUUID(), caseId, user.id, action === 'MARK_READY' ? '챕터 검수 완료·PM 반영 대기' : '챕터 협업 초안 저장', `${current.chapterCode} · v${nextVersion}`, now)
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'REPORT_CHAPTER_SAVED',?,?,? WHERE " + previewReportActiveSql('?'))
+        .bind(crypto.randomUUID(), caseId, user.id, action === 'MARK_READY' ? '챕터 검수 완료·PM 반영 대기' : '챕터 협업 초안 저장', `${current.chapterCode} · v${nextVersion}`, now, caseId)
     ]) as Array<{ meta?: { changes?: number } }>;
     if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Chapter draft changed in another session', code: 'VERSION_CONFLICT' }, 409);
     return json(await previewReportChapterCollaborationPayload(env, user, caseId));
@@ -4403,7 +4436,7 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   const presentation = joinReportPresentation(merged, stored.header);
   const editorJson = presentation ? JSON.stringify(presentation) : null;
   const results = await env.DB.batch([
-    env.DB.prepare("UPDATE preview_report_drafts SET content=?,editor_json=?,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=? AND EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND status='READY')")
+    env.DB.prepare("UPDATE preview_report_drafts SET content=?,editor_json=?,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=? AND EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND status='READY') AND " + previewReportActiveSql('preview_report_drafts.case_id'))
       .bind(nextContent, editorJson, body.chapterId, user.id, reportNow, caseId, PREVIEW_ORGANIZATION_ID, expectedReportVersion, caseId, body.chapterId, expectedVersion),
     env.DB.prepare('INSERT INTO preview_report_revisions (id,case_id,version,title,content,editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)')
       .bind(crypto.randomUUID(), caseId, nextReportVersion, report.title, nextContent, editorJson, reportSha, user.id, reportNow, caseId, nextReportVersion, reportNow),
@@ -6750,12 +6783,12 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const outlineJson = JSON.stringify(items);
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const write = current
-      ? env.DB.prepare('UPDATE preview_report_outline_plans SET outline_json=?, status=?, version=version+1, updated_by=?, updated_at=? WHERE case_id=? AND organization_id=? AND version=?').bind(outlineJson, body.status, user.id, now, caseRow.id, PREVIEW_ORGANIZATION_ID, body.expectedVersion)
-      : env.DB.prepare('INSERT INTO preview_report_outline_plans (case_id, organization_id, claim_type, outline_json, status, version, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)').bind(caseRow.id, PREVIEW_ORGANIZATION_ID, caseRow.claimType, outlineJson, body.status, user.id, now, now);
+      ? env.DB.prepare('UPDATE preview_report_outline_plans SET outline_json=?, status=?, version=version+1, updated_by=?, updated_at=? WHERE case_id=? AND organization_id=? AND version=? AND ' + previewReportActiveSql('preview_report_outline_plans.case_id')).bind(outlineJson, body.status, user.id, now, caseRow.id, PREVIEW_ORGANIZATION_ID, body.expectedVersion)
+      : env.DB.prepare('INSERT INTO preview_report_outline_plans (case_id, organization_id, claim_type, outline_json, status, version, updated_by, created_at, updated_at) SELECT ?, ?, ?, ?, ?, 1, ?, ?, ? WHERE ' + previewReportActiveSql('?')).bind(caseRow.id, PREVIEW_ORGANIZATION_ID, caseRow.claimType, outlineJson, body.status, user.id, now, now, caseRow.id);
     const results = await env.DB.batch([
       write,
-      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_outline_plans WHERE case_id=? AND version=?)')
-        .bind(crypto.randomUUID(), caseRow.id, user.id, body.status === 'CONFIRMED' ? 'REPORT_OUTLINE_CONFIRMED' : 'REPORT_OUTLINE_SAVED', `보고서 목차 ${body.status === 'CONFIRMED' ? '기획 확정' : '계획 저장'} · v${nextVersion}`, `${items.length}개 챕터`, now, caseRow.id, nextVersion)
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_outline_plans WHERE case_id=? AND version=? AND updated_at=?) AND ' + previewReportActiveSql('?'))
+        .bind(crypto.randomUUID(), caseRow.id, user.id, body.status === 'CONFIRMED' ? 'REPORT_OUTLINE_CONFIRMED' : 'REPORT_OUTLINE_SAVED', `보고서 목차 ${body.status === 'CONFIRMED' ? '기획 확정' : '계획 저장'} · v${nextVersion}`, `${items.length}개 챕터`, now, caseRow.id, nextVersion, now, caseRow.id)
     ]) as Array<{ meta?: { changes?: number } }>;
     if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Report outline changed in another session', code: 'VERSION_CONFLICT' }, 409);
     return json({ outlinePlan: { persistenceAvailable: true, status: body.status, version: nextVersion, updatedAt: now, updatedBy: user.displayName, items }, phase: 'CF18_REPORT_OUTLINE_EVIDENCE' });
@@ -7072,7 +7105,7 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     const now = new Date().toISOString();
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_reviews (id, organization_id, case_id, report_revision_id, report_version, status, requested_by, request_note, request_key, request_fingerprint, requested_at, reviewed_by, decision_note, reviewed_at) VALUES (?, ?, ?, ?, ?, \'PENDING\', ?, ?, ?, ?, ?, NULL, NULL, NULL)').bind(reviewId, PREVIEW_ORGANIZATION_ID, caseId, source.revisionId, expectedVersion, user.id, note || null, idempotencyKey, fingerprint, now),
+        env.DB.prepare('INSERT INTO preview_report_reviews (id, organization_id, case_id, report_revision_id, report_version, status, requested_by, request_note, request_key, request_fingerprint, requested_at, reviewed_by, decision_note, reviewed_at) SELECT ?, ?, ?, ?, ?, \'PENDING\', ?, ?, ?, ?, ?, NULL, NULL, NULL WHERE ' + previewReportActiveSql('?')).bind(reviewId, PREVIEW_ORGANIZATION_ID, caseId, source.revisionId, expectedVersion, user.id, note || null, idempotencyKey, fingerprint, now, caseId),
         env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) VALUES (?, ?, \'REVIEW_REQUESTED\', ?, ?, ?)').bind(crypto.randomUUID(), reviewId, user.id, note || null, now),
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, \'REPORT_REVIEW_REQUESTED\', ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, `보고서 검토 요청 · v${expectedVersion}`, note || null, now)
       ]);
@@ -7100,6 +7133,7 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     const review = await env.DB.prepare('SELECT id, case_id AS caseId, report_version AS reportVersion, status, requested_by AS requestedBy FROM preview_report_reviews WHERE id = ? AND organization_id = ?').bind(decisionMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; reportVersion: number; status: string; requestedBy: string }>();
     if (!review) return json({ error: 'Review request was not found', code: 'REVIEW_NOT_FOUND' }, 404);
     if (!await accessiblePreviewCase(env, user, review.caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (await previewReportDeleted(env, review.caseId)) return json({ error: '목록에서 삭제 처리된 보고서는 새로 승인할 수 없습니다.', code: 'REPORT_DELETED' }, 410);
     if (review.requestedBy === user.id) return json({ error: 'The requester cannot decide their own report review', code: 'SELF_APPROVAL_FORBIDDEN' }, 403);
     if (review.status !== 'PENDING') return previewReportReviewList(env, user, review.caseId);
     const current = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(review.caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
@@ -7114,7 +7148,7 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
       notificationId=crypto.randomUUID();outboxId=crypto.randomUUID();
     }
     const statements=[
-      env.DB.prepare('UPDATE preview_report_reviews SET status = ?, reviewed_by = ?, decision_note = ?, reviewed_at = ? WHERE id = ? AND organization_id = ? AND status = \'PENDING\' AND requested_by <> ?').bind(status, user.id, note || null, now, review.id, PREVIEW_ORGANIZATION_ID, user.id),
+      env.DB.prepare('UPDATE preview_report_reviews SET status = ?, reviewed_by = ?, decision_note = ?, reviewed_at = ? WHERE id = ? AND organization_id = ? AND status = \'PENDING\' AND requested_by <> ? AND ' + previewReportActiveSql('preview_report_reviews.case_id')).bind(status, user.id, note || null, now, review.id, PREVIEW_ORGANIZATION_ID, user.id),
       env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.id, eventType, user.id, note || null, now, review.id, status, user.id),
       env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.caseId, user.id, eventType, status === 'APPROVED' ? `보고서 승인 · v${review.reportVersion}` : `보고서 수정 요청 · v${review.reportVersion}`, note || null, now, review.id, status, user.id)
     ];
@@ -7217,7 +7251,7 @@ async function handlePreviewFinalOutput(request: Request, env: CloudflareEnv, ur
     const id = crypto.randomUUID(); const now = new Date().toISOString();
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_finalizations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, PREVIEW_ORGANIZATION_ID, body.caseId, body.reviewId, source.revisionId, source.reportVersion, user.id, now, key, fingerprint),
+        env.DB.prepare('INSERT INTO preview_report_finalizations SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ' + previewReportActiveSql('?')).bind(id, PREVIEW_ORGANIZATION_ID, body.caseId, body.reviewId, source.revisionId, source.reportVersion, user.id, now, key, fingerprint, body.caseId),
         env.DB.prepare('INSERT INTO preview_report_output_events VALUES (?, ?, NULL, \'REPORT_FINALIZED\', ?, ?)').bind(crypto.randomUUID(), id, user.id, now),
         env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?, ?, ?, \'REPORT_FINALIZED\', ?, NULL, ?)').bind(crypto.randomUUID(), body.caseId, user.id, `보고서 최종 확정 · v${source.reportVersion}`, now)
       ]);
@@ -8314,6 +8348,24 @@ const worker = {
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {
       return handlePreviewCases(request, env, url);
+    }
+
+    const reportDeleteMatch = url.pathname.match(/^\/api\/report-workspaces\/([^/]+)\/delete$/u);
+    if (reportDeleteMatch) return handlePreviewReportWorkspaceDelete(request, env, reportDeleteMatch[1]);
+
+    // A deleted workspace must not reopen as an empty draft or continue background authoring.
+    if (env.DB && /^\/api\/(?:report-drafts|report-chapter-collaboration|report-authoring|report-reviews|report-finalizations)(?:\/|$)/u.test(url.pathname)) {
+      const body = request.method === 'GET' ? null : await request.clone().json().catch(() => null) as Record<string, unknown> | null;
+      const queryCaseId = url.searchParams.get('caseId');
+      const bodyCaseId = typeof body?.caseId === 'string' ? body.caseId : null;
+      if (queryCaseId !== null && bodyCaseId !== null && queryCaseId !== bodyCaseId) return json({ error: '요청의 프로젝트가 일치하지 않습니다.', code: 'INVALID_CASE_ID' }, 400);
+      const caseId = bodyCaseId ?? queryCaseId ?? '';
+      if (PREVIEW_DRAFT_KEY.test(caseId) && await previewReportDeleted(env, caseId)) {
+        const user = await previewSessionUser(request, env);
+        if (!user) return json({ error: '로그인이 필요합니다.', code: 'AUTH_REQUIRED' }, 401);
+        if (!await accessiblePreviewCase(env, user, caseId)) return json({ error: '프로젝트를 찾을 수 없습니다.', code: 'CASE_NOT_FOUND' }, 404);
+        return json({ error: '목록에서 삭제 처리된 보고서입니다. 자동저장은 중지되며 프로젝트·원본 자료와 기존 버전 이력은 보존됩니다.', code: 'REPORT_DELETED' }, 410);
+      }
     }
 
     if (url.pathname === '/api/report-workspaces') {

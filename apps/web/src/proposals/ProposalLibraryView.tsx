@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
 import { sentProposalArchiveWorkbook, type SentProposalExcelRow } from './proposal-excel';
+import '../styles/CompactLibrary.css';
 
 type AwardStatus = 'PENDING' | 'WON' | 'LOST';
 type VerificationStatus = 'UNVERIFIED' | 'VERIFIED' | 'CONFLICT';
@@ -113,7 +114,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
   }), [projects.length, proposals]);
 
   return (
-    <section className="proposal-library" aria-labelledby="proposal-library-title">
+    <section className={`proposal-library${mode === 'projects' ? ' compact-library' : ''}`} aria-labelledby="proposal-library-title">
       <header className="proposal-library__hero">
         <div>
           <span>{mode === 'projects' ? 'SAVED PROPOSALS · PROJECT VIEW' : 'D1 PROPOSAL VERSION LEDGER'}</span>
@@ -146,25 +147,12 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
       {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 저장된 제안서가 없습니다.</strong><span>제안서 작성 화면에서 초안을 저장하면 이 목록에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
 
       {!loading && !error && mode === 'projects' && projects.length > 0 && (
-        <div className="proposal-project-list">
-          {projects.map((project) => {
-            const latest = project.proposals[0];
-            return <article key={project.caseId} className="proposal-project-card">
-              <header>
-                <div><span>{project.caseNumber}</span><h3>{project.caseTitle}</h3><small>최근 저장 {dateLabel(latest.sentAt, true)}</small></div>
-                <div><b>{project.proposals.length}건</b><em className={`status-${latest.awardStatus.toLowerCase()}`}>{awardLabels[latest.awardStatus]}</em></div>
-              </header>
-              <div className="proposal-project-card__rows">
-                {project.proposals.map((proposal) => <div key={proposal.id}>
-                  <div><strong>{proposal.proposalTitle}</strong><span>{proposal.proposalNumber} · {proposal.revisionLabel}</span></div>
-                  <div><span>{proposal.clientName}</span><small>{dateLabel(proposal.sentAt, true)}</small></div>
-                  <em className={`status-${proposal.verificationStatus.toLowerCase()}`}>{verificationLabels[proposal.verificationStatus]}</em>
-                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 파일 열기</a> : <span className="is-muted" title="제안서 작성본은 안전하게 보관되어 있으나 별도 파일 다운로드 주소는 등록되지 않았습니다.">확정 파일 링크 없음</span>}
-                </div>)}
-              </div>
-              <footer><button type="button" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(project.caseId)}`)}>이 프로젝트 제안서 작성</button><button type="button" className="is-secondary" onClick={() => onNavigate('/workflow/award')}>접수·수주 상태 확인</button><button type="button" className="is-secondary" disabled={Boolean(busy)} onClick={()=>void catalogAction(latest,'HIDE_FROM_LIST')}>목록에서 숨기기</button></footer>
-            </article>;
-          })}
+        <div className="compact-record-list" aria-label="프로젝트별 제안서 목록">
+          {projects.flatMap(project => project.proposals.map(proposal => <article key={proposal.id} className="compact-record">
+            <div className="compact-record__main"><span>{project.caseNumber} · {proposal.proposalNumber}</span><h3 title={`${project.caseTitle}\n${proposal.proposalTitle}`}>{proposal.proposalTitle}</h3><small>{proposal.clientName} · {dateLabel(proposal.sentAt, true)} · {proposal.revisionLabel}</small></div>
+            <div className="compact-record__state"><em className={`status-${proposal.awardStatus.toLowerCase()}`}>{awardLabels[proposal.awardStatus]}</em><span>{verificationLabels[proposal.verificationStatus]}</span>{proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 파일 열기</a> : <span className="is-muted">확정 파일 링크 없음</span>}</div>
+            <div className="compact-record__actions"><button type="button" aria-label="이 프로젝트 제안서 작성" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(project.caseId)}`)}>제안서 열기</button><button type="button" className="is-secondary" aria-label="접수·수주 상태 확인" onClick={() => onNavigate('/workflow/award')}>접수·수주</button><button type="button" className="is-secondary" aria-label="목록에서 숨기기" disabled={Boolean(busy)} onClick={() => void catalogAction(proposal, 'HIDE_FROM_LIST')}>숨기기</button></div>
+          </article>))}
         </div>
       )}
 

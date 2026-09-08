@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
+import '../styles/CompactLibrary.css';
 
 interface ReportWorkspace {
   caseId: string;
@@ -32,17 +33,35 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleting, setDeleting] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [notice, setNotice] = useState('');
+  const deletePending = useRef(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError('');
-    void apiRequest<{ workspaces: ReportWorkspace[] }>('/api/report-workspaces')
-      .then((result) => { if (active) setWorkspaces(result.workspaces); })
+    void apiRequest<{ workspaces: ReportWorkspace[]; canDelete?: boolean }>('/api/report-workspaces')
+      .then((result) => { if (active) { setWorkspaces(result.workspaces); setCanDelete(result.canDelete === true); } })
       .catch((reason) => { if (active) setError(errorLabel(reason)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [reload]);
+
+  const deleteReport = async (workspace: ReportWorkspace) => {
+    if (!canDelete || deletePending.current) return;
+    if (!window.confirm(`${workspace.caseNumber} · ${workspace.caseTitle}\n보고서: ${workspace.reportTitle}\n\n이 보고서를 목록에서 삭제 처리할까요?\n프로젝트·Drive 원본 자료와 기존 버전 이력은 보존됩니다. 삭제 후에는 이어쓰기와 자동저장이 중지됩니다.`)) return;
+    deletePending.current = true; setDeleting(workspace.caseId); setActionError(''); setNotice('');
+    try {
+      await apiRequest(`/api/report-workspaces/${encodeURIComponent(workspace.caseId)}/delete`, { method: 'POST', body: JSON.stringify({ expectedVersion: workspace.version }) });
+      setWorkspaces(current => current.filter(item => item.caseId !== workspace.caseId));
+      setNotice(`${workspace.caseNumber} 보고서를 목록에서 삭제 처리했습니다. 프로젝트·원본 자료와 기존 버전 이력은 보존됩니다.`);
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : '삭제하지 못했습니다. 다시 시도해 주세요.'); }
+    finally { deletePending.current = false; setDeleting(''); }
+  };
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase('ko-KR');
@@ -55,7 +74,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
   const editing = workspaces.filter((workspace) => workspace.wizardStep < 5).length;
 
   return (
-    <section className="proposal-library report-library" aria-labelledby="report-library-title">
+    <section className={`proposal-library report-library${mode === 'projects' ? ' compact-library' : ''}`} aria-labelledby="report-library-title">
       <header className="proposal-library__hero report-library__hero">
         <div>
           <span>{mode === 'projects' ? 'PROJECT REPORTS · WORKSPACE VIEW' : 'D1 REPORT VERSION LEDGER'}</span>
@@ -81,17 +100,18 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
       </div>
 
       {error && <div className="proposal-library__message is-error" role="alert">{error}</div>}
+      {actionError && <div className="report-delete-message is-error" role="alert">{actionError}<button type="button" disabled={Boolean(deleting)} onClick={() => { setActionError(''); setReload(value => value + 1); }}>목록 새로고침</button></div>}
+      {notice && <div className="report-delete-message" role="status">{notice}</div>}
       {loading && <div className="proposal-library__message" role="status">보고서 작업공간을 불러오고 있습니다.</div>}
       {!loading && !error && filtered.length === 0 && <div className="proposal-library__empty"><strong>조건에 맞는 저장 보고서가 없습니다.</strong><span>보고서 작성 화면에서 첫 저장을 하면 이곳에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/reports/studio')}>첫 보고서 작성하기</button></div>}
 
-      {!loading && !error && mode === 'projects' && filtered.length > 0 && <div className="proposal-project-list report-project-list">
+      {!loading && !error && mode === 'projects' && filtered.length > 0 && <div className="compact-record-list" aria-label="프로젝트별 보고서 목록">
         {filtered.map((workspace) => {
           const stepTitle = STEP_LABELS[Math.max(0, Math.min(4, workspace.wizardStep - 1))];
-          const progress = Math.max(20, Math.min(100, workspace.wizardStep * 20));
-          return <article key={workspace.caseId} className="proposal-project-card report-project-card">
-            <header><div><span>{workspace.caseNumber} · {workspace.claimType}</span><h3>{workspace.caseTitle}</h3><small>마지막 저장 {dateLabel(workspace.updatedAt)}</small></div><div><b>v{workspace.version}</b><em className="status-verified">STEP {workspace.wizardStep}</em></div></header>
-            <div className="report-project-card__body"><strong>{workspace.reportTitle}</strong><span>{stepTitle}</span><div className="report-project-card__progress" aria-label={`보고서 작성 진행률 ${progress}%`}><i style={{ width: `${progress}%` }} /></div><small>{workspace.updatedByName} · 본문 {workspace.contentLength.toLocaleString('ko-KR')}자</small></div>
-            <footer><button type="button" onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(workspace.caseId)}`)}>저장 지점에서 이어쓰기</button></footer>
+          return <article key={workspace.caseId} className="compact-record">
+            <div className="compact-record__main"><span>{workspace.caseNumber} · {workspace.claimType}</span><h3 title={`${workspace.caseTitle}\n${workspace.reportTitle}`}>{workspace.reportTitle}</h3><small>{workspace.updatedByName} · {dateLabel(workspace.updatedAt)} · v{workspace.version} · 본문 {workspace.contentLength.toLocaleString('ko-KR')}자</small></div>
+            <div className="compact-record__state"><em className="status-verified">STEP {workspace.wizardStep}</em><span>{stepTitle}</span></div>
+            <div className="compact-record__actions"><button type="button" onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(workspace.caseId)}`)}>저장 지점에서 이어쓰기</button></div>
           </article>;
         })}
       </div>}
@@ -106,7 +126,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
               <td><em className="status-verified">STEP {workspace.wizardStep}</em><span>{STEP_LABELS[Math.max(0, Math.min(4, workspace.wizardStep - 1))]}</span></td>
               <td><strong>v{workspace.version}</strong><span>{workspace.contentLength.toLocaleString('ko-KR')}자</span></td>
               <td><strong>{workspace.updatedByName}</strong><span>{dateLabel(workspace.updatedAt)}</span></td>
-              <td><button type="button" onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(workspace.caseId)}`)}>열기</button></td>
+              <td><div className="report-db-actions"><button type="button" disabled={Boolean(deleting)} onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(workspace.caseId)}`)}>열기</button>{canDelete && <button type="button" className="is-danger" disabled={Boolean(deleting)} onClick={() => void deleteReport(workspace)}>{deleting === workspace.caseId ? '삭제 중…' : '삭제'}</button>}</div></td>
             </tr>)}
           </tbody></table>
         </div>
